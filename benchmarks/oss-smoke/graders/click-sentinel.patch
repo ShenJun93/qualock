@@ -1,0 +1,48 @@
+diff --git a/.qualock-grader/test_regression.py b/.qualock-grader/test_regression.py
+new file mode 100644
+index 0000000..14eefc1
+--- /dev/null
++++ b/.qualock-grader/test_regression.py
+@@ -0,0 +1,42 @@
++import copy
++import pickle
++from collections.abc import Callable
++from typing import Any
++
++import click
++from click._utils import Sentinel
++from click._utils import UNSET
++
++
++def duplicate_functions() -> tuple[Callable[[Any], Any], ...]:
++    return (
++        copy.copy,
++        copy.deepcopy,
++        lambda value: pickle.loads(pickle.dumps(value)),
++    )
++
++
++def test_sentinel_duplication_preserves_singleton_identity() -> None:
++    for sentinel in Sentinel:
++        for duplicate in duplicate_functions():
++            assert duplicate(sentinel) is sentinel
++
++
++def test_click_parameter_duplication_preserves_unset_default() -> None:
++    factories = (
++        lambda: click.Option(["--name"]),
++        lambda: click.Argument(["name"]),
++    )
++    for factory in factories:
++        original = factory()
++        assert original.default is UNSET
++        for duplicate in duplicate_functions():
++            copied = duplicate(original)
++            assert copied.default is UNSET
++
++
++def test_command_duplication_preserves_nested_parameter_sentinel() -> None:
++    command = click.Command("demo", params=[click.Option(["--name"])])
++    for duplicate in duplicate_functions():
++        copied = duplicate(command)
++        assert copied.params[0].default is UNSET

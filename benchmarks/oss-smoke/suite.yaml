@@ -1,0 +1,5 @@
+schema_version: 1
+canaries:
+  - starlette-url.yaml
+  - pytest-caplog.yaml
+  - click-sentinel.yaml

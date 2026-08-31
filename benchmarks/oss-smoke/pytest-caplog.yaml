@@ -1,0 +1,30 @@
+schema_version: 1
+id: pytest-caplog-nested-filter
+name: pytest nested caplog.filtering lifecycle
+repository:
+  url: https://github.com/pytest-dev/pytest.git
+  base_sha: ced9022c0ca87ae2a0a604c68d2e1c462f8a5c6f
+runtime:
+  image: ghcr.io/astral-sh/uv:0.10.0-python3.12-bookworm-slim
+task: |
+  Nested use of caplog.filtering can cause an outer logging filter to stop
+  applying after the inner context exits.
+
+  Fix the lifecycle behavior so nested use is safe and existing filters remain
+  active for as long as their owner expects.
+
+  Do not modify tests.
+setup:
+  - uv sync --frozen --no-default-groups
+agent:
+  timeout_seconds: 600
+grader:
+  patch: graders/pytest-caplog.patch
+  command:
+    - uv run pytest .qualock-grader/test_regression.py -q
+constraints:
+  protected_paths:
+    - testing/**
+    - pyproject.toml
+    - uv.lock
+critical: true

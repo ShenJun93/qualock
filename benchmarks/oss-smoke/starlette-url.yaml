@@ -1,0 +1,30 @@
+schema_version: 1
+id: starlette-url-empty-authority
+name: Starlette URL.replace empty authority
+repository:
+  url: https://github.com/Kludex/starlette.git
+  base_sha: 4a18cd4a0869158f830e9bf519979d6f6f60f36a
+runtime:
+  image: ghcr.io/astral-sh/uv:0.10.0-python3.12-bookworm-slim
+task: |
+  Starlette URL.replace() crashes when authority components are changed on a
+  path-only URL with no existing authority.
+
+  Make URL.replace() handle these URLs correctly while preserving existing
+  behavior for normal absolute URLs.
+
+  Do not modify tests.
+setup:
+  - uv sync --frozen --no-default-groups --group dev
+agent:
+  timeout_seconds: 600
+grader:
+  patch: graders/starlette-url.patch
+  command:
+    - uv run pytest .qualock-grader/test_regression.py -q
+constraints:
+  protected_paths:
+    - tests/**
+    - pyproject.toml
+    - uv.lock
+critical: true

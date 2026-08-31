@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"thread-1"}
+{"type":"item.completed","item":{"type":"command_execution","command":"pytest -q","exit_code":0}}
+{"type":"item.completed","item":{"type":"file_change","path":"src/app.py"}}
+{"type":"item.completed","item":{"type":"web_search","query":"upstream fix"}}
+{"type":"item.completed","item":{"type":"mcp_call","server":"github","tool":"fetch"}}
+{"type":"future.event","payload":{"x":1}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":5}}

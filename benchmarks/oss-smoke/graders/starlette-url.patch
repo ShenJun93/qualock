@@ -1,0 +1,18 @@
+diff --git a/.qualock-grader/test_regression.py b/.qualock-grader/test_regression.py
+new file mode 100644
+index 0000000..bbb3643
+--- /dev/null
++++ b/.qualock-grader/test_regression.py
+@@ -0,0 +1,12 @@
++from starlette.datastructures import URL
++
++
++def test_replace_authority_components_on_path_only_url() -> None:
++    url = URL("/path?a=1")
++
++    with_port = url.replace(port=8080)
++    assert with_port == URL("//:8080/path?a=1")
++    assert with_port.port == 8080
++
++    with_username = url.replace(username="u")
++    assert with_username == URL("//u@/path?a=1")
