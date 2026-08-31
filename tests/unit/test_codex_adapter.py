@@ -39,6 +39,8 @@ def test_builds_isolated_explicit_model_exec_command() -> None:
     assert "--ignore-rules" in argv
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
     assert argv[argv.index("--model") + 1] == "gpt-5.3-codex"
+    disabled = [argv[index + 1] for index, value in enumerate(argv) if value == "--disable"]
+    assert disabled == ["apps", "plugins", "remote_plugin"]
     overrides = [argv[index + 1] for index, value in enumerate(argv) if value == "-c"]
     assert "model_reasoning_effort=high" in overrides
     assert "sandbox_workspace_write.network_access=false" in overrides
