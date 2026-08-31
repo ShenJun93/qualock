@@ -18,7 +18,7 @@ def test_agent_phase_never_mounts_or_mentions_grader(tmp_path: Path) -> None:
     rendered = " ".join(argv)
     assert str(grader) not in rendered
     assert "/private/grader" not in rendered
-    assert f"{(agent_root / "codex").resolve()}:/opt/qualock/codex:ro" in argv
+    assert f"{(agent_root / 'codex').resolve()}:/opt/qualock/codex:ro" in argv
     assert "/opt/qualock/codex" in argv
 
 

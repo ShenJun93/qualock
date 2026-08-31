@@ -31,7 +31,7 @@ def test_private_grader_exists_only_in_grader_namespace(tmp_path: Path) -> None:
     agent_argv = runner.build_agent_create_argv(
         prepared_image="alpine:3.20",
         container_name=f"ub-isolation-{uuid.uuid4().hex[:8]}",
-        agent_root=tmp_path / "empty-agent",
+        agent_binary=tmp_path / "unused-codex",
         agent_argv=["/bin/sh", "-lc", f"grep -R {sentinel} /private /workspace 2>/dev/null"],
         environment={},
         replace_agent_binary=False,
