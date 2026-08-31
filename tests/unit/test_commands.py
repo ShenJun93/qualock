@@ -1,9 +1,12 @@
 from pathlib import Path
+import json
+
+import pytest
 
 from qualock.agents.base import AgentBinary
 from qualock.config.io import write_default_config
 from qualock.qualification.models import AttemptResult, Usage, Verdict
-from qualock.commands import execute_baseline, execute_check, parse_agent_spec
+from qualock.commands import BaselineUnstableError, execute_baseline, execute_check, parse_agent_spec
 from qualock.run.models import PreparedImage
 from qualock.run.schedule import Side
 
@@ -81,6 +84,27 @@ def test_baseline_writes_known_good_behavior_lock(tmp_path: Path) -> None:
     assert lock.canaries["sample"].valid_runs == 3
     assert lock.canaries["sample"].successes == 3
     assert (tmp_path / ".qualock/baseline.lock").is_file()
+
+
+def test_unstable_baseline_persists_attempt_evidence(tmp_path: Path) -> None:
+    setup_project(tmp_path)
+    with pytest.raises(BaselineUnstableError):
+        execute_baseline(
+            tmp_path,
+            "codex@0.151.0",
+            resolver=FakeResolver(),
+            backend=FakeBackend(),
+            qualification_id="baseline-fail",
+            created_at="2026-08-31T00:00:00Z",
+        )
+
+    evidence_path = tmp_path / ".qualock/results/baseline-fail/baseline.json"
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert payload["qualification_id"] == "baseline-fail"
+    assert payload["baseline_version"] == "0.151.0"
+    assert len(payload["canaries"]["sample"]) == 3
+    assert payload["canaries"]["sample"][0]["success"] is False
+    assert payload["canaries"]["sample"][0]["valid"] is True
 
 
 def test_check_reruns_pinned_baseline_and_candidate_and_writes_report(tmp_path: Path) -> None:
