@@ -36,11 +36,19 @@ class FakeDocker:
         self.stdout = stdout
         self.changed_paths = changed_paths
         self.grader_calls = 0
+        self.auth_mount: tuple[Path, str, str] | None = None
+        self.auth_json_contents: str | None = None
 
     def prepare(self, source_dir: Path, canary: CanarySpec, *, image_tag: str, timeout_seconds: float = 1200) -> PreparedImage:
         return PreparedImage(reference=image_tag, digest="sha256:prepared")
 
     def run_agent(self, **kwargs: object) -> FrozenAgentState:
+        mounts = kwargs.get("extra_mounts", ())
+        if mounts:
+            mount = mounts[0]
+            assert isinstance(mount, tuple)
+            self.auth_mount = mount
+            self.auth_json_contents = (mount[0] / "auth.json").read_text(encoding="utf-8")
         return FrozenAgentState(
             reference="frozen",
             digest="sha256:frozen",
@@ -87,7 +95,12 @@ def binary(tmp_path: Path) -> AgentBinary:
     return AgentBinary("codex", "0.150.0", path, "abc")
 
 
-def backend(tmp_path: Path, docker: FakeDocker) -> DockerQualificationBackend:
+def backend(
+    tmp_path: Path,
+    docker: FakeDocker,
+    *,
+    auth_home: Path | None = None,
+) -> DockerQualificationBackend:
     return DockerQualificationBackend(
         source_manager=FakeSource(),
         docker_runner=docker,
@@ -95,7 +108,7 @@ def backend(tmp_path: Path, docker: FakeDocker) -> DockerQualificationBackend:
         model="gpt-5.3-codex",
         reasoning_effort="high",
         work_root=tmp_path / "work",
-        auth_home=None,
+        auth_home=auth_home,
         integrity_policy=IntegrityPolicy(reject_web_search=True, reject_mcp_calls=True, reject_protected_path_changes=True),
     )
 
@@ -111,6 +124,31 @@ def test_valid_agent_evidence_is_graded_and_usage_is_recorded(tmp_path: Path) ->
     assert result.duration_ms == 123
     assert result.usage.input_tokens == 12
     assert docker.grader_calls == 1
+
+
+def test_codex_auth_uses_ephemeral_writable_home(tmp_path: Path) -> None:
+    auth_home = tmp_path / "codex-home"
+    auth_home.mkdir()
+    (auth_home / "auth.json").write_text('{"token":"test-only"}', encoding="utf-8")
+    docker = FakeDocker(stdout='{"type":"turn.completed","usage":{}}\n')
+    service = backend(tmp_path, docker, auth_home=auth_home)
+    spec = canary(tmp_path)
+
+    service.run_attempt(
+        canary=spec,
+        prepared=PreparedImage("p", "sha256:p"),
+        binary=binary(tmp_path),
+        side=Side.BASELINE,
+        repetition=1,
+    )
+
+    assert docker.auth_mount is not None
+    mounted_home, container_path, mode = docker.auth_mount
+    assert mounted_home != auth_home
+    assert container_path == "/opt/qualock/auth"
+    assert mode == "rw"
+    assert docker.auth_json_contents == '{"token":"test-only"}'
+    assert not mounted_home.exists()
 
 
 def test_web_search_invalidates_attempt_before_grader(tmp_path: Path) -> None:
