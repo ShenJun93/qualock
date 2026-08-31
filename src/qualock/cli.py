@@ -50,7 +50,7 @@ def doctor_command() -> None:
     checks = {
         "Git": shutil.which("git") is not None,
         "npm": shutil.which("npm") is not None,
-        "Docker": DockerRunner().available(),
+        "Docker": DockerRunner().daemon_ready(),
         "Canaries": bool(canaries),
     }
     for name, ok in checks.items():
