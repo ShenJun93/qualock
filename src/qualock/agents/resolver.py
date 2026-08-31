@@ -86,6 +86,9 @@ class CodexResolver:
             prefix
             / "node_modules"
             / "@openai"
+            / "codex"
+            / "node_modules"
+            / "@openai"
             / package_dir
             / "vendor"
             / platform_package.target
@@ -101,7 +104,7 @@ class CodexResolver:
                     "--prefix",
                     str(prefix),
                     "--no-save",
-                    f"{platform_package.package}@{version}",
+                    f"@openai/codex@{version}",
                 ],
                 timeout_seconds=180,
             )
