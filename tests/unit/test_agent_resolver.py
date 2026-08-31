@@ -17,7 +17,7 @@ if args and args[0] == 'install':
     prefix = pathlib.Path(args[args.index('--prefix') + 1])
     spec = next(x for x in args if x.startswith('@openai/codex@'))
     version = spec.rsplit('@', 1)[1]
-    binary = prefix / 'node_modules' / '@openai' / 'codex' / 'node_modules' / '@openai' / 'codex-linux-x64' / 'vendor' / 'x86_64-unknown-linux-musl' / 'bin' / 'codex'
+    binary = prefix / 'node_modules' / '@openai' / 'codex-linux-x64' / 'vendor' / 'x86_64-unknown-linux-musl' / 'bin' / 'codex'
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_bytes(('native-codex-' + version).encode())
     binary.chmod(0o755)
@@ -37,7 +37,7 @@ def test_resolves_exact_version_to_native_linux_binary(tmp_path: Path) -> None:
     assert binary.version == "0.150.0"
     assert binary.path == (
         tmp_path
-        / "cache/agents/codex/0.150.0/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+        / "cache/agents/codex/0.150.0/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
     )
     assert len(binary.sha256) == 64
     assert binary.path.is_file()
@@ -69,7 +69,7 @@ args = sys.argv[1:]
 prefix = pathlib.Path(args[args.index('--prefix') + 1])
 spec = next(x for x in args if x.startswith('@openai/codex@'))
 version = spec.rsplit('@', 1)[1]
-binary = prefix / 'node_modules' / '@openai' / 'codex' / 'node_modules' / '@openai' / 'codex-linux-arm64' / 'vendor' / 'aarch64-unknown-linux-musl' / 'bin' / 'codex'
+binary = prefix / 'node_modules' / '@openai' / 'codex-linux-arm64' / 'vendor' / 'aarch64-unknown-linux-musl' / 'bin' / 'codex'
 binary.parent.mkdir(parents=True, exist_ok=True)
 binary.write_bytes(('native-codex-' + version).encode())
 binary.chmod(0o755)
