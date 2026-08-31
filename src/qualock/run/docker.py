@@ -117,6 +117,7 @@ class DockerRunner:
         environment: Mapping[str, str],
         extra_mounts: Sequence[tuple[Path, str, str]] = (),
         tmpfs_mounts: Sequence[str] = (),
+        bootstrap_copy: tuple[str, str] | None = None,
         replace_agent_binary: bool = True,
     ) -> list[str]:
         argv = [
@@ -153,6 +154,19 @@ class DockerRunner:
             if not command:
                 raise ValueError("agent_argv must not be empty")
             command[0] = "/opt/qualock/codex"
+        if bootstrap_copy is not None:
+            source, destination = bootstrap_copy
+            if not source.startswith("/") or not destination.startswith("/"):
+                raise ValueError("bootstrap copy paths must be absolute")
+            command = [
+                "sh",
+                "-c",
+                'set -eu; umask 077; cat "$1" > "$2"; shift 2; exec "$@"',
+                "qualock-bootstrap",
+                source,
+                destination,
+                *command,
+            ]
         argv.append(prepared_image)
         argv.extend(command)
         return argv
@@ -167,6 +181,7 @@ class DockerRunner:
         environment: Mapping[str, str],
         extra_mounts: Sequence[tuple[Path, str, str]] = (),
         tmpfs_mounts: Sequence[str] = (),
+        bootstrap_copy: tuple[str, str] | None = None,
         frozen_tag: str,
         timeout_seconds: float,
     ) -> FrozenAgentState:
@@ -179,6 +194,7 @@ class DockerRunner:
                 environment=environment,
                 extra_mounts=extra_mounts,
                 tmpfs_mounts=tmpfs_mounts,
+                bootstrap_copy=bootstrap_copy,
             ),
             timeout_seconds=30,
         )
