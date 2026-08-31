@@ -156,6 +156,12 @@ class DockerQualificationBackend:
                 return self._invalid_attempt(side, repetition, state.elapsed_ms, str(exc), state.stdout)
 
             reasons: list[str] = []
+            if state.exit_code is None:
+                reasons.append("agent timed out")
+            elif state.exit_code != 0:
+                reasons.append(f"agent exited with code {state.exit_code}")
+            if evidence.errors:
+                reasons.append("agent reported error")
             if self.integrity_policy.reject_web_search and evidence.web_searches:
                 reasons.append("web search detected")
             if self.integrity_policy.reject_mcp_calls and evidence.mcp_calls:
