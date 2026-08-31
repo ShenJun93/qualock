@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 env:
-  UV_IMAGE: ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
+  UV_IMAGE: ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm
 
 jobs:
   starlette:
@@ -21,7 +21,11 @@ jobs:
       - name: Install Qualock
         run: python -m pip install -e .
       - name: Validate runtime image
-        run: docker pull "$UV_IMAGE"
+        run: |
+          docker pull "$UV_IMAGE"
+          docker image inspect "$UV_IMAGE" --format '{{json .RepoDigests}}'
+          docker run --rm "$UV_IMAGE" git --version
+          docker run --rm "$UV_IMAGE" uv --version
       - name: Materialize Starlette canary
         run: |
           qualock init
