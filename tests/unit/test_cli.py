@@ -67,3 +67,23 @@ def test_report_prints_latest_markdown(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(app, ["report"])
     assert result.exit_code == 0
     assert "NEW REPORT" in result.stdout
+
+
+def test_doctor_fails_when_docker_cli_exists_but_daemon_is_unreachable(tmp_path: Path, monkeypatch) -> None:
+    class FakeDockerRunner:
+        def available(self) -> bool:
+            return True
+
+        def daemon_ready(self) -> bool:
+            return False
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (object(), [object()]))
+    monkeypatch.setattr("qualock.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("qualock.cli.DockerRunner", FakeDockerRunner)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "Docker" in result.stdout
+    assert "FAIL" in result.stdout
