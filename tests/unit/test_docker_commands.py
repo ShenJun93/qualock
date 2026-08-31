@@ -77,7 +77,8 @@ def test_agent_phase_can_use_tmpfs_for_ephemeral_state(tmp_path: Path) -> None:
         extra_mounts=[(auth_file, "/opt/qualock/auth/auth.json", "ro")],
         tmpfs_mounts=["/opt/qualock/auth"],
     )
-    assert ["--tmpfs", "/opt/qualock/auth:rw,nosuid,nodev,noexec,mode=0700"] == argv[5:7]
+    tmpfs_index = argv.index("--tmpfs")
+    assert argv[tmpfs_index + 1] == "/opt/qualock/auth:rw,nosuid,nodev,noexec,mode=0700"
     assert f"{auth_file.resolve()}:/opt/qualock/auth/auth.json:ro" in argv
 
 
