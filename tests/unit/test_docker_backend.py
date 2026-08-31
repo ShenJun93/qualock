@@ -32,9 +32,16 @@ class FakeAdapter:
 
 
 class FakeDocker:
-    def __init__(self, *, stdout: str, changed_paths: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        *,
+        stdout: str,
+        changed_paths: tuple[str, ...] = (),
+        exit_code: int | None = 0,
+    ) -> None:
         self.stdout = stdout
         self.changed_paths = changed_paths
+        self.exit_code = exit_code
         self.grader_calls = 0
         self.auth_mount: tuple[Path, str, str] | None = None
         self.auth_json_contents: str | None = None
@@ -67,7 +74,7 @@ class FakeDocker:
             container_name=str(kwargs["container_name"]),
             stdout=self.stdout,
             stderr="",
-            exit_code=0,
+            exit_code=self.exit_code,
             elapsed_ms=123,
         )
 
@@ -166,6 +173,27 @@ def test_codex_auth_uses_tmpfs_home_with_external_read_only_seed(tmp_path: Path)
     )
     assert docker.auth_json_contents == '{"token":"test-only"}'
     assert not mounted_auth.exists()
+
+
+def test_agent_failure_invalidates_attempt_before_grader(tmp_path: Path) -> None:
+    stdout = (
+        '{"type":"error","message":"model unsupported"}\n'
+        '{"type":"turn.failed","error":{"message":"model unsupported"}}\n'
+    )
+    docker = FakeDocker(stdout=stdout, exit_code=1)
+    service = backend(tmp_path, docker)
+    spec = canary(tmp_path)
+    result = service.run_attempt(
+        canary=spec,
+        prepared=PreparedImage("p", "sha256:p"),
+        binary=binary(tmp_path),
+        side=Side.BASELINE,
+        repetition=1,
+    )
+    assert result.valid is False
+    assert "agent exited with code 1" in (result.invalid_reason or "")
+    assert "agent reported error" in (result.invalid_reason or "")
+    assert docker.grader_calls == 0
 
 
 def test_web_search_invalidates_attempt_before_grader(tmp_path: Path) -> None:
