@@ -14,6 +14,7 @@ def test_default_config_round_trip(tmp_path: Path) -> None:
     config = load_config(path)
     assert isinstance(config, QualockConfig)
     assert config.agent.name == "codex"
+    assert config.model.id == "gpt-5.6-terra"
     assert config.qualification.repetitions == 3
     assert config.integrity.reject_web_search is True
 
