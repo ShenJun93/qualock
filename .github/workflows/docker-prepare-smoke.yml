@@ -8,11 +8,21 @@ permissions:
   contents: read
 
 env:
-  UV_IMAGE: ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm
+  UV_IMAGE: ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248
 
 jobs:
-  starlette:
+  prepare:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - canary: starlette-url
+            base_sha: 4a18cd4a0869158f830e9bf519979d6f6f60f36a
+          - canary: pytest-caplog
+            base_sha: ced9022c0ca87ae2a0a604c68d2e1c462f8a5c6f
+          - canary: click-sentinel
+            base_sha: 3cbcf9b11546f4cf10b36d3e2e531733ba6fe001
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -20,33 +30,39 @@ jobs:
           python-version: "3.12"
       - name: Install Qualock
         run: python -m pip install -e .
-      - name: Validate runtime image
+      - name: Validate pinned runtime image
         run: |
           docker pull "$UV_IMAGE"
-          docker image inspect "$UV_IMAGE" --format '{{json .RepoDigests}}'
           docker run --rm "$UV_IMAGE" git --version
           docker run --rm "$UV_IMAGE" uv --version
-      - name: Materialize Starlette canary
+      - name: Materialize canary
+        env:
+          CANARY: ${{ matrix.canary }}
         run: |
           qualock init
-          cp benchmarks/oss-smoke/starlette-url.yaml .qualock/canaries/starlette-url.yaml
+          cp "benchmarks/oss-smoke/${CANARY}.yaml" ".qualock/canaries/${CANARY}.yaml"
           mkdir -p .qualock/canaries/graders
-          cp benchmarks/oss-smoke/graders/starlette-url.patch .qualock/canaries/graders/starlette-url.patch
+          cp "benchmarks/oss-smoke/graders/${CANARY}.patch" ".qualock/canaries/graders/${CANARY}.patch"
           python - <<'PY'
           from pathlib import Path
           import os
           import yaml
 
-          path = Path('.qualock/canaries/starlette-url.yaml')
+          canary = os.environ['CANARY']
+          path = Path(f'.qualock/canaries/{canary}.yaml')
           data = yaml.safe_load(path.read_text())
           data['runtime']['image'] = os.environ['UV_IMAGE']
           path.write_text(yaml.safe_dump(data, sort_keys=False))
           PY
           qualock doctor
       - name: Prepare historical image
+        env:
+          CANARY: ${{ matrix.canary }}
+          BASE_SHA: ${{ matrix.base_sha }}
         run: |
           python - <<'PY'
           from pathlib import Path
+          import os
           import subprocess
           from qualock.commands import _default_backend
           from qualock.project import load_project
@@ -54,14 +70,15 @@ jobs:
           root = Path.cwd()
           config, canaries = load_project(root)
           canary = canaries[0]
-          prepared = _default_backend(root, config).prepare(canary, "gha-starlette-prepare")
+          prepared = _default_backend(root, config).prepare(canary, f"gha-{os.environ['CANARY']}-prepare")
           result = subprocess.run(
               ["docker", "run", "--rm", "--workdir", "/workspace", prepared.digest,
                "git", "rev-parse", "HEAD"],
               check=True, capture_output=True, text=True,
           )
           actual = result.stdout.strip()
+          print("canary", canary.id)
           print("image", prepared.digest)
           print("repo_sha", actual)
-          assert actual == "4a18cd4a0869158f830e9bf519979d6f6f60f36a"
+          assert actual == os.environ['BASE_SHA']
           PY
