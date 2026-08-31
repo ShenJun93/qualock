@@ -4,11 +4,20 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
+class AgentSupportBinary:
+    name: str
+    path: Path
+    sha256: str
+    container_path: str
+
+
+@dataclass(frozen=True)
 class AgentBinary:
     name: str
     version: str
     path: Path
     sha256: str
+    support_binaries: tuple[AgentSupportBinary, ...] = ()
 
 
 @dataclass(frozen=True)

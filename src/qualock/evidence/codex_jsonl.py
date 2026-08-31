@@ -75,6 +75,9 @@ def parse_codex_jsonl(lines: Iterable[str]) -> CodexEvidence:
                 evidence.web_searches += 1
             elif item_type in {"mcp_call", "mcp_tool_call"}:
                 evidence.mcp_calls += 1
+            elif item_type == "error":
+                message = item.get("message") or item.get("error")
+                evidence.errors.append(str(message))
             elif item_type in {"agent_message", "reasoning", "plan_update"}:
                 pass
             else:

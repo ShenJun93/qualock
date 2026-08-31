@@ -33,3 +33,10 @@ def test_accumulates_usage_across_completed_turns() -> None:
 def test_malformed_json_is_invalid_evidence() -> None:
     with pytest.raises(CodexEvidenceError, match="line 2"):
         parse_codex_jsonl(['{"type":"thread.started"}', "not-json"])
+
+
+def test_item_error_is_recorded_as_agent_error() -> None:
+    evidence = parse_codex_jsonl([
+        '{"type":"item.completed","item":{"type":"error","message":"missing code-mode host"}}'
+    ])
+    assert evidence.errors == ["missing code-mode host"]
