@@ -1,0 +1,48 @@
+name: Docker prepare smoke
+
+on:
+  push:
+    branches: [chore/docker-prepare-smoke]
+
+permissions:
+  contents: read
+
+jobs:
+  starlette:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install Qualock
+        run: python -m pip install -e .
+      - name: Materialize Starlette canary
+        run: |
+          qualock init
+          cp benchmarks/oss-smoke/starlette-url.yaml .qualock/canaries/starlette-url.yaml
+          mkdir -p .qualock/canaries/graders
+          cp benchmarks/oss-smoke/graders/starlette-url.patch .qualock/canaries/graders/starlette-url.patch
+          qualock doctor
+      - name: Prepare historical image
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          from qualock.commands import _default_backend
+          from qualock.project import load_project
+
+          root = Path.cwd()
+          config, canaries = load_project(root)
+          canary = canaries[0]
+          prepared = _default_backend(root, config).prepare(canary, "gha-starlette-prepare")
+          result = subprocess.run(
+              ["docker", "run", "--rm", "--workdir", "/workspace", prepared.digest,
+               "git", "rev-parse", "HEAD"],
+              check=True, capture_output=True, text=True,
+          )
+          actual = result.stdout.strip()
+          print("image", prepared.digest)
+          print("repo_sha", actual)
+          assert actual == "4a18cd4a0869158f830e9bf519979d6f6f60f36a"
+          PY
