@@ -25,5 +25,23 @@ jobs:
         run: python -m pip install -e . pytest
       - name: Test
         run: python -m pytest -q
+      - name: Docker tmpfs bootstrap smoke
+        if: matrix.python-version == '3.12'
+        shell: bash
+        run: |
+          set -euo pipefail
+          seed="$(mktemp)"
+          trap 'rm -f "$seed"' EXIT
+          printf '{"probe":true}' > "$seed"
+          docker run --rm \
+            --env CODEX_HOME=/opt/qualock/auth \
+            --tmpfs /opt/qualock/auth:rw,nosuid,nodev,noexec,mode=0700 \
+            --volume "$seed:/opt/qualock/auth-seed.json:ro" \
+            alpine:3.22.5 \
+            sh -c 'set -eu; umask 077; cat "$1" > "$2"; shift 2; exec "$@"' \
+            qualock-bootstrap \
+            /opt/qualock/auth-seed.json \
+            /opt/qualock/auth/auth.json \
+            sh -c 'test "$(cat "$CODEX_HOME/auth.json")" = "{\"probe\":true}"; touch "$CODEX_HOME/state"; test -f "$CODEX_HOME/state"'
       - name: Compile
         run: python -m compileall -q src tests

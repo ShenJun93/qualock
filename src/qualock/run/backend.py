@@ -98,15 +98,21 @@ class DockerQualificationBackend:
         frozen_tag = f"qualock-frozen-{hashlib.sha256(container_name.encode()).hexdigest()[:16]}"
         environment: dict[str, str] = {}
         mounts: list[tuple[Path, str, str]] = []
+        tmpfs_mounts: list[str] = []
+        bootstrap_copy: tuple[str, str] | None = None
 
         if self.auth_home is not None:
-            with tempfile.TemporaryDirectory(prefix="qualock-codex-home-") as temp:
-                temp_home = Path(temp)
+            with tempfile.TemporaryDirectory(prefix="qualock-codex-auth-") as temp:
                 auth_file = self.auth_home / "auth.json"
+                temp_auth = Path(temp) / "auth.json"
                 if auth_file.is_file():
-                    shutil.copy2(auth_file, temp_home / "auth.json")
+                    shutil.copy2(auth_file, temp_auth)
+                    seed_path = "/opt/qualock/auth-seed.json"
+                    target_path = "/opt/qualock/auth/auth.json"
+                    mounts.append((temp_auth, seed_path, "ro"))
+                    bootstrap_copy = (seed_path, target_path)
                 environment["CODEX_HOME"] = "/opt/qualock/auth"
-                mounts.append((temp_home, "/opt/qualock/auth", "rw"))
+                tmpfs_mounts.append("/opt/qualock/auth")
                 state = self.docker_runner.run_agent(
                     prepared=prepared,
                     container_name=container_name,
@@ -114,6 +120,8 @@ class DockerQualificationBackend:
                     agent_argv=agent_argv,
                     environment=environment,
                     extra_mounts=mounts,
+                    tmpfs_mounts=tmpfs_mounts,
+                    bootstrap_copy=bootstrap_copy,
                     frozen_tag=frozen_tag,
                     timeout_seconds=canary.agent.timeout_seconds,
                 )
@@ -125,6 +133,8 @@ class DockerQualificationBackend:
                 agent_argv=agent_argv,
                 environment=environment,
                 extra_mounts=mounts,
+                tmpfs_mounts=tmpfs_mounts,
+                bootstrap_copy=bootstrap_copy,
                 frozen_tag=frozen_tag,
                 timeout_seconds=canary.agent.timeout_seconds,
             )

@@ -64,6 +64,33 @@ def test_agent_phase_can_mount_auth_read_only_without_mounting_grader(tmp_path: 
     assert "/private/grader" not in " ".join(argv)
 
 
+def test_agent_phase_can_seed_tmpfs_before_exec(tmp_path: Path) -> None:
+    runner = DockerRunner(docker_executable="docker")
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+    argv = runner.build_agent_create_argv(
+        prepared_image="sha256:prepared",
+        container_name="ub-agent-auth",
+        agent_binary=tmp_path / "agent-package/codex",
+        agent_argv=["/host/codex", "exec", "task"],
+        environment={"CODEX_HOME": "/opt/qualock/auth"},
+        extra_mounts=[(auth_file, "/opt/qualock/auth-seed.json", "ro")],
+        tmpfs_mounts=["/opt/qualock/auth"],
+        bootstrap_copy=("/opt/qualock/auth-seed.json", "/opt/qualock/auth/auth.json"),
+    )
+    tmpfs_index = argv.index("--tmpfs")
+    assert argv[tmpfs_index + 1] == "/opt/qualock/auth:rw,nosuid,nodev,noexec,mode=0700"
+    assert f"{auth_file.resolve()}:/opt/qualock/auth-seed.json:ro" in argv
+    assert not any("/opt/qualock/auth/auth.json:ro" in item for item in argv)
+    image_index = argv.index("sha256:prepared")
+    command = argv[image_index + 1 :]
+    assert command[:2] == ["sh", "-c"]
+    assert 'cat "$1" > "$2"' in command[2]
+    assert 'exec "$@"' in command[2]
+    assert command[4:6] == ["/opt/qualock/auth-seed.json", "/opt/qualock/auth/auth.json"]
+    assert command[-3:] == ["/opt/qualock/codex", "exec", "task"]
+
+
 def test_daemon_ready_requires_successful_docker_info(monkeypatch) -> None:
     from qualock.run.process import ProcessResult
 

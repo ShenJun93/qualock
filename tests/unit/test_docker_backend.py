@@ -38,17 +38,29 @@ class FakeDocker:
         self.grader_calls = 0
         self.auth_mount: tuple[Path, str, str] | None = None
         self.auth_json_contents: str | None = None
+        self.tmpfs_mounts: tuple[str, ...] = ()
+        self.bootstrap_copy: tuple[str, str] | None = None
 
     def prepare(self, source_dir: Path, canary: CanarySpec, *, image_tag: str, timeout_seconds: float = 1200) -> PreparedImage:
         return PreparedImage(reference=image_tag, digest="sha256:prepared")
 
     def run_agent(self, **kwargs: object) -> FrozenAgentState:
         mounts = kwargs.get("extra_mounts", ())
+        tmpfs_mounts = kwargs.get("tmpfs_mounts", ())
+        bootstrap_copy = kwargs.get("bootstrap_copy")
+        assert isinstance(tmpfs_mounts, tuple) or isinstance(tmpfs_mounts, list)
+        self.tmpfs_mounts = tuple(str(item) for item in tmpfs_mounts)
+        if bootstrap_copy is not None:
+            assert isinstance(bootstrap_copy, tuple)
+            self.bootstrap_copy = bootstrap_copy
         if mounts:
             mount = mounts[0]
             assert isinstance(mount, tuple)
             self.auth_mount = mount
-            self.auth_json_contents = (mount[0] / "auth.json").read_text(encoding="utf-8")
+            source = mount[0]
+            assert isinstance(source, Path)
+            auth_file = source if source.is_file() else source / "auth.json"
+            self.auth_json_contents = auth_file.read_text(encoding="utf-8")
         return FrozenAgentState(
             reference="frozen",
             digest="sha256:frozen",
@@ -126,7 +138,7 @@ def test_valid_agent_evidence_is_graded_and_usage_is_recorded(tmp_path: Path) ->
     assert docker.grader_calls == 1
 
 
-def test_codex_auth_uses_ephemeral_writable_home(tmp_path: Path) -> None:
+def test_codex_auth_uses_tmpfs_home_with_external_read_only_seed(tmp_path: Path) -> None:
     auth_home = tmp_path / "codex-home"
     auth_home.mkdir()
     (auth_home / "auth.json").write_text('{"token":"test-only"}', encoding="utf-8")
@@ -143,12 +155,17 @@ def test_codex_auth_uses_ephemeral_writable_home(tmp_path: Path) -> None:
     )
 
     assert docker.auth_mount is not None
-    mounted_home, container_path, mode = docker.auth_mount
-    assert mounted_home != auth_home
-    assert container_path == "/opt/qualock/auth"
-    assert mode == "rw"
+    mounted_auth, container_path, mode = docker.auth_mount
+    assert mounted_auth != auth_home / "auth.json"
+    assert container_path == "/opt/qualock/auth-seed.json"
+    assert mode == "ro"
+    assert docker.tmpfs_mounts == ("/opt/qualock/auth",)
+    assert docker.bootstrap_copy == (
+        "/opt/qualock/auth-seed.json",
+        "/opt/qualock/auth/auth.json",
+    )
     assert docker.auth_json_contents == '{"token":"test-only"}'
-    assert not mounted_home.exists()
+    assert not mounted_auth.exists()
 
 
 def test_web_search_invalidates_attempt_before_grader(tmp_path: Path) -> None:
