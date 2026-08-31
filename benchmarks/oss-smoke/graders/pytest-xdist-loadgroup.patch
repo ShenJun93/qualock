@@ -1,0 +1,74 @@
+diff --git a/.qualock-grader/test_regression.py b/.qualock-grader/test_regression.py
+new file mode 100644
+index 0000000..9da89ef
+--- /dev/null
++++ b/.qualock-grader/test_regression.py
+@@ -0,0 +1,68 @@
++from collections import OrderedDict
++
++import pytest
++
++from xdist.scheduler.loadscope import LoadScopeScheduling
++
++
++class DummyNode:
++    def __init__(self) -> None:
++        self.shutting_down = False
++        self.sent: list[list[int]] = []
++        self.shutdown_called = False
++
++    def send_runtest_some(self, indexes: list[int]) -> None:
++        self.sent.append(list(indexes))
++
++    def shutdown(self) -> None:
++        self.shutdown_called = True
++
++
++def scheduler() -> LoadScopeScheduling:
++    value = object.__new__(LoadScopeScheduling)
++    value.workqueue = OrderedDict()
++    value.assigned_work = {}
++    value.registered_collections = {}
++    value.log = lambda *args: None
++    return value
++
++
++def test_crash_recovery_only_reschedules_unfinished_work() -> None:
++    value = scheduler()
++    crashed = DummyNode()
++    survivor = DummyNode()
++
++    value.assigned_work = {
++        crashed: OrderedDict(
++            [
++                ("done-scope", {"done": True}),
++                ("mixed-scope", {"pending": False, "also-done": True}),
++            ]
++        ),
++        survivor: {},
++    }
++    value.registered_collections = {
++        crashed: ["done", "pending", "also-done"],
++        survivor: ["pending", "also-done"],
++    }
++
++    crashitem = value.remove_node(crashed)
++
++    assert crashitem == "pending"
++    assert survivor.sent == [[0]]
++    assert value.workqueue == OrderedDict()
++    assert "done-scope" not in value.assigned_work[survivor]
++    assert value.assigned_work[survivor]["mixed-scope"]["pending"] is False
++
++
++def test_completed_only_work_unit_is_never_dispatched() -> None:
++    value = scheduler()
++    node = DummyNode()
++    value.workqueue = OrderedDict([("done-scope", {"done": True})])
++    value.assigned_work = {node: {}}
++    value.registered_collections = {node: ["done"]}
++
++    with pytest.raises(RuntimeError, match="no pending items"):
++        value._assign_work_unit(node)
++
++    assert node.sent == []
