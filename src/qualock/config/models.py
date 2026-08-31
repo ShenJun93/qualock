@@ -8,7 +8,7 @@ class AgentConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    id: str = "gpt-5.3-codex"
+    id: str = "gpt-5.6-terra"
     snapshot: str | None = None
     reasoning_effort: Literal["low", "medium", "high", "xhigh"] = "high"
 
