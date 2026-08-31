@@ -86,9 +86,6 @@ class CodexResolver:
             prefix
             / "node_modules"
             / "@openai"
-            / "codex"
-            / "node_modules"
-            / "@openai"
             / package_dir
             / "vendor"
             / platform_package.target
