@@ -1,0 +1,37 @@
+name: Live resolver smoke
+
+on:
+  push:
+    branches: [chore/resolver-smoke]
+
+permissions:
+  contents: read
+
+jobs:
+  resolver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install Qualock
+        run: python -m pip install -e .
+      - name: Resolve exact Codex binaries
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          from qualock.agents.resolver import CodexResolver
+
+          resolver = CodexResolver(Path(".live-resolver-cache"))
+          for version in ("0.150.0", "0.151.0"):
+              binary = resolver.resolve(version)
+              output = subprocess.run(
+                  [str(binary.path), "--version"],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout.strip()
+              print(version, binary.sha256, output)
+          PY
