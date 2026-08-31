@@ -14,9 +14,9 @@ from qualock.agents.resolver import CodexResolver
 from qualock.baseline.io import BaselineStaleError, assert_suite_fresh, read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
 from qualock.canary.models import CanarySpec
-from qualock.evidence.storage import write_qualification_artifacts
+from qualock.evidence.storage import write_baseline_artifacts, write_qualification_artifacts
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
-from qualock.qualification.models import QualificationResult
+from qualock.qualification.models import AttemptResult, QualificationResult
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
 from qualock.run.docker import DockerRunner
 from qualock.run.executor import QualificationBackend, QualificationExecutor
@@ -91,6 +91,7 @@ def execute_baseline(
     backend = backend or _default_backend(root, config)
     qid = qualification_id or _qualification_id("baseline")
     stability: dict[str, CanaryStability] = {}
+    attempt_evidence: dict[str, list[AttemptResult]] = {}
 
     for canary in canaries:
         prepared = backend.prepare(canary, qid)
@@ -104,6 +105,7 @@ def execute_baseline(
             )
             for repetition in range(1, config.qualification.repetitions + 1)
         ]
+        attempt_evidence[canary.id] = attempts
         valid_runs = sum(item.valid for item in attempts)
         successes = sum(item.valid and item.success for item in attempts)
         stability[canary.id] = CanaryStability(valid_runs=valid_runs, successes=successes)
@@ -111,10 +113,22 @@ def execute_baseline(
             valid_runs != config.qualification.repetitions
             or successes != config.qualification.repetitions
         ):
+            write_baseline_artifacts(
+                project_dir(root) / "results",
+                qid,
+                binary.version,
+                attempt_evidence,
+            )
             raise BaselineUnstableError(
                 f"critical canary {canary.id} is not stable: {successes}/{valid_runs}"
             )
 
+    write_baseline_artifacts(
+        project_dir(root) / "results",
+        qid,
+        binary.version,
+        attempt_evidence,
+    )
     lock = BaselineLock(
         schema_version=1,
         created_at=created_at or datetime.now(timezone.utc).isoformat(),
