@@ -99,6 +99,7 @@ class DockerQualificationBackend:
         environment: dict[str, str] = {}
         mounts: list[tuple[Path, str, str]] = []
         tmpfs_mounts: list[str] = []
+        bootstrap_copy: tuple[str, str] | None = None
 
         if self.auth_home is not None:
             with tempfile.TemporaryDirectory(prefix="qualock-codex-auth-") as temp:
@@ -106,7 +107,10 @@ class DockerQualificationBackend:
                 temp_auth = Path(temp) / "auth.json"
                 if auth_file.is_file():
                     shutil.copy2(auth_file, temp_auth)
-                    mounts.append((temp_auth, "/opt/qualock/auth/auth.json", "ro"))
+                    seed_path = "/opt/qualock/auth-seed.json"
+                    target_path = "/opt/qualock/auth/auth.json"
+                    mounts.append((temp_auth, seed_path, "ro"))
+                    bootstrap_copy = (seed_path, target_path)
                 environment["CODEX_HOME"] = "/opt/qualock/auth"
                 tmpfs_mounts.append("/opt/qualock/auth")
                 state = self.docker_runner.run_agent(
@@ -117,6 +121,7 @@ class DockerQualificationBackend:
                     environment=environment,
                     extra_mounts=mounts,
                     tmpfs_mounts=tmpfs_mounts,
+                    bootstrap_copy=bootstrap_copy,
                     frozen_tag=frozen_tag,
                     timeout_seconds=canary.agent.timeout_seconds,
                 )
@@ -129,6 +134,7 @@ class DockerQualificationBackend:
                 environment=environment,
                 extra_mounts=mounts,
                 tmpfs_mounts=tmpfs_mounts,
+                bootstrap_copy=bootstrap_copy,
                 frozen_tag=frozen_tag,
                 timeout_seconds=canary.agent.timeout_seconds,
             )
