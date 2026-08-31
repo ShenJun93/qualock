@@ -17,6 +17,15 @@ jobs:
           python-version: "3.12"
       - name: Install Qualock
         run: python -m pip install -e .
+      - name: Inspect exact Codex npm layout
+        run: |
+          rm -rf .layout-150 .layout-151
+          npm install --prefix .layout-150 --no-save @openai/codex@0.150.0
+          npm install --prefix .layout-151 --no-save @openai/codex@0.151.0
+          echo '== 0.150.0 native candidates =='
+          find .layout-150 -type f -path '*/vendor/*/bin/codex' -print
+          echo '== 0.151.0 native candidates =='
+          find .layout-151 -type f -path '*/vendor/*/bin/codex' -print
       - name: Resolve exact Codex binaries
         run: |
           python - <<'PY'
