@@ -5,7 +5,7 @@ repository:
   url: https://github.com/Kludex/starlette.git
   base_sha: 4a18cd4a0869158f830e9bf519979d6f6f60f36a
 runtime:
-  image: ghcr.io/astral-sh/uv:0.10.0-python3.12-bookworm-slim
+  image: ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248
 task: |
   Starlette URL.replace() crashes when authority components are changed on a
   path-only URL with no existing authority.

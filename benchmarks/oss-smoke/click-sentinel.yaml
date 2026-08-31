@@ -5,7 +5,7 @@ repository:
   url: https://github.com/pallets/click.git
   base_sha: 3cbcf9b11546f4cf10b36d3e2e531733ba6fe001
 runtime:
-  image: ghcr.io/astral-sh/uv:0.10.0-python3.12-bookworm-slim
+  image: ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248
 task: |
   Click parameters using sentinel defaults cannot reliably be copied,
   deep-copied, or round-tripped through pickle.
