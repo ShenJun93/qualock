@@ -21,6 +21,9 @@ if args and args[0] == 'install':
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_bytes(('native-codex-' + version).encode())
     binary.chmod(0o755)
+    host = binary.with_name('codex-code-mode-host')
+    host.write_bytes(('code-mode-host-' + version).encode())
+    host.chmod(0o755)
     raise SystemExit(0)
 raise SystemExit(2)
 """,
@@ -41,6 +44,12 @@ def test_resolves_exact_version_to_native_linux_binary(tmp_path: Path) -> None:
     )
     assert len(binary.sha256) == 64
     assert binary.path.is_file()
+    assert len(binary.support_binaries) == 1
+    support = binary.support_binaries[0]
+    assert support.name == 'codex-code-mode-host'
+    assert support.path == binary.path.with_name('codex-code-mode-host')
+    assert support.container_path == '/opt/qualock/codex-code-mode-host'
+    assert len(support.sha256) == 64
 
 
 def test_latest_is_resolved_to_exact_version_before_install(tmp_path: Path) -> None:
@@ -73,6 +82,9 @@ binary = prefix / 'node_modules' / '@openai' / 'codex-linux-arm64' / 'vendor' / 
 binary.parent.mkdir(parents=True, exist_ok=True)
 binary.write_bytes(('native-codex-' + version).encode())
 binary.chmod(0o755)
+host = binary.with_name('codex-code-mode-host')
+host.write_bytes(('code-mode-host-' + version).encode())
+host.chmod(0o755)
 """,
         encoding="utf-8",
     )

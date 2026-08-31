@@ -97,7 +97,10 @@ class DockerQualificationBackend:
         container_name = f"ub-{safe_canary}-{side.value[:1]}-{repetition}-{binary.version.replace('.', '-')}"
         frozen_tag = f"qualock-frozen-{hashlib.sha256(container_name.encode()).hexdigest()[:16]}"
         environment: dict[str, str] = {}
-        mounts: list[tuple[Path, str, str]] = []
+        mounts: list[tuple[Path, str, str]] = [
+            (support.path, support.container_path, "ro")
+            for support in binary.support_binaries
+        ]
         tmpfs_mounts: list[str] = []
         bootstrap_copy: tuple[str, str] | None = None
 

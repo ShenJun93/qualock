@@ -122,3 +122,52 @@ def test_daemon_ready_requires_successful_docker_info(monkeypatch) -> None:
         ),
     )
     assert daemon_ready() is True
+
+
+def test_prepare_bootstraps_pinned_bubblewrap(tmp_path: Path, monkeypatch) -> None:
+    from qualock.canary.models import CanarySpec
+    from qualock.run.process import ProcessResult
+    source = tmp_path / "source"
+    source.mkdir()
+    grader = tmp_path / "grader.patch"
+    grader.write_text("patch", encoding="utf-8")
+    spec = CanarySpec.model_validate({
+        "schema_version": 1, "id": "sample", "name": "Sample",
+        "repository": {"url": "https://example.invalid/repo.git", "base_sha": "a" * 40},
+        "runtime": {"image": "python:3.12-slim"}, "task": "Fix it", "setup": [],
+        "agent": {"timeout_seconds": 60},
+        "grader": {"patch": str(grader), "command": ["pytest -q"]},
+        "constraints": {"protected_paths": []}, "critical": True,
+    })
+    seen = {}
+    runner = DockerRunner()
+    def fake_run(argv, *, timeout_seconds):
+        if "build" in argv:
+            path = Path(argv[argv.index("--file") + 1])
+            seen["dockerfile"] = path.read_text(encoding="utf-8")
+        return ProcessResult(0, "", "", 0.01, False)
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_inspect_image_id", lambda reference: "sha256:prepared")
+    runner.prepare(source, spec, image_tag="prepared")
+    assert "bubblewrap=0.8.0-2+deb12u1" in seen["dockerfile"]
+
+
+def test_agent_container_relaxes_seccomp_only_for_inner_bubblewrap(tmp_path: Path) -> None:
+    runner = DockerRunner(docker_executable="docker")
+    argv = runner.build_agent_create_argv(
+        prepared_image="sha256:prepared",
+        container_name="ub-agent-seccomp",
+        agent_binary=tmp_path / "agent-package/codex",
+        agent_argv=["/host/codex", "exec", "task"],
+        environment={},
+    )
+    assert "--security-opt" in argv
+    index = argv.index("--security-opt")
+    assert argv[index + 1] == "seccomp=unconfined"
+
+    grader = runner.build_grader_run_argv(
+        frozen_image="sha256:frozen",
+        grader_root=tmp_path,
+        command="pytest -q",
+    )
+    assert "seccomp=unconfined" not in grader

@@ -44,6 +44,7 @@ class FakeDocker:
         self.exit_code = exit_code
         self.grader_calls = 0
         self.auth_mount: tuple[Path, str, str] | None = None
+        self.mounts: tuple[tuple[Path, str, str], ...] = ()
         self.auth_json_contents: str | None = None
         self.tmpfs_mounts: tuple[str, ...] = ()
         self.bootstrap_copy: tuple[str, str] | None = None
@@ -61,13 +62,15 @@ class FakeDocker:
             assert isinstance(bootstrap_copy, tuple)
             self.bootstrap_copy = bootstrap_copy
         if mounts:
-            mount = mounts[0]
-            assert isinstance(mount, tuple)
-            self.auth_mount = mount
-            source = mount[0]
-            assert isinstance(source, Path)
-            auth_file = source if source.is_file() else source / "auth.json"
-            self.auth_json_contents = auth_file.read_text(encoding="utf-8")
+            self.mounts = tuple(mounts)
+            for mount in mounts:
+                assert isinstance(mount, tuple)
+                if mount[1] == "/opt/qualock/auth-seed.json":
+                    self.auth_mount = mount
+                    source = mount[0]
+                    assert isinstance(source, Path)
+                    auth_file = source if source.is_file() else source / "auth.json"
+                    self.auth_json_contents = auth_file.read_text(encoding="utf-8")
         return FrozenAgentState(
             reference="frozen",
             digest="sha256:frozen",
@@ -214,3 +217,27 @@ def test_protected_path_change_invalidates_attempt(tmp_path: Path) -> None:
     assert result.valid is False
     assert result.protected_path_violations == ("tests/test_hidden.py",)
     assert docker.grader_calls == 0
+
+
+def test_codex_support_binary_is_mounted_read_only(tmp_path: Path) -> None:
+    main = binary(tmp_path)
+    host = main.path.with_name("codex-code-mode-host")
+    host.write_text("host", encoding="utf-8")
+    binary_with_host = AgentBinary(
+        main.name, main.version, main.path, main.sha256,
+        support_binaries=(type("Support", (), {
+            "name": "codex-code-mode-host",
+            "path": host,
+            "sha256": "host-sha",
+            "container_path": "/opt/qualock/codex-code-mode-host",
+        })(),),
+    )
+    docker = FakeDocker(stdout='{"type":"turn.completed","usage":{}}\n')
+    service = backend(tmp_path, docker)
+    spec = canary(tmp_path)
+    result = service.run_attempt(
+        canary=spec, prepared=PreparedImage("p", "sha256:p"),
+        binary=binary_with_host, side=Side.BASELINE, repetition=1,
+    )
+    assert result.valid is True
+    assert (host, "/opt/qualock/codex-code-mode-host", "ro") in docker.mounts

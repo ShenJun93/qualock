@@ -85,6 +85,14 @@ class DockerRunner:
             f"FROM {canary.runtime.image}",
             "WORKDIR /workspace",
             "COPY . /workspace",
+            (
+                "RUN if command -v bwrap >/dev/null 2>&1; then :; "
+                "elif command -v apt-get >/dev/null 2>&1; then "
+                "apt-get update && apt-get install -y --no-install-recommends "
+                "bubblewrap=0.8.0-2+deb12u1 && rm -rf /var/lib/apt/lists/*; "
+                "else echo 'Qualock Codex runner requires bubblewrap in the runtime image' >&2; "
+                "exit 127; fi"
+            ),
         ]
         dockerfile_lines.extend(f"RUN {command}" for command in canary.setup)
         with tempfile.TemporaryDirectory(prefix="qualock-dockerfile-") as temp:
@@ -127,6 +135,8 @@ class DockerRunner:
             container_name,
             "--workdir",
             "/workspace",
+            "--security-opt",
+            "seccomp=unconfined",
         ]
         for key, value in sorted(environment.items()):
             argv.extend(["--env", f"{key}={value}"])

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from qualock.run.process import run_process
 
-from .base import AgentBinary
+from .base import AgentBinary, AgentSupportBinary
 
 
 class CodexResolveError(RuntimeError):
@@ -92,7 +92,8 @@ class CodexResolver:
             / "bin"
             / "codex"
         )
-        if not binary.is_file():
+        support_binary = binary.with_name("codex-code-mode-host")
+        if not binary.is_file() or not support_binary.is_file():
             prefix.mkdir(parents=True, exist_ok=True)
             result = run_process(
                 [
@@ -109,6 +110,24 @@ class CodexResolver:
                 raise CodexResolveError(result.stderr.strip() or "failed to install Codex")
             if not binary.is_file():
                 raise CodexResolveError(f"Codex native binary missing after install: {binary}")
+            if not support_binary.is_file():
+                raise CodexResolveError(
+                    f"Codex code-mode host missing after install: {support_binary}"
+                )
 
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        return AgentBinary(name="codex", version=version, path=binary, sha256=digest)
+        support_digest = hashlib.sha256(support_binary.read_bytes()).hexdigest()
+        return AgentBinary(
+            name="codex",
+            version=version,
+            path=binary,
+            sha256=digest,
+            support_binaries=(
+                AgentSupportBinary(
+                    name="codex-code-mode-host",
+                    path=support_binary,
+                    sha256=support_digest,
+                    container_path="/opt/qualock/codex-code-mode-host",
+                ),
+            ),
+        )
