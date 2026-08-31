@@ -1,5 +1,5 @@
 schema_version: 1
 canaries:
   - starlette-url.yaml
-  - pytest-caplog.yaml
+  - pytest-xdist-loadgroup.yaml
   - click-sentinel.yaml
