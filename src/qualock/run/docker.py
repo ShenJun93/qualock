@@ -11,7 +11,6 @@ from .process import ProcessResult, run_process
 
 
 
-
 def parse_nul_paths(raw: str) -> tuple[str, ...]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -117,6 +116,7 @@ class DockerRunner:
         agent_argv: Sequence[str],
         environment: Mapping[str, str],
         extra_mounts: Sequence[tuple[Path, str, str]] = (),
+        tmpfs_mounts: Sequence[str] = (),
         replace_agent_binary: bool = True,
     ) -> list[str]:
         argv = [
@@ -129,6 +129,15 @@ class DockerRunner:
         ]
         for key, value in sorted(environment.items()):
             argv.extend(["--env", f"{key}={value}"])
+        for container_path in tmpfs_mounts:
+            if not container_path.startswith("/"):
+                raise ValueError(f"tmpfs mount must be absolute: {container_path}")
+            argv.extend(
+                [
+                    "--tmpfs",
+                    f"{container_path}:rw,nosuid,nodev,noexec,mode=0700",
+                ]
+            )
         for host_path, container_path, mode in extra_mounts:
             if mode not in {"ro", "rw"}:
                 raise ValueError(f"invalid mount mode: {mode}")
@@ -157,6 +166,7 @@ class DockerRunner:
         agent_argv: Sequence[str],
         environment: Mapping[str, str],
         extra_mounts: Sequence[tuple[Path, str, str]] = (),
+        tmpfs_mounts: Sequence[str] = (),
         frozen_tag: str,
         timeout_seconds: float,
     ) -> FrozenAgentState:
@@ -168,6 +178,7 @@ class DockerRunner:
                 agent_argv=agent_argv,
                 environment=environment,
                 extra_mounts=extra_mounts,
+                tmpfs_mounts=tmpfs_mounts,
             ),
             timeout_seconds=30,
         )
@@ -194,7 +205,6 @@ class DockerRunner:
             exit_code=started.exit_code if not started.timed_out else None,
             elapsed_ms=int(started.elapsed_seconds * 1000),
         )
-
 
     def inspect_agent_state(self, state: FrozenAgentState) -> AgentStateEvidence:
         changed = self._run(
