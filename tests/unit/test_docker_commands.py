@@ -62,3 +62,36 @@ def test_agent_phase_can_mount_auth_read_only_without_mounting_grader(tmp_path: 
     )
     assert f"{auth.resolve()}:/opt/qualock/auth:ro" in argv
     assert "/private/grader" not in " ".join(argv)
+
+
+def test_daemon_ready_requires_successful_docker_info(monkeypatch) -> None:
+    from qualock.run.process import ProcessResult
+
+    runner = DockerRunner(docker_executable="docker")
+    daemon_ready = getattr(runner, "daemon_ready", None)
+    assert daemon_ready is not None, "DockerRunner must distinguish CLI presence from daemon readiness"
+    monkeypatch.setattr(runner, "available", lambda: True)
+
+    monkeypatch.setattr(
+        "qualock.run.docker.run_process",
+        lambda argv, timeout_seconds: ProcessResult(
+            exit_code=1,
+            stdout="",
+            stderr="cannot connect to daemon",
+            elapsed_seconds=0.01,
+            timed_out=False,
+        ),
+    )
+    assert daemon_ready() is False
+
+    monkeypatch.setattr(
+        "qualock.run.docker.run_process",
+        lambda argv, timeout_seconds: ProcessResult(
+            exit_code=0,
+            stdout="29.6.1",
+            stderr="",
+            elapsed_seconds=0.01,
+            timed_out=False,
+        ),
+    )
+    assert daemon_ready() is True
