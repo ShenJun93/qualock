@@ -1,4 +1,6 @@
 import hashlib
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -96,20 +98,36 @@ class DockerQualificationBackend:
         frozen_tag = f"qualock-frozen-{hashlib.sha256(container_name.encode()).hexdigest()[:16]}"
         environment: dict[str, str] = {}
         mounts: list[tuple[Path, str, str]] = []
-        if self.auth_home is not None:
-            environment["CODEX_HOME"] = "/opt/qualock/auth"
-            mounts.append((self.auth_home, "/opt/qualock/auth", "ro"))
 
-        state = self.docker_runner.run_agent(
-            prepared=prepared,
-            container_name=container_name,
-            agent_binary=binary.path,
-            agent_argv=agent_argv,
-            environment=environment,
-            extra_mounts=mounts,
-            frozen_tag=frozen_tag,
-            timeout_seconds=canary.agent.timeout_seconds,
-        )
+        if self.auth_home is not None:
+            with tempfile.TemporaryDirectory(prefix="qualock-codex-home-") as temp:
+                temp_home = Path(temp)
+                auth_file = self.auth_home / "auth.json"
+                if auth_file.is_file():
+                    shutil.copy2(auth_file, temp_home / "auth.json")
+                environment["CODEX_HOME"] = "/opt/qualock/auth"
+                mounts.append((temp_home, "/opt/qualock/auth", "rw"))
+                state = self.docker_runner.run_agent(
+                    prepared=prepared,
+                    container_name=container_name,
+                    agent_binary=binary.path,
+                    agent_argv=agent_argv,
+                    environment=environment,
+                    extra_mounts=mounts,
+                    frozen_tag=frozen_tag,
+                    timeout_seconds=canary.agent.timeout_seconds,
+                )
+        else:
+            state = self.docker_runner.run_agent(
+                prepared=prepared,
+                container_name=container_name,
+                agent_binary=binary.path,
+                agent_argv=agent_argv,
+                environment=environment,
+                extra_mounts=mounts,
+                frozen_tag=frozen_tag,
+                timeout_seconds=canary.agent.timeout_seconds,
+            )
         try:
             try:
                 evidence = parse_codex_jsonl(state.stdout.splitlines())
