@@ -64,6 +64,23 @@ def test_agent_phase_can_mount_auth_read_only_without_mounting_grader(tmp_path: 
     assert "/private/grader" not in " ".join(argv)
 
 
+def test_agent_phase_can_use_tmpfs_for_ephemeral_state(tmp_path: Path) -> None:
+    runner = DockerRunner(docker_executable="docker")
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+    argv = runner.build_agent_create_argv(
+        prepared_image="sha256:prepared",
+        container_name="ub-agent-auth",
+        agent_binary=tmp_path / "agent-package/codex",
+        agent_argv=["/host/codex", "exec", "task"],
+        environment={"CODEX_HOME": "/opt/qualock/auth"},
+        extra_mounts=[(auth_file, "/opt/qualock/auth/auth.json", "ro")],
+        tmpfs_mounts=["/opt/qualock/auth"],
+    )
+    assert ["--tmpfs", "/opt/qualock/auth:rw,nosuid,nodev,noexec,mode=0700"] == argv[5:7]
+    assert f"{auth_file.resolve()}:/opt/qualock/auth/auth.json:ro" in argv
+
+
 def test_daemon_ready_requires_successful_docker_info(monkeypatch) -> None:
     from qualock.run.process import ProcessResult
 
