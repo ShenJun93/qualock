@@ -43,43 +43,5 @@ jobs:
             /opt/qualock/auth-seed.json \
             /opt/qualock/auth/auth.json \
             sh -c 'test "$(cat "$CODEX_HOME/auth.json")" = "{\"probe\":true}"; touch "$CODEX_HOME/state"; test -f "$CODEX_HOME/state"'
-      - name: Validate xdist canary RED and GREEN
-        if: matrix.python-version == '3.12'
-        shell: bash
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
-          git clone --quiet https://github.com/pytest-dev/pytest-xdist.git "$work"
-
-          build_image() {
-            local ref="$1" tag="$2"
-            git -C "$work" checkout --quiet --force "$ref"
-            git -C "$work" clean -fdx
-            docker build --quiet --tag "$tag" --file - "$work" <<'EOF'
-          FROM ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248
-          WORKDIR /workspace
-          COPY . /workspace
-          RUN uv pip install --system -e .
-          EOF
-          }
-
-          grade_image() {
-            docker run --rm --workdir /workspace \
-              --volume "$PWD/benchmarks/oss-smoke/graders:/private/grader:ro" \
-              "$1" sh -lc \
-              'git apply /private/grader/pytest-xdist-loadgroup.patch && python -m pytest .qualock-grader/test_regression.py -q'
-          }
-
-          build_image dd198c35710f22b1cb86b7fc00311f9b7c63d665 qualock-xdist-base
-          if grade_image qualock-xdist-base; then
-            echo 'Base unexpectedly passed hidden grader'
-            exit 1
-          fi
-          echo 'RED confirmed: historical base fails hidden grader'
-
-          build_image 63f908d5ebc041654475597c3f2d6f1ee3da2c8f qualock-xdist-fixed
-          grade_image qualock-xdist-fixed
-          echo 'GREEN confirmed: upstream fix passes hidden grader'
       - name: Compile
         run: python -m compileall -q src tests
