@@ -37,6 +37,15 @@ class DockerRunner:
     def available(self) -> bool:
         return shutil.which(self.docker_executable) is not None
 
+    def daemon_ready(self) -> bool:
+        if not self.available():
+            return False
+        result = run_process(
+            [self.docker_executable, "info", "--format", "{{.ServerVersion}}"],
+            timeout_seconds=10,
+        )
+        return not result.timed_out and result.exit_code == 0
+
     def _require(self) -> None:
         if not self.available():
             raise DockerUnavailableError(f"Docker CLI not found: {self.docker_executable}")
