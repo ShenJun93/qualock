@@ -52,8 +52,12 @@ class GitSourceManager:
         self._ensure_commit(mirror, sha)
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._run(["git", "clone", "--no-checkout", str(mirror), str(destination)])
-            self._run(["git", "checkout", "--detach", sha], cwd=destination)
+            self._run(["git", "init", str(destination)])
+            self._run(
+                ["git", "fetch", "--depth=1", "--no-tags", str(mirror), sha],
+                cwd=destination,
+            )
+            self._run(["git", "checkout", "--detach", "FETCH_HEAD"], cwd=destination)
         except Exception:
             shutil.rmtree(destination, ignore_errors=True)
             raise

@@ -51,3 +51,28 @@ def test_rejects_existing_destination(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("expected FileExistsError")
+
+
+def test_materialized_checkout_excludes_future_git_objects(tmp_path: Path) -> None:
+    origin = tmp_path / "origin-history"
+    origin.mkdir()
+    git("init", cwd=origin)
+    git("config", "user.email", "test@example.com", cwd=origin)
+    git("config", "user.name", "Test", cwd=origin)
+    (origin / "value.txt").write_text("historical\n", encoding="utf-8")
+    git("add", ".", cwd=origin)
+    git("commit", "-m", "historical", cwd=origin)
+    historical_sha = git("rev-parse", "HEAD", cwd=origin)
+    (origin / "value.txt").write_text("future fix\n", encoding="utf-8")
+    git("commit", "-am", "future fix", cwd=origin)
+    future_sha = git("rev-parse", "HEAD", cwd=origin)
+
+    manager = GitSourceManager(tmp_path / "cache")
+    checkout = manager.materialize(str(origin), historical_sha, tmp_path / "historical")
+
+    assert git("rev-parse", "HEAD", cwd=checkout) == historical_sha
+    probe = subprocess.run(
+        ["git", "cat-file", "-e", f"{future_sha}^{{commit}}"], cwd=checkout
+    )
+    assert probe.returncode != 0
+    assert git("remote", cwd=checkout) == ""
