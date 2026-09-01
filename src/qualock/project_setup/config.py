@@ -13,14 +13,15 @@ from qualock.project import project_dir
 
 def ensure_qualock_project(root: Path) -> Path:
     qdir = project_dir(root)
+    config_path = qdir / "config.yaml"
+    if config_path.exists():
+        load_config(config_path)
+
     (qdir / "canaries").mkdir(parents=True, exist_ok=True)
     (qdir / "results").mkdir(parents=True, exist_ok=True)
 
-    config_path = qdir / "config.yaml"
     if not config_path.exists():
         write_default_config(config_path)
-    else:
-        load_config(config_path)
 
     ignore_path = qdir / ".gitignore"
     if not ignore_path.exists():

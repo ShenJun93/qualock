@@ -137,7 +137,48 @@ qualock report
 
 ## Protect a project from AI edits
 
-QuaLock can also protect behavior that is working in your current project. Add friendly local checks to `.qualock/config.yaml`:
+The easiest path is one command:
+
+```bash
+qualock setup
+```
+
+QuaLock passively inspects project metadata and recommends built-in checks without executing project code. Project protection requires a Git repository with a committed HEAD; setup validates that before creating `.qualock/`. V1 recognizes Git, Python, pytest, Node/npm, React, Vite, and existing npm scripts named `test`, `build`, `lint`, and `typecheck`.
+
+Example:
+
+```text
+QuaLock Setup
+
+Detected: Python, pytest, Git
+Protection level: recommended
+
+Recommended protection
+- Tests still pass
+- Python code still compiles
+- Git patch has no whitespace errors
+
+Apply these protections and protect this project? [y/N]:
+```
+
+Protection levels are intentionally simple:
+
+- `minimal` chooses one highest-signal available check;
+- `recommended` adds normal test/build/compile checks plus Git patch hygiene;
+- `strong` also adds detected lint/typecheck scripts.
+
+Use another level or skip the prompt for automation:
+
+```bash
+qualock setup --level strong
+qualock setup --yes
+```
+
+When a project-local `.venv` or `venv` Python exists, generated Python checks use that interpreter. npm checks are generated only for scripts that actually exist in `package.json`. Setup does not install dependencies. Python compile protection is omitted when QuaLock cannot identify a safe source, test, package, or module target.
+
+If every generated check passes, setup delegates to the normal protection engine and creates the same signed `.qualock/project.lock`. If a check fails, the generated config remains so you can fix the project or environment and rerun `qualock protect`, but no known-good lock is created.
+
+For manual control, add or edit local checks in `.qualock/config.yaml`:
 
 ```yaml
 protections:
@@ -183,7 +224,7 @@ The protected behavior is still intact.
 
 A regression returns `DON'T KEEP THIS CHANGE` and exit code `2`. A timeout or missing command returns `CHECK COULD NOT FINISH` and exit code `4`. JSON evidence is saved under `.qualock/results/` for both protect and verify runs.
 
-Project protections in this first slice use argv-style commands and execute directly in the project root without a shell. Shell pipes, browser recording, auto-detection, and prebuilt Protection Packs are planned product layers, not current claims.
+Generated and manual project protections use argv-style commands and execute directly in the project root without a shell. Built-in setup packs are deterministic recommendations, not downloadable marketplace packages. Shell pipes, browser recording, dependency installation, and framework-specific runtime recording are not supported in V1.
 
 ## Exit codes
 

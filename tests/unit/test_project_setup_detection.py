@@ -114,6 +114,9 @@ def test_unknown_non_git_directory_is_unsupported(tmp_path: Path) -> None:
 def test_python_pack_prefers_project_local_venv_interpreter(tmp_path: Path) -> None:
     init_git(tmp_path)
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    package = tmp_path / "demo"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
     interpreter = tmp_path / ".venv/bin/python"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text("", encoding="utf-8")
@@ -132,3 +135,48 @@ def test_git_patch_check_covers_staged_and_unstaged_changes(tmp_path: Path) -> N
     protections = recommend_protections(detect_project(tmp_path), ProtectionLevel.RECOMMENDED)
 
     assert protections[0].command == ["git", "diff", "HEAD", "--check"]
+
+
+def test_node_tests_directory_does_not_imply_pytest_without_python_metadata(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"test": "echo js-tests"}}),
+        encoding="utf-8",
+    )
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.node is True
+    assert capabilities.python is False
+    assert capabilities.pytest is False
+    assert "pytest" not in {item.id for item in recommend_protections(capabilities, ProtectionLevel.RECOMMENDED)}
+
+
+def test_python_compile_targets_top_level_package_without_scanning_venv(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    package = tmp_path / "demo"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    interpreter = tmp_path / ".venv/bin/python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+    protections = recommend_protections(capabilities, ProtectionLevel.RECOMMENDED)
+
+    assert capabilities.python_targets == ("demo",)
+    compile_check = next(item for item in protections if item.id == "python-compile")
+    assert compile_check.command[-1] == "demo"
+    assert ".venv" not in compile_check.command
+
+
+def test_valid_empty_package_json_still_detects_node(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "package.json").write_text("{}\n", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.node is True
+    assert "Node/npm" in capabilities.labels

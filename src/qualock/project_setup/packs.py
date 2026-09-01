@@ -33,7 +33,7 @@ def _recommended(capabilities: ProjectCapabilities) -> list[ProjectProtectionCon
                 180,
             )
         )
-    if capabilities.python:
+    if capabilities.python and capabilities.python_targets:
         items.append(
             _protection(
                 "python-compile",

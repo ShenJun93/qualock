@@ -9,14 +9,14 @@ Make project protection usable without hand-writing commands. `qualock setup` de
 For automation, `--yes` skips confirmation. `--level` accepts `minimal`, `recommended`, or `strong`, defaulting to `recommended`.
 
 ## Detection
-Detection is filesystem/package-metadata based and never executes project code. V1 recognizes Git, Python, pytest, Node/npm, React, Vite, and npm scripts named `test`, `build`, `lint`, and `typecheck`.
+Detection is filesystem/package-metadata based and never executes project code. The detector stays passive; before preview or mutation, setup separately verifies with Git that the repository has a committed HEAD. V1 recognizes Git, Python, pytest, Node/npm, React, Vite, and npm scripts named `test`, `build`, `lint`, and `typecheck`.
 
 Python is detected from `pyproject.toml`, `setup.py`, `setup.cfg`, or requirements files. Pytest is detected from a `tests/` directory, `pytest.ini`, `conftest.py`, or pytest configuration in `pyproject.toml`. Node metadata comes only from `package.json`; React/Vite are detected from dependencies/devDependencies and scripts.
 
 ## Built-in checks
 Checks are plain `ProjectProtectionConfig` records, so no second execution engine is introduced.
 
-- Python compile: current Python interpreter runs `-m compileall -q` against discovered source/test directories, falling back to the project root.
+- Python compile: the selected Python interpreter runs `-m compileall -q` against safely discovered source, test, top-level package, or top-level module targets. If no safe code target is found, the compile check is omitted instead of scanning the entire project or virtual environment.
 - Pytest: current Python interpreter runs `-m pytest -q`.
 - npm test/build/lint/typecheck: only recommended when that exact script exists in `package.json`.
 - Git patch check: `git diff --check`.

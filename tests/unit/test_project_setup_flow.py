@@ -118,3 +118,29 @@ def test_setup_unsupported_project_exits_3_without_mutation(tmp_path: Path, monk
     assert result.exit_code == 3
     assert "could not detect a supported project" in result.stdout.lower()
     assert not (tmp_path / ".qualock").exists()
+
+
+def test_setup_python_project_without_git_exits_3_before_mutation(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "demo.py").write_text("value = 1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["setup", "--yes"])
+
+    assert result.exit_code == 3
+    assert "git repository" in result.stdout.lower()
+    assert not (tmp_path / ".qualock").exists()
+
+
+def test_setup_git_repository_without_commit_exits_3_before_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["setup", "--yes"])
+
+    assert result.exit_code == 3
+    assert "committed head" in result.stdout.lower()
+    assert not (tmp_path / ".qualock").exists()

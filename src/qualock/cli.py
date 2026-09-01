@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Annotated
 import shutil
 
 import typer
@@ -134,17 +135,18 @@ def check_command(
 
 @app.command("setup")
 def setup_command(
-    level: ProtectionLevel = typer.Option(
-        ProtectionLevel.RECOMMENDED,
-        "--level",
-        help="Protection level: minimal, recommended, or strong.",
-    ),
-    yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Apply the recommended protections without asking for confirmation.",
-    ),
+    level: Annotated[
+        ProtectionLevel,
+        typer.Option("--level", help="Protection level: minimal, recommended, or strong."),
+    ] = ProtectionLevel.RECOMMENDED,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Apply the recommended protections without asking for confirmation.",
+        ),
+    ] = False,
 ) -> None:
     root = Path.cwd()
     try:

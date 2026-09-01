@@ -69,3 +69,21 @@ def test_write_protections_rejects_invalid_existing_config_without_mutation(tmp_
         write_protections(config_path, [protection()])
 
     assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_ensure_qualock_project_rejects_invalid_existing_config_before_side_effects(
+    tmp_path: Path,
+) -> None:
+    qdir = tmp_path / ".qualock"
+    qdir.mkdir()
+    config_path = qdir / "config.yaml"
+    original = "schema_version: 99\nprotections: []\n"
+    config_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ConfigError):
+        ensure_qualock_project(tmp_path)
+
+    assert config_path.read_text(encoding="utf-8") == original
+    assert not (qdir / "canaries").exists()
+    assert not (qdir / "results").exists()
+    assert not (qdir / ".gitignore").exists()
