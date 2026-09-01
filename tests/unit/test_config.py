@@ -36,3 +36,35 @@ def test_snapshot_is_the_effective_model_when_pinned() -> None:
 def test_rejects_unknown_reasoning_effort() -> None:
     with pytest.raises(ValidationError):
         QualockConfig.model_validate({"model": {"reasoning_effort": "turbo"}})
+
+
+def test_project_protections_default_to_empty() -> None:
+    config = QualockConfig.model_validate({})
+    assert config.protections == []
+
+
+def test_project_protection_validates_friendly_command() -> None:
+    config = QualockConfig.model_validate(
+        {
+            "protections": [
+                {
+                    "id": "tests",
+                    "name": "Tests still pass",
+                    "command": ["python", "-m", "pytest", "-q"],
+                    "timeout_seconds": 120,
+                }
+            ]
+        }
+    )
+    protection = config.protections[0]
+    assert protection.id == "tests"
+    assert protection.name == "Tests still pass"
+    assert protection.command == ["python", "-m", "pytest", "-q"]
+    assert protection.timeout_seconds == 120
+
+
+def test_project_protection_rejects_empty_command() -> None:
+    with pytest.raises(ValidationError):
+        QualockConfig.model_validate(
+            {"protections": [{"id": "tests", "name": "Tests", "command": []}]}
+        )

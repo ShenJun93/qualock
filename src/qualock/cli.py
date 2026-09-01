@@ -14,6 +14,14 @@ from qualock.commands import (
 )
 from qualock.config.io import ConfigError, load_config, write_default_config
 from qualock.project import load_project, project_dir
+from qualock.project_protection.commands import (
+    ProjectProtectionConfigError,
+    execute_protect as execute_project_protect,
+    execute_verify as execute_project_verify,
+)
+from qualock.project_protection.render import render_protect_terminal, render_verify_terminal
+from qualock.project_protection.models import ProtectionStatus
+from qualock.project_protection.runner import ProjectProtectionError
 from qualock.qualification.models import Verdict
 from qualock.report.render import render_safety_terminal, render_terminal
 from qualock.report.safety import build_safety_summary
@@ -113,6 +121,42 @@ def check_command(
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)
     if result.verdict is Verdict.INCOMPLETE:
+        raise typer.Exit(4)
+
+
+@app.command("protect")
+def protect_command() -> None:
+    root = Path.cwd()
+    try:
+        result = execute_project_protect(root)
+    except (ConfigError, ProjectProtectionConfigError, FileNotFoundError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(3) from exc
+    except ProjectProtectionError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+    evidence_path = f".qualock/results/{result.operation_id}/"
+    console.print(render_protect_terminal(result, evidence_path), end="", markup=False)
+    if result.status is not ProtectionStatus.PASS:
+        raise typer.Exit(4)
+
+
+@app.command("verify")
+def verify_command() -> None:
+    root = Path.cwd()
+    try:
+        result = execute_project_verify(root)
+    except (ConfigError, ProjectProtectionConfigError, FileNotFoundError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(3) from exc
+    except ProjectProtectionError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+    evidence_path = f".qualock/results/{result.operation_id}/"
+    console.print(render_verify_terminal(result, evidence_path), end="", markup=False)
+    if result.status is ProtectionStatus.FAIL:
+        raise typer.Exit(2)
+    if result.status is ProtectionStatus.INCOMPLETE:
         raise typer.Exit(4)
 
 
