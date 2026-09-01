@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qualock"
-version = "0.1.0"
+version = "0.1.1"
 description = "Lock in known-good coding-agent behavior before you upgrade"
 readme = "README.md"
 keywords = ["ai-agents", "coding-agents", "codex", "regression-testing", "devtools", "ci"]
