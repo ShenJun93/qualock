@@ -68,3 +68,40 @@ def render_terminal(result: QualificationResult) -> str:
     for reason in result.reasons:
         console.print(f"- {reason}")
     return console.export_text()
+
+
+def render_safety_terminal(summary: "SafetySummary", evidence_path: str) -> str:
+    workflow_labels = {
+        Verdict.PASS: "OK",
+        Verdict.WARN: "REVIEW",
+        Verdict.BLOCK: "REGRESSED",
+        Verdict.INCOMPLETE: "UNKNOWN",
+    }
+    lines = [
+        "QuaLock Safety Check",
+        "",
+        summary.headline,
+        "",
+        summary.explanation,
+        "",
+        f"Codex {summary.baseline_version} -> {summary.candidate_version}",
+        "",
+        "Protected workflows",
+    ]
+    for workflow in summary.workflows:
+        lines.append(
+            f"- {workflow_labels[workflow.verdict]}: {workflow.name}  "
+            f"{workflow.baseline_successes}/{workflow.baseline_valid} -> "
+            f"{workflow.candidate_successes}/{workflow.candidate_valid}"
+        )
+    lines.extend(
+        [
+            "",
+            "Recommendation:",
+            summary.recommendation,
+            "",
+            f"Technical evidence: {evidence_path}",
+            "",
+        ]
+    )
+    return "\n".join(lines)

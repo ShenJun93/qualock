@@ -60,3 +60,22 @@ def test_terminal_report_contains_independent_quality_verdict() -> None:
     text = render_terminal(sample_result())
     assert "Quality" in text
     assert "BLOCK" in text
+
+
+def test_easy_terminal_report_leads_with_safety_and_evidence_path() -> None:
+    from qualock.report.safety import build_safety_summary
+    from qualock.report.render import render_safety_terminal
+
+    summary = build_safety_summary(
+        sample_result(),
+        {"critical-bug": "Login and checkout"},
+    )
+
+    text = render_safety_terminal(summary, ".qualock/results/q1/")
+
+    assert "QuaLock Safety Check" in text
+    assert "DON'T UPDATE YET" in text
+    assert "Login and checkout" in text
+    assert "Keep using Codex 0.150.0" in text
+    assert "Technical evidence: .qualock/results/q1/" in text
+    assert "3/3" in text and "0/3" in text
