@@ -30,7 +30,7 @@ PASS / WARN / BLOCK / INCOMPLETE
 
 ## First real qualification evidence
 
-On 2026-09-01, Qualock ran an 18-attempt paired/interleaved pilot comparing Codex `0.150.0` with `0.151.0` using `gpt-5.6-terra` at high reasoning effort.
+On 2026-09-01, Qualock reran an 18-attempt paired/interleaved pilot comparing Codex `0.150.0` with `0.151.0` using `gpt-5.6-terra` at high reasoning effort after fixing historical Git source isolation.
 
 | Canary | `0.150.0` | `0.151.0` |
 | --- | ---: | ---: |
@@ -38,9 +38,9 @@ On 2026-09-01, Qualock ran an 18-attempt paired/interleaved pilot comparing Code
 | pytest-xdist crash recovery | 3/3 | 3/3 |
 | Click sentinel identity | 3/3 | 3/3 |
 
-All 18 attempts were valid. The original report produced `WARN` because one hidden grader over-constrained the implementation; the original report was preserved, the grader was corrected to match the stated behavioral contract, and the same frozen agent states re-graded 18/18 without rerunning the model. The corrected pilot verdict is `PASS` and supports **no regression claim** for this small suite.
+All 18 attempts were valid and passed the current behavioral graders. Each historical checkout contained exactly its declared base commit, no remotes or refs, and no unreachable Git objects; event-log SHA audit found 0/18 attempts referencing a non-base commit. The clean rerun verdict is `PASS` and supports a **no regression claim** for this small suite.
 
-Candidate total runtime was +17.0% and total input tokens +22.8% in this sample; both are advisory in v0.1. See the [full methodology, per-attempt table, hashes, and correction provenance](docs/evidence/2026-09-01-codex-0.150.0-vs-0.151.0/README.md).
+Candidate total runtime was -16.9% and total input tokens -27.2% versus baseline in this sample; both are advisory in v0.1. See the [clean methodology, per-attempt table, hashes, and isolation provenance](docs/evidence/2026-09-01-codex-0.150.0-vs-0.151.0-clean-rerun/README.md). The original contaminated pilot remains preserved as superseded provenance.
 
 ## v0.1 scope
 

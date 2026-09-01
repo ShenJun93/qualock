@@ -1,0 +1,535 @@
+{
+  "attempts": [
+    {
+      "canary": "starlette-url-empty-authority",
+      "duration_ms": 149065,
+      "events_sha256": "597fb0579366db9096becd47eaa944e95ed5e65c7b1402fc7610f80d406e39f3",
+      "frozen_image_tag": "qualock-frozen-c958d80c46d9727c",
+      "patch_sha256": "4d0e4779fe84a537d26e5bb4c1d4314b58d39e954a7629211ef732b5b2065282",
+      "prepared_image_digest": "sha256:f8a11f28b27ff0c2286a25412b0ba33fe2ac2fc7d7b09ed854bd30ff0f61f453",
+      "repetition": 1,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 167936,
+        "input_tokens": 200888,
+        "output_tokens": 2610,
+        "reasoning_output_tokens": 1321
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "duration_ms": 93141,
+      "events_sha256": "70d505a8b09e5ff5920288c4ee1b0f08595f4d8ddc35fd27b080fb1fd9869e3b",
+      "frozen_image_tag": "qualock-frozen-bb9ac63ef6702da6",
+      "patch_sha256": "4d0e4779fe84a537d26e5bb4c1d4314b58d39e954a7629211ef732b5b2065282",
+      "prepared_image_digest": "sha256:f8a11f28b27ff0c2286a25412b0ba33fe2ac2fc7d7b09ed854bd30ff0f61f453",
+      "repetition": 1,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 120064,
+        "input_tokens": 141166,
+        "output_tokens": 2301,
+        "reasoning_output_tokens": 1152
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "duration_ms": 171355,
+      "events_sha256": "28ee9ccf9f6f20d490d08e2938d14bbcc445acd9da5ff6bae0fc1ed9ba14cd00",
+      "frozen_image_tag": "qualock-frozen-ccc88741dfef0701",
+      "patch_sha256": "1af68df6732955e536ee82e4f925c2e4f97781d5ae06c0ae11aa5c0559ad2483",
+      "prepared_image_digest": "sha256:f8a11f28b27ff0c2286a25412b0ba33fe2ac2fc7d7b09ed854bd30ff0f61f453",
+      "repetition": 2,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 200448,
+        "input_tokens": 223093,
+        "output_tokens": 2823,
+        "reasoning_output_tokens": 1192
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "duration_ms": 108992,
+      "events_sha256": "1d8d7256578f007b85c0c53f7f5968f5f0369243f0c46ab59ba4e38bd28acb95",
+      "frozen_image_tag": "qualock-frozen-e40b8ed7d5edc2b0",
+      "patch_sha256": "4d0e4779fe84a537d26e5bb4c1d4314b58d39e954a7629211ef732b5b2065282",
+      "prepared_image_digest": "sha256:f8a11f28b27ff0c2286a25412b0ba33fe2ac2fc7d7b09ed854bd30ff0f61f453",
+      "repetition": 2,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 137728,
+        "input_tokens": 170847,
+        "output_tokens": 2943,
+        "reasoning_output_tokens": 1550
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "duration_ms": 72482,
+      "events_sha256": "61b689fab9ba80065734ba6d47e35e717fd2da5ba7326dd548aba063db130d60",
+      "frozen_image_tag": "qualock-frozen-8c3b333bedeb95f4",
+      "patch_sha256": "4d0e4779fe84a537d26e5bb4c1d4314b58d39e954a7629211ef732b5b2065282",
+      "prepared_image_digest": "sha256:f8a11f28b27ff0c2286a25412b0ba33fe2ac2fc7d7b09ed854bd30ff0f61f453",
+      "repetition": 3,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 123904,
+        "input_tokens": 150083,
+        "output_tokens": 2583,
+        "reasoning_output_tokens": 1197
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "duration_ms": 141758,
+      "events_sha256": "d36e6d1befe4449d68b3b7a5a2a931578f37ac399e86c51b17315956ee034b8a",
+      "frozen_image_tag": "qualock-frozen-ef803e76cbf7bf55",
+      "patch_sha256": "4d0e4779fe84a537d26e5bb4c1d4314b58d39e954a7629211ef732b5b2065282",
+      "prepared_image_digest": "sha256:f8a11f28b27ff0c2286a25412b0ba33fe2ac2fc7d7b09ed854bd30ff0f61f453",
+      "repetition": 3,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 194560,
+        "input_tokens": 215895,
+        "output_tokens": 2783,
+        "reasoning_output_tokens": 1232
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "duration_ms": 197902,
+      "events_sha256": "9b00b999906fa0a7759d7fa2b6f53f4aa815f5c84f4b66a69cb9af75cf4f1485",
+      "frozen_image_tag": "qualock-frozen-fb051e51a8c6136c",
+      "patch_sha256": "993a69666515ff85d72dac196c2b31705e114b9f3f1465e525297f394680de0c",
+      "prepared_image_digest": "sha256:2f384af8c72c08042691d93fc4f0f5413e487fc86bdf02a7a3d53a1f9614fb1d",
+      "repetition": 1,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 405504,
+        "input_tokens": 450642,
+        "output_tokens": 7344,
+        "reasoning_output_tokens": 4386
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "duration_ms": 266156,
+      "events_sha256": "9e41214ac9d50d67f206d771069532153a8ccba997e4e1188754efa099576be5",
+      "frozen_image_tag": "qualock-frozen-d3ee9b1458ccecea",
+      "patch_sha256": "5800b09c13c7977909c714235d59254afa36d789fe3a19293ab91349dd0dfc97",
+      "prepared_image_digest": "sha256:2f384af8c72c08042691d93fc4f0f5413e487fc86bdf02a7a3d53a1f9614fb1d",
+      "repetition": 1,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 467968,
+        "input_tokens": 511718,
+        "output_tokens": 7350,
+        "reasoning_output_tokens": 4558
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "duration_ms": 217279,
+      "events_sha256": "47cb181c39e0be44e82d7814261f2fc847e62b6d621fed981577f3c83920b792",
+      "frozen_image_tag": "qualock-frozen-acc3bbb7c1cf698e",
+      "patch_sha256": "c01dba737f4094b815655dbe5ae2aa696fbc7853f2c3484b5a10748f7b07e30e",
+      "prepared_image_digest": "sha256:2f384af8c72c08042691d93fc4f0f5413e487fc86bdf02a7a3d53a1f9614fb1d",
+      "repetition": 2,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 464128,
+        "input_tokens": 509502,
+        "output_tokens": 6726,
+        "reasoning_output_tokens": 3493
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "duration_ms": 233701,
+      "events_sha256": "a22486b146482c3ab2a1e793deb91f7bd1d414921b21917d4d8d1c9865f12749",
+      "frozen_image_tag": "qualock-frozen-25a68a2547ba014b",
+      "patch_sha256": "ec42b7a251b725e0023d2d2f6642f2eed2c35753b7ab795b9bd6653385d7341f",
+      "prepared_image_digest": "sha256:2f384af8c72c08042691d93fc4f0f5413e487fc86bdf02a7a3d53a1f9614fb1d",
+      "repetition": 2,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 361984,
+        "input_tokens": 397668,
+        "output_tokens": 6482,
+        "reasoning_output_tokens": 3652
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "duration_ms": 177075,
+      "events_sha256": "da72a747a3caf3d26fe5e61163e148e9e2a3ddfb14e5dd2903943e116f02132c",
+      "frozen_image_tag": "qualock-frozen-1b60050100226ffe",
+      "patch_sha256": "ec4a2ca9c08f0b7dec9e9821e4d9bee9e78d778e00bfe9ccfe860efd4d7a36d4",
+      "prepared_image_digest": "sha256:2f384af8c72c08042691d93fc4f0f5413e487fc86bdf02a7a3d53a1f9614fb1d",
+      "repetition": 3,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 254464,
+        "input_tokens": 307391,
+        "output_tokens": 4071,
+        "reasoning_output_tokens": 2636
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "duration_ms": 409935,
+      "events_sha256": "2ee9cde066961c1ed518c7f35e5ffd689a40d386cb608d56fa0e463eb373450b",
+      "frozen_image_tag": "qualock-frozen-2613204f1bdc1c05",
+      "patch_sha256": "a53eac43300dc806395b70471d0340d9da42227628aead0faca0d123f19dd79e",
+      "prepared_image_digest": "sha256:2f384af8c72c08042691d93fc4f0f5413e487fc86bdf02a7a3d53a1f9614fb1d",
+      "repetition": 3,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 663040,
+        "input_tokens": 713217,
+        "output_tokens": 4793,
+        "reasoning_output_tokens": 2288
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "duration_ms": 102079,
+      "events_sha256": "b9519f452653b653fe58e3eaaf08cf7894ed04abaa57edfa9da278f8c409e3cf",
+      "frozen_image_tag": "qualock-frozen-53cfa25e93ab498b",
+      "patch_sha256": "76b55e41aba251131f2f8a4cb7a243a988cc2568668b8b0a75454db48b7833ae",
+      "prepared_image_digest": "sha256:23e5da6a6af10e2e053b95740d1c8a3a9f4de42b5e4cbb11a0bdfe6e7bced02c",
+      "repetition": 1,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 158208,
+        "input_tokens": 184131,
+        "output_tokens": 3422,
+        "reasoning_output_tokens": 1656
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "duration_ms": 98261,
+      "events_sha256": "af1dc713cb4996419e7971a3b7f931442c8ec4d91202d937dca80e8c16458669",
+      "frozen_image_tag": "qualock-frozen-42ab0228b6009dce",
+      "patch_sha256": "7a5c2d0ce8f0f26b0fd71c8572e803fbd2cf3c8d1f257285e98ec6e760323b64",
+      "prepared_image_digest": "sha256:23e5da6a6af10e2e053b95740d1c8a3a9f4de42b5e4cbb11a0bdfe6e7bced02c",
+      "repetition": 1,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 220928,
+        "input_tokens": 253742,
+        "output_tokens": 3198,
+        "reasoning_output_tokens": 1065
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "duration_ms": 104083,
+      "events_sha256": "545d078e0d7b8beeb2f169ba19ebcd2a8d985a584798c48de3f92c623923a686",
+      "frozen_image_tag": "qualock-frozen-5d445d9d3d12eb99",
+      "patch_sha256": "0bf975385caf8e927ec1e0c24dd22ff6669c60ba47287ae981731d1092e4a286",
+      "prepared_image_digest": "sha256:23e5da6a6af10e2e053b95740d1c8a3a9f4de42b5e4cbb11a0bdfe6e7bced02c",
+      "repetition": 2,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 248832,
+        "input_tokens": 318689,
+        "output_tokens": 3658,
+        "reasoning_output_tokens": 1324
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "duration_ms": 94299,
+      "events_sha256": "980221ef766cd62d61e669d847e988759c20bb808d8599b01d7abb588ea11501",
+      "frozen_image_tag": "qualock-frozen-1023d7f1f8303d67",
+      "patch_sha256": "e4ce78c124898f96b2f34b424edf06d409fbebca4aaea80d9e083ba40fd252ad",
+      "prepared_image_digest": "sha256:23e5da6a6af10e2e053b95740d1c8a3a9f4de42b5e4cbb11a0bdfe6e7bced02c",
+      "repetition": 2,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 130560,
+        "input_tokens": 166305,
+        "output_tokens": 3219,
+        "reasoning_output_tokens": 1654
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "duration_ms": 100342,
+      "events_sha256": "7253cb5358ad97e0c5ea94fe417d7a2c00fab83e993e349cb6958251d3b6fa0a",
+      "frozen_image_tag": "qualock-frozen-d1714af585da536b",
+      "patch_sha256": "4a3374dd117fa7099d19410cbcf0f266ba4b978ac1057c9684e52e4c4a866af4",
+      "prepared_image_digest": "sha256:23e5da6a6af10e2e053b95740d1c8a3a9f4de42b5e4cbb11a0bdfe6e7bced02c",
+      "repetition": 3,
+      "side": "baseline",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 379136,
+        "input_tokens": 437501,
+        "output_tokens": 2795,
+        "reasoning_output_tokens": 1138
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "duration_ms": 77939,
+      "events_sha256": "47f19316defc0a0cd3925600463e793aaa681c23b8d3343853966d54e0e51f6a",
+      "frozen_image_tag": "qualock-frozen-add23b1f502b1623",
+      "patch_sha256": "f6d647e50f12a1657bc89606883fa0e43dd644e5f0bf24702b6813ff1f3f604f",
+      "prepared_image_digest": "sha256:23e5da6a6af10e2e053b95740d1c8a3a9f4de42b5e4cbb11a0bdfe6e7bced02c",
+      "repetition": 3,
+      "side": "candidate",
+      "success": true,
+      "usage": {
+        "cached_input_tokens": 141824,
+        "input_tokens": 165332,
+        "output_tokens": 2166,
+        "reasoning_output_tokens": 610
+      },
+      "valid": true,
+      "version": "0.151.0"
+    }
+  ],
+  "baseline": {
+    "binary_sha256": "f0222a59e7d06f7b97014fb672731285b453b945fc0f0aab36c89278dec36e14",
+    "version": "0.150.0"
+  },
+  "canaries": {
+    "click-sentinel-duplication": {
+      "base_sha": "3cbcf9b11546f4cf10b36d3e2e531733ba6fe001",
+      "prepared_image_digest": "sha256:23e5da6a6af10e2e053b95740d1c8a3a9f4de42b5e4cbb11a0bdfe6e7bced02c",
+      "repository_url": "https://github.com/pallets/click.git",
+      "runtime_image": "ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248"
+    },
+    "pytest-xdist-loadgroup-crash-recovery": {
+      "base_sha": "dd198c35710f22b1cb86b7fc00311f9b7c63d665",
+      "prepared_image_digest": "sha256:2f384af8c72c08042691d93fc4f0f5413e487fc86bdf02a7a3d53a1f9614fb1d",
+      "repository_url": "https://github.com/pytest-dev/pytest-xdist.git",
+      "runtime_image": "ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248"
+    },
+    "starlette-url-empty-authority": {
+      "base_sha": "4a18cd4a0869158f830e9bf519979d6f6f60f36a",
+      "prepared_image_digest": "sha256:f8a11f28b27ff0c2286a25412b0ba33fe2ac2fc7d7b09ed854bd30ff0f61f453",
+      "repository_url": "https://github.com/Kludex/starlette.git",
+      "runtime_image": "ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248"
+    }
+  },
+  "candidate": {
+    "binary_sha256": "9739cbc928b9c573be83256acd46668f5dd4f119d2d09e05246895ca2aaf0c9a",
+    "version": "0.151.0"
+  },
+  "executed_at_utc": "2026-09-01T10:17:01Z",
+  "executed_with_qualock_commit": "d6da463afff65ceb139dcf6ce94aaf766f9abd01",
+  "grader": {
+    "behavioral_fix_commit": "5f69787de783a42b4c660bfa314179543bfd65fc",
+    "note": "Clean rerun used the corrected grader directly; no frozen-state regrade was needed."
+  },
+  "model": {
+    "id": "gpt-5.6-terra",
+    "reasoning_effort": "high"
+  },
+  "qualification_id": "pilot-0150-vs-0151-20260901T101701Z",
+  "run_order": [
+    [
+      "starlette-url-empty-authority",
+      "candidate",
+      1
+    ],
+    [
+      "starlette-url-empty-authority",
+      "baseline",
+      1
+    ],
+    [
+      "starlette-url-empty-authority",
+      "baseline",
+      2
+    ],
+    [
+      "starlette-url-empty-authority",
+      "candidate",
+      2
+    ],
+    [
+      "starlette-url-empty-authority",
+      "candidate",
+      3
+    ],
+    [
+      "starlette-url-empty-authority",
+      "baseline",
+      3
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "baseline",
+      1
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "candidate",
+      1
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "baseline",
+      2
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "candidate",
+      2
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "candidate",
+      3
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "baseline",
+      3
+    ],
+    [
+      "click-sentinel-duplication",
+      "baseline",
+      1
+    ],
+    [
+      "click-sentinel-duplication",
+      "candidate",
+      1
+    ],
+    [
+      "click-sentinel-duplication",
+      "baseline",
+      2
+    ],
+    [
+      "click-sentinel-duplication",
+      "candidate",
+      2
+    ],
+    [
+      "click-sentinel-duplication",
+      "baseline",
+      3
+    ],
+    [
+      "click-sentinel-duplication",
+      "candidate",
+      3
+    ]
+  ],
+  "runner": {
+    "account_features_disabled": [
+      "apps",
+      "plugins",
+      "remote_plugin"
+    ],
+    "agent_security_opt": "seccomp=unconfined",
+    "docker_engine": "29.6.1",
+    "docker_privileged": false,
+    "docker_sys_admin_capability": false,
+    "os_arch": "linux/amd64",
+    "web_search": "disabled",
+    "workspace_network": false
+  },
+  "schema_version": 2,
+  "source_isolation": {
+    "attempts_with_nonbase_commit_refs": [],
+    "checkouts": {
+      "click-sentinel-duplication": {
+        "expected_base_sha": "3cbcf9b11546f4cf10b36d3e2e531733ba6fe001",
+        "head": "3cbcf9b11546f4cf10b36d3e2e531733ba6fe001",
+        "head_matches_base": true,
+        "ref_count": 0,
+        "remote_count": 0,
+        "rev_count": 1,
+        "shallow": "3cbcf9b11546f4cf10b36d3e2e531733ba6fe001",
+        "unreachable_object_count": 0
+      },
+      "pytest-xdist-loadgroup-crash-recovery": {
+        "expected_base_sha": "dd198c35710f22b1cb86b7fc00311f9b7c63d665",
+        "head": "dd198c35710f22b1cb86b7fc00311f9b7c63d665",
+        "head_matches_base": true,
+        "ref_count": 0,
+        "remote_count": 0,
+        "rev_count": 1,
+        "shallow": "dd198c35710f22b1cb86b7fc00311f9b7c63d665",
+        "unreachable_object_count": 0
+      },
+      "starlette-url-empty-authority": {
+        "expected_base_sha": "4a18cd4a0869158f830e9bf519979d6f6f60f36a",
+        "head": "4a18cd4a0869158f830e9bf519979d6f6f60f36a",
+        "head_matches_base": true,
+        "ref_count": 0,
+        "remote_count": 0,
+        "rev_count": 1,
+        "shallow": "4a18cd4a0869158f830e9bf519979d6f6f60f36a",
+        "unreachable_object_count": 0
+      }
+    },
+    "fix_commit": "d6da463afff65ceb139dcf6ce94aaf766f9abd01"
+  },
+  "source_report_sha256": "e77fdbd8c57b83846db6d46e39487ba3855b78a0e98d68afa3c2fef0669805fd",
+  "supersedes": {
+    "path": "docs/evidence/2026-09-01-codex-0.150.0-vs-0.151.0/evidence.json",
+    "reason": "Original pilot was contaminated because historical materialization exposed future Git objects before source isolation was fixed.",
+    "sha256": "bf69ecea40dc282079ba35386614e7ff74173657a697854e7a90e01a5329f03f"
+  },
+  "verdict": "pass"
+}

@@ -1,5 +1,7 @@
 # First real Qualock Codex A/B qualification
 
+> **SUPERSEDED:** This pilot is preserved for provenance but is not release evidence. Historical source materialization exposed future Git objects. Use the [clean rerun](../2026-09-01-codex-0.150.0-vs-0.151.0-clean-rerun/README.md).
+
 **Result:** `PASS` after correcting an over-constrained hidden grader; no behavioral regression was observed in this three-canary pilot.
 
 - Baseline: Codex `0.150.0`
