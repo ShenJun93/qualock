@@ -28,6 +28,20 @@ paired/interleaved repetitions
 PASS / WARN / BLOCK / INCOMPLETE
 ```
 
+## First real qualification evidence
+
+On 2026-09-01, Qualock ran an 18-attempt paired/interleaved pilot comparing Codex `0.150.0` with `0.151.0` using `gpt-5.6-terra` at high reasoning effort.
+
+| Canary | `0.150.0` | `0.151.0` |
+| --- | ---: | ---: |
+| Starlette URL authority | 3/3 | 3/3 |
+| pytest-xdist crash recovery | 3/3 | 3/3 |
+| Click sentinel identity | 3/3 | 3/3 |
+
+All 18 attempts were valid. The original report produced `WARN` because one hidden grader over-constrained the implementation; the original report was preserved, the grader was corrected to match the stated behavioral contract, and the same frozen agent states re-graded 18/18 without rerunning the model. The corrected pilot verdict is `PASS` and supports **no regression claim** for this small suite.
+
+Candidate total runtime was +17.0% and total input tokens +22.8% in this sample; both are advisory in v0.1. See the [full methodology, per-attempt table, hashes, and correction provenance](docs/evidence/2026-09-01-codex-0.150.0-vs-0.151.0/README.md).
+
 ## v0.1 scope
 
 Qualock v0.1 intentionally supports one qualification axis: **Codex CLI version A vs version B**. It does not attempt to be a general agent leaderboard, prompt optimizer, hosted benchmark service, or multi-agent arena.
@@ -176,7 +190,7 @@ The Codex adapter capability-detects each selected binary before constructing th
 
 v0.1 is intended for repositories you trust. Docker is used to create a real hidden-grader filesystem boundary and reproducible prepared state, but Qualock v0.1 is **not** a hardened sandbox for arbitrary hostile repositories.
 
-Codex authentication may be mounted read-only into the agent container. Repository code should therefore be treated as trusted. A dedicated credential broker / network egress proxy is future hardening, not a v0.1 claim.
+Qualock copies the Codex auth file to a temporary read-only seed and bootstraps it into an ephemeral `CODEX_HOME` tmpfs for the agent run. Repository code inside that trusted agent container could still access the credential, so hostile repositories remain out of scope. A dedicated credential broker / network egress proxy is future hardening, not a v0.1 claim.
 
 ## Development
 
@@ -190,7 +204,7 @@ Tests use fake Codex/process/backends so the normal suite does not require OpenA
 
 ## Current status
 
-The offline control plane, behavior-lock semantics, paired scheduling, JSONL evidence parsing, Docker command/isolation contract, fake qualification pipeline, and CLI are implemented. The first live `Codex 0.150.0 -> 0.151.0` OSS qualification still requires a host with Docker plus working Codex authentication; no live regression claim is made until that experiment is executed and its evidence is published.
+The local qualification pipeline, behavior-lock semantics, paired scheduling, JSONL evidence parsing, hidden-grader isolation, Codex Linux sandbox support, and CLI are implemented. The first real `Codex 0.150.0 -> 0.151.0` OSS pilot has been executed and published. It passed all three canaries after a documented behavioral-grader correction; this is evidence for that small suite only, not a broad equivalence claim.
 
 ## Open source and commercial use
 
