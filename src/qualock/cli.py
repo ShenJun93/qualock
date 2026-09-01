@@ -15,7 +15,8 @@ from qualock.commands import (
 from qualock.config.io import ConfigError, load_config, write_default_config
 from qualock.project import load_project, project_dir
 from qualock.qualification.models import Verdict
-from qualock.report.render import render_terminal
+from qualock.report.render import render_safety_terminal, render_terminal
+from qualock.report.safety import build_safety_summary
 from qualock.run.docker import DockerRunner
 
 
@@ -76,9 +77,17 @@ def baseline_command(agent: str) -> None:
 
 
 @app.command("check")
-def check_command(candidate: str) -> None:
+def check_command(
+    candidate: str,
+    technical: bool = typer.Option(
+        False,
+        "--technical",
+        help="Show the technical qualification report instead of the safety summary.",
+    ),
+) -> None:
+    root = Path.cwd()
     try:
-        result = execute_check(Path.cwd(), candidate)
+        result = execute_check(root, candidate)
     except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:
         console.print(str(exc))
         raise typer.Exit(3) from exc
@@ -89,7 +98,18 @@ def check_command(candidate: str) -> None:
         console.print(str(exc))
         raise typer.Exit(1) from exc
 
-    console.print(render_terminal(result), end="")
+    if technical:
+        console.print(render_terminal(result), end="")
+    else:
+        try:
+            _config, canaries = load_project(root)
+            display_names = {canary.id: canary.name for canary in canaries}
+        except (ConfigError, CanaryLoadError, FileNotFoundError):
+            display_names = {}
+        summary = build_safety_summary(result, display_names)
+        evidence_path = f".qualock/results/{result.qualification_id}/"
+        console.print(render_safety_terminal(summary, evidence_path), end="", markup=False)
+
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)
     if result.verdict is Verdict.INCOMPLETE:

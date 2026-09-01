@@ -97,6 +97,32 @@ Then qualify a candidate release:
 qualock check codex@0.151.0
 ```
 
+The default output is written for the person deciding whether to update:
+
+```text
+QuaLock Safety Check
+
+SAFE TO UPDATE
+
+All protected workflows matched the stable baseline in this check.
+
+Protected workflows
+- OK: Starlette URL handling  3/3 -> 3/3
+- OK: pytest worker recovery  3/3 -> 3/3
+- OK: Click sentinel behavior  3/3 -> 3/3
+
+Recommendation:
+Codex 0.151.0 looks safe for the workflows you protect.
+
+Technical evidence: .qualock/results/check-.../
+```
+
+Use the technical view when you want the raw qualification verdict and counts:
+
+```bash
+qualock check codex@0.151.0 --technical
+```
+
 Or resolve the current npm release to an exact version before qualification:
 
 ```bash
