@@ -11,7 +11,7 @@ from tests.unit.test_report import sample_result
     ("verdict", "status", "headline", "recommendation_fragment"),
     [
         (Verdict.PASS, SafetyStatus.SAFE, "SAFE TO UPDATE", "looks safe"),
-        (Verdict.WARN, SafetyStatus.CAUTION, "REVIEW BEFORE UPDATING", "Review the changed workflows"),
+        (Verdict.WARN, SafetyStatus.CAUTION, "REVIEW BEFORE UPDATING", "Review the workflows marked REVIEW"),
         (Verdict.BLOCK, SafetyStatus.DONT_UPDATE, "DON'T UPDATE YET", "Keep using Codex"),
         (Verdict.INCOMPLETE, SafetyStatus.INCOMPLETE, "CHECK COULD NOT FINISH", "Run the check again"),
     ],

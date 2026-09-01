@@ -45,7 +45,7 @@ _SUITE_COPY = {
     Verdict.WARN: (
         SafetyStatus.CAUTION,
         "REVIEW BEFORE UPDATING",
-        "At least one protected workflow changed enough to need review.",
+        "QuaLock found a result that needs review before you update.",
     ),
     Verdict.BLOCK: (
         SafetyStatus.DONT_UPDATE,
@@ -68,7 +68,7 @@ def _recommendation(result: QualificationResult) -> str:
         )
     if result.verdict is Verdict.WARN:
         return (
-            "Review the changed workflows before updating. "
+            "Review the workflows marked REVIEW before updating. "
             f"Keep Codex {result.baseline_version} available until you are comfortable with the differences."
         )
     if result.verdict is Verdict.BLOCK:
