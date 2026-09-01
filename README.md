@@ -135,15 +135,59 @@ View the latest local report:
 qualock report
 ```
 
+## Protect a project from AI edits
+
+QuaLock can also protect behavior that is working in your current project. Add friendly local checks to `.qualock/config.yaml`:
+
+```yaml
+protections:
+  - id: tests
+    name: Tests still pass
+    command: ["python", "-m", "pytest", "-q"]
+    timeout_seconds: 120
+```
+
+Record a known-good state:
+
+```bash
+qualock protect
+```
+
+QuaLock only writes `.qualock/project.lock` when every configured protection passes. The lock freezes the exact protection definitions, so later edits to the config cannot silently weaken verification.
+
+After your AI changes the project, run:
+
+```bash
+qualock verify
+```
+
+The default result is intentionally simple:
+
+```text
+QuaLock Project Check
+
+SAFE TO KEEP
+
+Protected workflows
+- OK: Tests still pass
+
+Recommendation:
+The protected behavior is still intact.
+```
+
+A regression returns `DON'T KEEP THIS CHANGE` and exit code `2`. A timeout or missing command returns `CHECK COULD NOT FINISH` and exit code `4`. JSON evidence is saved under `.qualock/results/` for both protect and verify runs.
+
+Project protections in this first slice use argv-style commands and execute directly in the project root without a shell. Shell pipes, browser recording, auto-detection, and prebuilt Protection Packs are planned product layers, not current claims.
+
 ## Exit codes
 
 | Code | Meaning |
 | ---: | --- |
-| `0` | PASS or WARN |
+| `0` | qualification accepted or project protections still pass |
 | `1` | operational/internal failure |
-| `2` | candidate BLOCKED by qualification policy |
-| `3` | invalid configuration/input |
-| `4` | integrity/reproducibility failure or INCOMPLETE qualification |
+| `2` | candidate BLOCKED or a protected project workflow regressed |
+| `3` | invalid configuration/input or missing required lock |
+| `4` | integrity/incomplete evidence, or project baseline cannot be safely locked |
 
 A `BLOCK` is not a runner crash. It means the qualification ran successfully and the candidate failed policy.
 

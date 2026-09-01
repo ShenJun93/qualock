@@ -27,6 +27,13 @@ class IntegrityConfig(BaseModel):
     reject_protected_path_changes: bool = True
 
 
+class ProjectProtectionConfig(BaseModel):
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    command: list[str] = Field(min_length=1)
+    timeout_seconds: int = Field(default=120, gt=0)
+
+
 class QualockConfig(BaseModel):
     schema_version: Literal[1] = 1
     agent: AgentConfig = Field(default_factory=AgentConfig)
@@ -34,3 +41,4 @@ class QualockConfig(BaseModel):
     qualification: QualificationConfig = Field(default_factory=QualificationConfig)
     integrity: IntegrityConfig = Field(default_factory=IntegrityConfig)
     canary_globs: list[str] = Field(default_factory=lambda: [".qualock/canaries/*.yaml"])
+    protections: list[ProjectProtectionConfig] = Field(default_factory=list)

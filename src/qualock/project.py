@@ -23,7 +23,8 @@ def load_project(root: Path) -> tuple[QualockConfig, list[CanarySpec]]:
 
 
 def config_fingerprint(config: QualockConfig) -> str:
-    return sha256_canonical(config.model_dump(mode="json"))
+    payload = config.model_dump(mode="json", exclude={"protections"})
+    return sha256_canonical(payload)
 
 
 def suite_fingerprint(canaries: Sequence[CanarySpec]) -> str:

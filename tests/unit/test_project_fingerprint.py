@@ -1,7 +1,8 @@
 from pathlib import Path
 
 from qualock.canary.models import CanarySpec
-from qualock.project import suite_fingerprint
+from qualock.config.models import QualockConfig
+from qualock.project import config_fingerprint, suite_fingerprint
 
 
 def make_canary(tmp_path: Path, patch_content: str) -> CanarySpec:
@@ -35,3 +36,20 @@ def test_suite_fingerprint_changes_when_hidden_grader_changes(tmp_path: Path) ->
     one = tmp_path / "one"; two = tmp_path / "two"
     one.mkdir(); two.mkdir()
     assert suite_fingerprint([make_canary(one, "a")]) != suite_fingerprint([make_canary(two, "b")])
+
+
+def test_project_protections_do_not_change_agent_qualification_config_fingerprint() -> None:
+    base = QualockConfig.model_validate({})
+    with_protection = QualockConfig.model_validate(
+        {
+            "protections": [
+                {
+                    "id": "tests",
+                    "name": "Tests pass",
+                    "command": ["python", "-m", "pytest", "-q"],
+                }
+            ]
+        }
+    )
+
+    assert config_fingerprint(base) == config_fingerprint(with_protection)
