@@ -83,8 +83,11 @@ def execute_verify(
     key_path: Path | None = None,
 ) -> ProjectVerifyResult:
     qdir = project_dir(root)
+    lock_path = qdir / "project.lock"
+    if not lock_path.is_file():
+        raise FileNotFoundError(lock_path)
     key = load_signing_key(key_path)
-    lock = read_project_lock(qdir / "project.lock", key)
+    lock = read_project_lock(lock_path, key)
     oid = operation_id or _operation_id("verify")
     timestamp = created_at or datetime.now(UTC).isoformat()
     runs = run_protections(root, lock.protections)

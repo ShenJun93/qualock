@@ -221,3 +221,15 @@ def test_cli_verify_reports_lock_tampering_as_incomplete(tmp_path: Path, monkeyp
 
     assert result.exit_code == 4
     assert "signature" in result.stdout.lower()
+
+
+def test_cli_verify_without_project_lock_remains_invalid_input(tmp_path: Path, monkeypatch) -> None:
+    init_git_repo(tmp_path)
+    write_config(tmp_path, file_health_command())
+    patch_default_signing_key(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["verify"])
+
+    assert result.exit_code == 3
+    assert "project" in result.stdout and ".lock" in result.stdout

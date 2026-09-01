@@ -57,7 +57,11 @@ def test_signing_is_deterministic_for_same_lock_and_key() -> None:
 
 
 def test_verify_rejects_wrong_key() -> None:
-    from qualock.project_protection.signing import ProjectLockIntegrityError, sign_project_lock, verify_project_lock
+    from qualock.project_protection.signing import (
+        ProjectLockIntegrityError,
+        sign_project_lock,
+        verify_project_lock,
+    )
 
     envelope = sign_project_lock(sample_lock(), b"a" * 32)
 
@@ -66,7 +70,11 @@ def test_verify_rejects_wrong_key() -> None:
 
 
 def test_verify_rejects_tampered_payload() -> None:
-    from qualock.project_protection.signing import ProjectLockIntegrityError, sign_project_lock, verify_project_lock
+    from qualock.project_protection.signing import (
+        ProjectLockIntegrityError,
+        sign_project_lock,
+        verify_project_lock,
+    )
 
     envelope = sign_project_lock(sample_lock(), b"a" * 32)
     envelope.lock.protections[0].name = "Always passes now"

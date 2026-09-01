@@ -8,12 +8,12 @@ import pytest
 from qualock.config.models import ProjectProtectionConfig
 from qualock.project_protection.io import read_project_lock, write_project_lock
 from qualock.project_protection.models import ProtectionStatus
-from qualock.project_protection.signing import ProjectLockIntegrityError
 from qualock.project_protection.runner import (
     ProtectionBaselineError,
     create_project_lock,
     run_protections,
 )
+from qualock.project_protection.signing import ProjectLockIntegrityError
 
 
 def protection(command: list[str], *, timeout: int = 5) -> ProjectProtectionConfig:
