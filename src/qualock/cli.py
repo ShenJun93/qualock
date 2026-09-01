@@ -108,7 +108,7 @@ def check_command(
             display_names = {}
         summary = build_safety_summary(result, display_names)
         evidence_path = f".qualock/results/{result.qualification_id}/"
-        console.print(render_safety_terminal(summary, evidence_path), end="")
+        console.print(render_safety_terminal(summary, evidence_path), end="", markup=False)
 
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)

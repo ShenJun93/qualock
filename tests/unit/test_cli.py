@@ -103,3 +103,19 @@ def test_doctor_fails_when_docker_cli_exists_but_daemon_is_unreachable(tmp_path:
     assert result.exit_code == 1
     assert "Docker" in result.stdout
     assert "FAIL" in result.stdout
+
+
+def test_check_easy_renders_workflow_name_literally(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qualock.cli.execute_check", lambda root, candidate: sample_result())
+    monkeypatch.setattr(
+        "qualock.cli.load_project",
+        lambda root: (object(), [SimpleNamespace(id="critical-bug", name="Django [async]")]),
+    )
+
+    result = runner.invoke(app, ["check", "codex@0.151.0"])
+
+    assert result.exit_code == 2
+    assert "Django [async]" in result.stdout
