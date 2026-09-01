@@ -1,6 +1,9 @@
+from dataclasses import dataclass
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict
+
+from qualock.config.models import ProjectProtectionConfig
 
 
 class ProtectionLevel(str, Enum):
@@ -20,6 +23,7 @@ class ProjectCapabilities(BaseModel):
     vite: bool = False
     npm_scripts: tuple[str, ...] = ()
     python_targets: tuple[str, ...] = ()
+    python_executable: str | None = None
 
     @property
     def supported(self) -> bool:
@@ -39,11 +43,6 @@ class ProjectCapabilities(BaseModel):
             if enabled:
                 labels.append(label)
         return tuple(labels)
-
-
-from dataclasses import dataclass
-
-from qualock.config.models import ProjectProtectionConfig
 
 
 @dataclass(frozen=True)

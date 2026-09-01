@@ -109,3 +109,26 @@ def test_unknown_non_git_directory_is_unsupported(tmp_path: Path) -> None:
 
     assert capabilities.supported is False
     assert recommend_protections(capabilities, ProtectionLevel.RECOMMENDED) == ()
+
+
+def test_python_pack_prefers_project_local_venv_interpreter(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    interpreter = tmp_path / ".venv/bin/python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+    protections = recommend_protections(capabilities, ProtectionLevel.RECOMMENDED)
+
+    assert capabilities.python_executable == ".venv/bin/python"
+    compile_check = next(item for item in protections if item.id == "python-compile")
+    assert compile_check.command[0] == ".venv/bin/python"
+
+
+def test_git_patch_check_covers_staged_and_unstaged_changes(tmp_path: Path) -> None:
+    init_git(tmp_path)
+
+    protections = recommend_protections(detect_project(tmp_path), ProtectionLevel.RECOMMENDED)
+
+    assert protections[0].command == ["git", "diff", "HEAD", "--check"]

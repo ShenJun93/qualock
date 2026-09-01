@@ -9,6 +9,7 @@ from .models import ProjectCapabilities
 KNOWN_NPM_SCRIPTS = ("test", "build", "lint", "typecheck")
 PYTHON_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
 PYTHON_TARGETS = ("src", "tests", "app")
+PYTHON_EXECUTABLES = (".venv/bin/python", ".venv/Scripts/python.exe", "venv/bin/python", "venv/Scripts/python.exe")
 
 
 def _load_pyproject(root: Path) -> dict[str, object]:
@@ -49,6 +50,11 @@ def detect_project(root: Path) -> ProjectCapabilities:
     if python and not python_targets:
         python_targets = (".",)
 
+    python_executable = next(
+        (candidate for candidate in PYTHON_EXECUTABLES if (root / candidate).is_file()),
+        None,
+    )
+
     package = _load_package_json(root)
     node = bool(package)
     scripts_raw = package.get("scripts", {}) if node else {}
@@ -70,4 +76,5 @@ def detect_project(root: Path) -> ProjectCapabilities:
         vite="vite" in dependencies,
         npm_scripts=npm_scripts,
         python_targets=python_targets,
+        python_executable=python_executable,
     )

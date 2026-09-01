@@ -23,12 +23,13 @@ def _protection(
 
 def _recommended(capabilities: ProjectCapabilities) -> list[ProjectProtectionConfig]:
     items: list[ProjectProtectionConfig] = []
+    python_executable = capabilities.python_executable or sys.executable
     if capabilities.pytest:
         items.append(
             _protection(
                 "pytest",
                 "Tests still pass",
-                [sys.executable, "-m", "pytest", "-q"],
+                [python_executable, "-m", "pytest", "-q"],
                 180,
             )
         )
@@ -38,7 +39,7 @@ def _recommended(capabilities: ProjectCapabilities) -> list[ProjectProtectionCon
                 "python-compile",
                 "Python code still compiles",
                 [
-                    sys.executable,
+                    python_executable,
                     "-m",
                     "compileall",
                     "-q",
@@ -55,7 +56,7 @@ def _recommended(capabilities: ProjectCapabilities) -> list[ProjectProtectionCon
         )
     if capabilities.git:
         items.append(
-            _protection("git-diff-check", "Git patch has no whitespace errors", ["git", "diff", "--check"], 30)
+            _protection("git-diff-check", "Git patch has no whitespace errors", ["git", "diff", "HEAD", "--check"], 30)
         )
     return items
 
