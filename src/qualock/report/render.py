@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.table import Table
 
 from qualock.qualification.models import QualificationResult, Verdict
+from qualock.report.safety import SafetySummary
 
 
 def _encode(value: Any) -> Any:
@@ -70,7 +71,7 @@ def render_terminal(result: QualificationResult) -> str:
     return console.export_text()
 
 
-def render_safety_terminal(summary: "SafetySummary", evidence_path: str) -> str:
+def render_safety_terminal(summary: SafetySummary, evidence_path: str) -> str:
     workflow_labels = {
         Verdict.PASS: "OK",
         Verdict.WARN: "REVIEW",

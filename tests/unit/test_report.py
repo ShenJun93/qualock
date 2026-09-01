@@ -79,3 +79,14 @@ def test_easy_terminal_report_leads_with_safety_and_evidence_path() -> None:
     assert "Keep using Codex 0.150.0" in text
     assert "Technical evidence: .qualock/results/q1/" in text
     assert "3/3" in text and "0/3" in text
+
+
+def test_easy_terminal_report_type_hints_resolve() -> None:
+    from typing import get_type_hints
+
+    from qualock.report.render import render_safety_terminal
+    from qualock.report.safety import SafetySummary
+
+    hints = get_type_hints(render_safety_terminal)
+
+    assert hints["summary"] is SafetySummary
