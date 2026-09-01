@@ -1,0 +1,519 @@
+{
+  "attempts": [
+    {
+      "canary": "starlette-url-empty-authority",
+      "corrected_success": true,
+      "duration_ms": 106771,
+      "events_sha256": "f33257d681c706fb02eef8514252bc06154e92b61d4e569542c15944a3981dfe",
+      "frozen_image_tag": "qualock-frozen-bb9ac63ef6702da6",
+      "original_success": true,
+      "patch_sha256": "ffad7f543024631aff926095cac11297740327729a1389ceb15a2ea2a2b5c7aa",
+      "prepared_image_digest": "sha256:03bf22f0161c24b5221a396ecafa0f35f0ab5c7820990fe7516a0dedb7976559",
+      "repetition": 1,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 162304,
+        "input_tokens": 201022,
+        "output_tokens": 2843,
+        "reasoning_output_tokens": 608
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "corrected_success": true,
+      "duration_ms": 89638,
+      "events_sha256": "bea5c83ca3505082c112b1b972d4737487aebb9f0739529006b0fdcf67966a05",
+      "frozen_image_tag": "qualock-frozen-c958d80c46d9727c",
+      "original_success": true,
+      "patch_sha256": "ffad7f543024631aff926095cac11297740327729a1389ceb15a2ea2a2b5c7aa",
+      "prepared_image_digest": "sha256:03bf22f0161c24b5221a396ecafa0f35f0ab5c7820990fe7516a0dedb7976559",
+      "repetition": 1,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 143360,
+        "input_tokens": 160668,
+        "output_tokens": 2065,
+        "reasoning_output_tokens": 459
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "corrected_success": true,
+      "duration_ms": 159726,
+      "events_sha256": "5cc8ac12451ebafdb49e1c9ea147ec0409544b29e6e3bbb73f94086d764023fc",
+      "frozen_image_tag": "qualock-frozen-ccc88741dfef0701",
+      "original_success": true,
+      "patch_sha256": "ffad7f543024631aff926095cac11297740327729a1389ceb15a2ea2a2b5c7aa",
+      "prepared_image_digest": "sha256:03bf22f0161c24b5221a396ecafa0f35f0ab5c7820990fe7516a0dedb7976559",
+      "repetition": 2,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 215552,
+        "input_tokens": 268043,
+        "output_tokens": 2394,
+        "reasoning_output_tokens": 909
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "corrected_success": true,
+      "duration_ms": 137743,
+      "events_sha256": "dab6fbdc2c9beebd8d1852104246cb10e7ccfc4c93bfbb8006ca7548f623b0eb",
+      "frozen_image_tag": "qualock-frozen-e40b8ed7d5edc2b0",
+      "original_success": true,
+      "patch_sha256": "ffad7f543024631aff926095cac11297740327729a1389ceb15a2ea2a2b5c7aa",
+      "prepared_image_digest": "sha256:03bf22f0161c24b5221a396ecafa0f35f0ab5c7820990fe7516a0dedb7976559",
+      "repetition": 2,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 275968,
+        "input_tokens": 305372,
+        "output_tokens": 2784,
+        "reasoning_output_tokens": 989
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "corrected_success": true,
+      "duration_ms": 136392,
+      "events_sha256": "3cb69b8469821d4326a0541215116a6fd791c032908299e05af149418c813677",
+      "frozen_image_tag": "qualock-frozen-8c3b333bedeb95f4",
+      "original_success": true,
+      "patch_sha256": "ffad7f543024631aff926095cac11297740327729a1389ceb15a2ea2a2b5c7aa",
+      "prepared_image_digest": "sha256:03bf22f0161c24b5221a396ecafa0f35f0ab5c7820990fe7516a0dedb7976559",
+      "repetition": 3,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 187392,
+        "input_tokens": 209838,
+        "output_tokens": 2160,
+        "reasoning_output_tokens": 699
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "starlette-url-empty-authority",
+      "corrected_success": true,
+      "duration_ms": 115295,
+      "events_sha256": "2021022b23e92d293f572b5f6ceec808628ab59efe6f22d6ad37cc37a0f5adbd",
+      "frozen_image_tag": "qualock-frozen-ef803e76cbf7bf55",
+      "original_success": true,
+      "patch_sha256": "ffad7f543024631aff926095cac11297740327729a1389ceb15a2ea2a2b5c7aa",
+      "prepared_image_digest": "sha256:03bf22f0161c24b5221a396ecafa0f35f0ab5c7820990fe7516a0dedb7976559",
+      "repetition": 3,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 255744,
+        "input_tokens": 284541,
+        "output_tokens": 2930,
+        "reasoning_output_tokens": 989
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "corrected_success": true,
+      "duration_ms": 96531,
+      "events_sha256": "c1e4a97fa2d037ae8ba331d8da27645772609eb893c0e8add39ebb1c23c518ae",
+      "frozen_image_tag": "qualock-frozen-fb051e51a8c6136c",
+      "original_success": true,
+      "patch_sha256": "a276cf4d69d48fef3a5dda4022bbbe9671e265a57d8ee81fc01e052a71c96610",
+      "prepared_image_digest": "sha256:603c59910b2b743c7e2d6ce6c82b6b71c63998eb91c05b1623488a289923e208",
+      "repetition": 1,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 233216,
+        "input_tokens": 261321,
+        "output_tokens": 2340,
+        "reasoning_output_tokens": 853
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "corrected_success": true,
+      "duration_ms": 99044,
+      "events_sha256": "9847c0092c5c86a074a5e26a87f4d908a849b8a017a47b2dca8e1b2c60a1ccba",
+      "frozen_image_tag": "qualock-frozen-d3ee9b1458ccecea",
+      "original_success": true,
+      "patch_sha256": "9d8e16ad80b3102ea21d861b56fdc7811133c89cff21b2d2fa77f18c447c1807",
+      "prepared_image_digest": "sha256:603c59910b2b743c7e2d6ce6c82b6b71c63998eb91c05b1623488a289923e208",
+      "repetition": 1,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 281088,
+        "input_tokens": 312276,
+        "output_tokens": 3190,
+        "reasoning_output_tokens": 1584
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "corrected_success": true,
+      "duration_ms": 72457,
+      "events_sha256": "42a660b6fb77df82335bc822fad7d6d2b42cac08f96a6a093751acb34f6681c9",
+      "frozen_image_tag": "qualock-frozen-acc3bbb7c1cf698e",
+      "original_success": true,
+      "patch_sha256": "9d8e16ad80b3102ea21d861b56fdc7811133c89cff21b2d2fa77f18c447c1807",
+      "prepared_image_digest": "sha256:603c59910b2b743c7e2d6ce6c82b6b71c63998eb91c05b1623488a289923e208",
+      "repetition": 2,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 192000,
+        "input_tokens": 221493,
+        "output_tokens": 1946,
+        "reasoning_output_tokens": 609
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "corrected_success": true,
+      "duration_ms": 422566,
+      "events_sha256": "ded19beeaef6844154ebb361c347969077c9484b22efa9a18facd758afbc85f0",
+      "frozen_image_tag": "qualock-frozen-25a68a2547ba014b",
+      "original_success": false,
+      "patch_sha256": "4bc0c7663a87bc557aff06dc51a207af95d57af6fefcf3b17c2b26049443bc32",
+      "prepared_image_digest": "sha256:603c59910b2b743c7e2d6ce6c82b6b71c63998eb91c05b1623488a289923e208",
+      "repetition": 2,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 696832,
+        "input_tokens": 775492,
+        "output_tokens": 5310,
+        "reasoning_output_tokens": 2508
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "corrected_success": true,
+      "duration_ms": 61396,
+      "events_sha256": "a705b684290f72b8d68b5ccb228dc5169599d1a1242796f8cdfe5a3ea1f0b1c3",
+      "frozen_image_tag": "qualock-frozen-1b60050100226ffe",
+      "original_success": true,
+      "patch_sha256": "a276cf4d69d48fef3a5dda4022bbbe9671e265a57d8ee81fc01e052a71c96610",
+      "prepared_image_digest": "sha256:603c59910b2b743c7e2d6ce6c82b6b71c63998eb91c05b1623488a289923e208",
+      "repetition": 3,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 141824,
+        "input_tokens": 164928,
+        "output_tokens": 1966,
+        "reasoning_output_tokens": 738
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "pytest-xdist-loadgroup-crash-recovery",
+      "corrected_success": true,
+      "duration_ms": 264087,
+      "events_sha256": "16c943ec0d59e1a8a51e5872e6a797e269b7f5d2601f70950621a7cb762f031a",
+      "frozen_image_tag": "qualock-frozen-2613204f1bdc1c05",
+      "original_success": false,
+      "patch_sha256": "50f2ea2c24a16a8f259d709b490f43535e5b6e6eb7d8b35c1645ab2db9f88388",
+      "prepared_image_digest": "sha256:603c59910b2b743c7e2d6ce6c82b6b71c63998eb91c05b1623488a289923e208",
+      "repetition": 3,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 463360,
+        "input_tokens": 502784,
+        "output_tokens": 6710,
+        "reasoning_output_tokens": 3811
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "corrected_success": true,
+      "duration_ms": 157773,
+      "events_sha256": "33858ea0fb34dedea3854d44ff98aa4c4e1531d07d9a88e55b1151edc16e8a9a",
+      "frozen_image_tag": "qualock-frozen-42ab0228b6009dce",
+      "original_success": true,
+      "patch_sha256": "8a54104520826fef65744d7dd8590172735b1cdb71b79d1f35fedf45aa0e2198",
+      "prepared_image_digest": "sha256:8310f51bdff2af153f48315b382d3d7899d2b23615af2f6ccf7d650748b7609b",
+      "repetition": 1,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 455168,
+        "input_tokens": 497734,
+        "output_tokens": 4267,
+        "reasoning_output_tokens": 1735
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "corrected_success": true,
+      "duration_ms": 115817,
+      "events_sha256": "2947c36c10991686c436e81d24717b2af3a2059c22e89039167049e3a127b74f",
+      "frozen_image_tag": "qualock-frozen-53cfa25e93ab498b",
+      "original_success": true,
+      "patch_sha256": "ae832dfea8a76be9fdd625c30d154f7c80bacebe115c471eb637b352ad995476",
+      "prepared_image_digest": "sha256:8310f51bdff2af153f48315b382d3d7899d2b23615af2f6ccf7d650748b7609b",
+      "repetition": 1,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 205312,
+        "input_tokens": 226701,
+        "output_tokens": 3643,
+        "reasoning_output_tokens": 1353
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "corrected_success": true,
+      "duration_ms": 118870,
+      "events_sha256": "e8d0c7f7a7af0809e58a1069a3504af87c92c9344d090019aa9eed782d97e753",
+      "frozen_image_tag": "qualock-frozen-5d445d9d3d12eb99",
+      "original_success": true,
+      "patch_sha256": "05e267d479a829943438be37d7eb7d70fd45d17e077b3f7f3df4fe39a87d673d",
+      "prepared_image_digest": "sha256:8310f51bdff2af153f48315b382d3d7899d2b23615af2f6ccf7d650748b7609b",
+      "repetition": 2,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 176384,
+        "input_tokens": 210660,
+        "output_tokens": 3893,
+        "reasoning_output_tokens": 2079
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "corrected_success": true,
+      "duration_ms": 87552,
+      "events_sha256": "951fb11305e1fa2f45bdcf410d56fe5ca82592b9a2d128973f1c6f5d8e508e19",
+      "frozen_image_tag": "qualock-frozen-1023d7f1f8303d67",
+      "original_success": true,
+      "patch_sha256": "2019db8103ac2ce7f4651f52e19fee3143dc23581a78283b1cf32a888c199657",
+      "prepared_image_digest": "sha256:8310f51bdff2af153f48315b382d3d7899d2b23615af2f6ccf7d650748b7609b",
+      "repetition": 2,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 182272,
+        "input_tokens": 212423,
+        "output_tokens": 2269,
+        "reasoning_output_tokens": 743
+      },
+      "valid": true,
+      "version": "0.151.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "corrected_success": true,
+      "duration_ms": 109106,
+      "events_sha256": "30af08919d6da4ba3795c3c0c1d8a496b1ea3569059977d0bd90a06585ee7525",
+      "frozen_image_tag": "qualock-frozen-d1714af585da536b",
+      "original_success": true,
+      "patch_sha256": "2019db8103ac2ce7f4651f52e19fee3143dc23581a78283b1cf32a888c199657",
+      "prepared_image_digest": "sha256:8310f51bdff2af153f48315b382d3d7899d2b23615af2f6ccf7d650748b7609b",
+      "repetition": 3,
+      "side": "baseline",
+      "usage": {
+        "cached_input_tokens": 283392,
+        "input_tokens": 342261,
+        "output_tokens": 2843,
+        "reasoning_output_tokens": 1007
+      },
+      "valid": true,
+      "version": "0.150.0"
+    },
+    {
+      "canary": "click-sentinel-duplication",
+      "corrected_success": true,
+      "duration_ms": 163835,
+      "events_sha256": "a79e7c29aa116c0a97de517613671275f5536d696ac78ab139d2b93936a8f4ea",
+      "frozen_image_tag": "qualock-frozen-add23b1f502b1623",
+      "original_success": true,
+      "patch_sha256": "2019db8103ac2ce7f4651f52e19fee3143dc23581a78283b1cf32a888c199657",
+      "prepared_image_digest": "sha256:8310f51bdff2af153f48315b382d3d7899d2b23615af2f6ccf7d650748b7609b",
+      "repetition": 3,
+      "side": "candidate",
+      "usage": {
+        "cached_input_tokens": 408832,
+        "input_tokens": 455009,
+        "output_tokens": 5451,
+        "reasoning_output_tokens": 2303
+      },
+      "valid": true,
+      "version": "0.151.0"
+    }
+  ],
+  "baseline": {
+    "binary_sha256": "f0222a59e7d06f7b97014fb672731285b453b945fc0f0aab36c89278dec36e14",
+    "version": "0.150.0"
+  },
+  "canaries": {
+    "click-sentinel-duplication": {
+      "base_sha": "3cbcf9b11546f4cf10b36d3e2e531733ba6fe001",
+      "prepared_image_digest": "sha256:8310f51bdff2af153f48315b382d3d7899d2b23615af2f6ccf7d650748b7609b",
+      "repository_url": "https://github.com/pallets/click.git",
+      "runtime_image": "ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248"
+    },
+    "pytest-xdist-loadgroup-crash-recovery": {
+      "base_sha": "dd198c35710f22b1cb86b7fc00311f9b7c63d665",
+      "prepared_image_digest": "sha256:603c59910b2b743c7e2d6ce6c82b6b71c63998eb91c05b1623488a289923e208",
+      "repository_url": "https://github.com/pytest-dev/pytest-xdist.git",
+      "runtime_image": "ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248"
+    },
+    "starlette-url-empty-authority": {
+      "base_sha": "4a18cd4a0869158f830e9bf519979d6f6f60f36a",
+      "prepared_image_digest": "sha256:03bf22f0161c24b5221a396ecafa0f35f0ab5c7820990fe7516a0dedb7976559",
+      "repository_url": "https://github.com/Kludex/starlette.git",
+      "runtime_image": "ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248"
+    }
+  },
+  "candidate": {
+    "binary_sha256": "9739cbc928b9c573be83256acd46668f5dd4f119d2d09e05246895ca2aaf0c9a",
+    "version": "0.151.0"
+  },
+  "corrected_verdict": "pass",
+  "correction": "pytest-xdist grader originally required RuntimeError instead of grading the stated no-empty-dispatch behavior.",
+  "executed_at_utc": "2026-08-31T23:29:07Z",
+  "executed_with_qualock_commit": "f07b5f09ed821bf3da78f9cac2d20bf291331a30",
+  "grader_corrected_in_commit": "5f69787de783a42b4c660bfa314179543bfd65fc",
+  "grader_correction": {
+    "frozen_attempts_regraded_pass": 18,
+    "frozen_attempts_total": 18,
+    "historical_base_still_fails": true,
+    "new_xdist_grader_sha256": "4bf24b651a3b0e592784438428e7b6adebf43b3dc99b54b36e9e8d2bde9238e9",
+    "old_xdist_grader_sha256": "c4d796feb427405b86cb6d41199306b45f4f9f21f2e0ad1d96805fd8b7ad5662"
+  },
+  "initial_verdict": "warn",
+  "model": {
+    "id": "gpt-5.6-terra",
+    "reasoning_effort": "high"
+  },
+  "qualification_id": "pilot-0150-vs-0151-20260831T232907Z",
+  "regrade_log_sha256": "095ba2b84d941e2242f3834caf8f310b0386c111cbec908a474278d8ea888a71",
+  "run_order": [
+    [
+      "starlette-url-empty-authority",
+      "baseline",
+      1
+    ],
+    [
+      "starlette-url-empty-authority",
+      "candidate",
+      1
+    ],
+    [
+      "starlette-url-empty-authority",
+      "baseline",
+      2
+    ],
+    [
+      "starlette-url-empty-authority",
+      "candidate",
+      2
+    ],
+    [
+      "starlette-url-empty-authority",
+      "candidate",
+      3
+    ],
+    [
+      "starlette-url-empty-authority",
+      "baseline",
+      3
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "baseline",
+      1
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "candidate",
+      1
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "baseline",
+      2
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "candidate",
+      2
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "candidate",
+      3
+    ],
+    [
+      "pytest-xdist-loadgroup-crash-recovery",
+      "baseline",
+      3
+    ],
+    [
+      "click-sentinel-duplication",
+      "candidate",
+      1
+    ],
+    [
+      "click-sentinel-duplication",
+      "baseline",
+      1
+    ],
+    [
+      "click-sentinel-duplication",
+      "baseline",
+      2
+    ],
+    [
+      "click-sentinel-duplication",
+      "candidate",
+      2
+    ],
+    [
+      "click-sentinel-duplication",
+      "baseline",
+      3
+    ],
+    [
+      "click-sentinel-duplication",
+      "candidate",
+      3
+    ]
+  ],
+  "runner": {
+    "account_features_disabled": [
+      "apps",
+      "plugins",
+      "remote_plugin"
+    ],
+    "agent_security_opt": "seccomp=unconfined",
+    "docker_engine": "29.6.1",
+    "docker_privileged": false,
+    "docker_sys_admin_capability": false,
+    "os_arch": "linux/amd64",
+    "web_search": "disabled",
+    "workspace_network": false
+  },
+  "schema_version": 1,
+  "source_report_sha256": "0d428397d9255ac9972950d640f15e24316ad6b8188edd8d8bfcbaad33c3fc44"
+}
