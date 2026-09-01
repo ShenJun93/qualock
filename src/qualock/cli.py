@@ -22,6 +22,7 @@ from qualock.project_protection.commands import (
 from qualock.project_protection.render import render_protect_terminal, render_verify_terminal
 from qualock.project_protection.models import ProtectionStatus
 from qualock.project_protection.runner import ProjectProtectionError
+from qualock.project_protection.signing import ProjectLockIntegrityError
 from qualock.qualification.models import Verdict
 from qualock.report.render import render_safety_terminal, render_terminal
 from qualock.report.safety import build_safety_summary
@@ -129,6 +130,9 @@ def protect_command() -> None:
     root = Path.cwd()
     try:
         result = execute_project_protect(root)
+    except ProjectLockIntegrityError as exc:
+        console.print(str(exc))
+        raise typer.Exit(4) from exc
     except (ConfigError, ProjectProtectionConfigError, FileNotFoundError, ValueError) as exc:
         console.print(str(exc))
         raise typer.Exit(3) from exc
@@ -146,6 +150,9 @@ def verify_command() -> None:
     root = Path.cwd()
     try:
         result = execute_project_verify(root)
+    except ProjectLockIntegrityError as exc:
+        console.print(str(exc))
+        raise typer.Exit(4) from exc
     except (ConfigError, ProjectProtectionConfigError, FileNotFoundError, ValueError) as exc:
         console.print(str(exc))
         raise typer.Exit(3) from exc

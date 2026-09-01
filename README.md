@@ -155,6 +155,12 @@ qualock protect
 
 QuaLock only writes `.qualock/project.lock` when every configured protection passes. The lock freezes the exact protection definitions, so later edits to the config cannot silently weaken verification.
 
+QuaLock also signs that lock. A 32-byte local signing key lives outside the project in QuaLock's user config directory (`~/.config/qualock/project-protection.key` on Linux). If the lock is edited, the key is missing, or the signature no longer matches, `qualock verify` stops before any locked protection command runs and exits with code `4`.
+
+Older unsigned project locks are not silently trusted. First confirm the project is back in a trusted known-good state, then run `qualock protect` again to create a signed lock. Signed project locks are local-machine artifacts by default because verification depends on the user-level key.
+
+This hardening protects against repository-local edits to `.qualock/project.lock`. It does not protect against an agent or process that can also modify QuaLock's user-level signing key.
+
 After your AI changes the project, run:
 
 ```bash
