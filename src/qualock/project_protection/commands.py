@@ -15,6 +15,7 @@ from .models import (
     ProtectionStatus,
 )
 from .runner import create_project_lock, read_git_state, run_protections
+from .signing import ensure_signing_key, load_signing_key
 from .storage import write_project_evidence
 
 
@@ -40,6 +41,7 @@ def execute_protect(
     *,
     operation_id: str | None = None,
     created_at: str | None = None,
+    key_path: Path | None = None,
 ) -> ProjectProtectResult:
     qdir = project_dir(root)
     config = load_config(qdir / "config.yaml")
@@ -52,13 +54,14 @@ def execute_protect(
     git_head, git_dirty = read_git_state(root)
     lock_created = status is ProtectionStatus.PASS
     if lock_created:
+        key = ensure_signing_key(key_path)
         lock = create_project_lock(
             root,
             config.protections,
             runs,
             created_at=timestamp,
         )
-        write_project_lock(qdir / "project.lock", lock)
+        write_project_lock(qdir / "project.lock", lock, key)
     result = ProjectProtectResult(
         operation_id=oid,
         created_at=timestamp,
@@ -77,9 +80,11 @@ def execute_verify(
     *,
     operation_id: str | None = None,
     created_at: str | None = None,
+    key_path: Path | None = None,
 ) -> ProjectVerifyResult:
     qdir = project_dir(root)
-    lock = read_project_lock(qdir / "project.lock")
+    key = load_signing_key(key_path)
+    lock = read_project_lock(qdir / "project.lock", key)
     oid = operation_id or _operation_id("verify")
     timestamp = created_at or datetime.now(UTC).isoformat()
     runs = run_protections(root, lock.protections)
