@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -7,6 +8,7 @@ import pytest
 from qualock.config.models import ProjectProtectionConfig
 from qualock.project_protection.io import read_project_lock, write_project_lock
 from qualock.project_protection.models import ProtectionStatus
+from qualock.project_protection.signing import ProjectLockIntegrityError
 from qualock.project_protection.runner import (
     ProtectionBaselineError,
     create_project_lock,
@@ -74,11 +76,45 @@ def test_project_lock_round_trip_records_git_and_definitions(tmp_path: Path) -> 
     lock = create_project_lock(tmp_path, definitions, runs, created_at="2026-09-01T00:00:00Z")
     path = tmp_path / ".qualock" / "project.lock"
 
-    write_project_lock(path, lock)
-    loaded = read_project_lock(path)
+    key = b"k" * 32
+    write_project_lock(path, lock, key)
+    loaded = read_project_lock(path, key)
 
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert len(raw["hmac_sha256"]) == 64
     assert loaded.created_at == "2026-09-01T00:00:00Z"
     assert len(loaded.git_head) == 40
     assert loaded.git_dirty is False
     assert loaded.protections[0].name == "Project smoke check"
     assert loaded.baseline[0].status is ProtectionStatus.PASS
+
+
+def test_project_lock_rejects_tampered_signed_file(tmp_path: Path) -> None:
+    init_git_repo(tmp_path)
+    definitions = [protection([sys.executable, "-c", "print('healthy')"])]
+    runs = run_protections(tmp_path, definitions)
+    lock = create_project_lock(tmp_path, definitions, runs, created_at="2026-09-01T00:00:00Z")
+    path = tmp_path / ".qualock" / "project.lock"
+    key = b"k" * 32
+    write_project_lock(path, lock, key)
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["lock"]["protections"][0]["name"] = "Tampered protection"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ProjectLockIntegrityError, match="signature"):
+        read_project_lock(path, key)
+
+
+def test_project_lock_rejects_legacy_unsigned_file(tmp_path: Path) -> None:
+    init_git_repo(tmp_path)
+    definitions = [protection([sys.executable, "-c", "print('healthy')"])]
+    runs = run_protections(tmp_path, definitions)
+    lock = create_project_lock(tmp_path, definitions, runs, created_at="2026-09-01T00:00:00Z")
+    path = tmp_path / ".qualock" / "project.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(lock.model_dump(mode="json")), encoding="utf-8")
+
+    with pytest.raises(ProjectLockIntegrityError, match="unsigned"):
+        read_project_lock(path, b"k" * 32)
