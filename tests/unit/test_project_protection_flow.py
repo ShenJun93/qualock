@@ -232,4 +232,5 @@ def test_cli_verify_without_project_lock_remains_invalid_input(tmp_path: Path, m
     result = runner.invoke(app, ["verify"])
 
     assert result.exit_code == 3
-    assert "project" in result.stdout and ".lock" in result.stdout
+    compact_output = "".join(result.stdout.split())
+    assert "project.lock" in compact_output
