@@ -35,6 +35,12 @@ class ProjectLock(BaseModel):
     baseline: list[ProtectionRun]
 
 
+class SignedProjectLock(BaseModel):
+    schema_version: Literal[2] = 2
+    lock: ProjectLock
+    hmac_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ProjectProtectResult(BaseModel):
     operation_id: str
     created_at: str
