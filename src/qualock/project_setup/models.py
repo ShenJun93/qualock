@@ -39,3 +39,15 @@ class ProjectCapabilities(BaseModel):
             if enabled:
                 labels.append(label)
         return tuple(labels)
+
+
+from dataclasses import dataclass
+
+from qualock.config.models import ProjectProtectionConfig
+
+
+@dataclass(frozen=True)
+class SetupPlan:
+    capabilities: ProjectCapabilities
+    level: ProtectionLevel
+    protections: tuple[ProjectProtectionConfig, ...]
