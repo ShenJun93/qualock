@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from qualock.config.models import ProjectProtectionConfig
 from qualock.project_protection.models import ProjectProtectResult, ProtectionStatus
 from qualock.project_setup.models import (
     EnvironmentReadiness,
@@ -195,3 +196,84 @@ def test_unconfigured_plan_requires_setup_plan(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="missing setup plan"):
         apply_start_bootstrap(tmp_path, plan)
+
+
+@pytest.mark.parametrize("parent_kind", ["file", "dangling_symlink", "directory_symlink"])
+def test_bootstrap_rejects_changed_qualock_parent_before_any_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_kind: str,
+) -> None:
+    qdir = tmp_path / ".qualock"
+    external = tmp_path / "external-qualock"
+    if parent_kind == "file":
+        qdir.write_text("changed parent", encoding="utf-8")
+    else:
+        if not hasattr(os, "symlink"):
+            pytest.skip("symlink support required")
+        if parent_kind == "directory_symlink":
+            external.mkdir()
+            qdir.symlink_to(external, target_is_directory=True)
+        else:
+            qdir.symlink_to(tmp_path / "missing-qualock", target_is_directory=True)
+    monkeypatch.setattr("qualock.project_start.commands.execute_protect", fail_if_called)
+    monkeypatch.setattr("qualock.project_start.commands.apply_setup_plan", fail_if_called)
+
+    with pytest.raises(StartStateChangedError, match="state changed"):
+        apply_start_bootstrap(tmp_path, configured_plan())
+
+    qdir.lstat()
+    if parent_kind == "directory_symlink":
+        assert list(external.iterdir()) == []
+
+
+def _manual_protection(name: str) -> ProjectProtectionConfig:
+    return ProjectProtectionConfig(
+        id="tests",
+        name=name,
+        command=["python", "-m", "pytest", "-q"],
+        timeout_seconds=120,
+    )
+
+
+def _write_manual_config(root: Path, name: str) -> None:
+    qdir = root / ".qualock"
+    qdir.mkdir(exist_ok=True)
+    (qdir / "config.yaml").write_text(
+        "schema_version: 1\n"
+        "protections:\n"
+        "  - id: tests\n"
+        f"    name: {name}\n"
+        "    command: [python, -m, pytest, -q]\n"
+        "    timeout_seconds: 120\n",
+        encoding="utf-8",
+    )
+
+
+def test_configured_bootstrap_rejects_protection_change_after_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = StartPlan(
+        state=StartProjectState.CONFIGURED_UNLOCKED,
+        level=ProtectionLevel.RECOMMENDED,
+        configured_protections=(_manual_protection("Approved check"),),
+    )
+    _write_manual_config(tmp_path, "Changed check")
+    monkeypatch.setattr("qualock.project_start.commands.execute_protect", fail_if_called)
+
+    with pytest.raises(StartStateChangedError, match="state changed"):
+        apply_start_bootstrap(tmp_path, plan)
+
+
+def test_unconfigured_bootstrap_rejects_new_manual_protections_after_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_manual_config(tmp_path, "New manual check")
+    monkeypatch.setattr("qualock.project_start.commands.apply_setup_plan", fail_if_called)
+
+    with pytest.raises(StartStateChangedError, match="state changed"):
+        apply_start_bootstrap(tmp_path, unconfigured_plan())
+
+    assert "New manual check" in (tmp_path / ".qualock/config.yaml").read_text(encoding="utf-8")
