@@ -16,9 +16,9 @@ def write_project_lock(path: Path, lock: ProjectLock, key: bytes) -> None:
     )
 
 
-def read_project_lock(path: Path, key: bytes) -> ProjectLock:
+def parse_project_lock_bytes(raw_bytes: bytes, key: bytes) -> ProjectLock:
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(raw_bytes)
     except json.JSONDecodeError as exc:
         raise ProjectLockIntegrityError("project protection lock is malformed") from exc
     if isinstance(raw, dict) and raw.get("schema_version") == 1 and "protections" in raw:
@@ -30,3 +30,7 @@ def read_project_lock(path: Path, key: bytes) -> ProjectLock:
     except ValidationError as exc:
         raise ProjectLockIntegrityError("project protection lock is malformed or unsigned") from exc
     return verify_project_lock(envelope, key)
+
+
+def read_project_lock(path: Path, key: bytes) -> ProjectLock:
+    return parse_project_lock_bytes(path.read_bytes(), key)

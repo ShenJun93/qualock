@@ -24,6 +24,11 @@ from qualock.project_protection.render import render_protect_terminal, render_ve
 from qualock.project_protection.models import ProtectionStatus
 from qualock.project_protection.runner import ProjectProtectionError
 from qualock.project_protection.signing import ProjectLockIntegrityError
+from qualock.project_watch.control import WatchControlChangedError
+from qualock.project_watch.engine import run_watch as run_project_watch
+from qualock.project_watch.models import WatchEvent, WatchEventKind
+from qualock.project_watch.render import render_watch_event
+from qualock.project_watch.snapshot import ProjectWatchSnapshotError
 from qualock.project_setup.commands import (
     SetupReadinessError,
     SetupUnsupportedError,
@@ -220,6 +225,44 @@ def verify_command() -> None:
     if result.status is ProtectionStatus.FAIL:
         raise typer.Exit(2)
     if result.status is ProtectionStatus.INCOMPLETE:
+        raise typer.Exit(4)
+
+
+def _print_watch_event(event: WatchEvent) -> None:
+    if event.kind is WatchEventKind.RESULT:
+        if event.result is None:
+            return
+        evidence_path = f".qualock/results/{event.result.operation_id}/"
+        console.print(
+            render_verify_terminal(event.result, evidence_path),
+            end="",
+            markup=False,
+        )
+        return
+    text = render_watch_event(event)
+    if text:
+        console.print(text, end="", markup=False)
+
+
+@app.command("watch")
+def watch_command() -> None:
+    root = Path.cwd()
+    console.print("QuaLock Watch\n", end="", markup=False)
+    try:
+        outcome = run_project_watch(root, on_event=_print_watch_event)
+    except FileNotFoundError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except (ProjectLockIntegrityError, WatchControlChangedError) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(4) from exc
+    except (ProjectWatchSnapshotError, ProjectProtectionError, OSError) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
+    if outcome.exit_status is ProtectionStatus.FAIL:
+        raise typer.Exit(2)
+    if outcome.exit_status is ProtectionStatus.INCOMPLETE or outcome.exit_status is None:
         raise typer.Exit(4)
 
 
