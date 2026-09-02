@@ -4,6 +4,7 @@ from .base import (
     SchedulerOperationalError,
     SchedulerUnsupportedError,
 )
+from .systemd import SystemdUserBackend
 from .windows import WindowsTaskSchedulerBackend
 
 __all__ = [
@@ -11,5 +12,6 @@ __all__ = [
     "SchedulerError",
     "SchedulerOperationalError",
     "SchedulerUnsupportedError",
+    "SystemdUserBackend",
     "WindowsTaskSchedulerBackend",
 ]
