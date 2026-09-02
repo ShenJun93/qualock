@@ -1,7 +1,7 @@
 # One-command Safe Session Design
 
-**Date:** 2026-09-02  
-**Branch:** `feat/start-safe-session`  
+**Date:** 2026-09-02
+**Branch:** `feat/start-safe-session`
 **Status:** Approved design, implementation not started
 
 ## Summary
