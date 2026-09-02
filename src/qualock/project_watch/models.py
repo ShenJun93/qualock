@@ -15,3 +15,8 @@ class FileStamp:
 @dataclass(frozen=True)
 class ProjectSnapshot:
     files: tuple[FileStamp, ...]
+
+
+@dataclass(frozen=True)
+class WatchControlIdentity:
+    lock_sha256: str
