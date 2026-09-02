@@ -50,7 +50,7 @@ def _stamp(root: Path, relative: str) -> FileStamp:
     path = root / Path(*PurePosixPath(relative).parts)
     try:
         info = path.lstat()
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         return FileStamp(
             path=relative,
             present=False,

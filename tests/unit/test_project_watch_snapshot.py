@@ -109,6 +109,22 @@ def test_capture_snapshot_rejects_failed_git_discovery(
         capture_project_snapshot(tmp_path)
 
 
+def test_capture_snapshot_treats_parent_replaced_by_file_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "dir").write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(
+        "qualock.project_watch.snapshot.run_process",
+        lambda *args, **kwargs: _result(stdout="dir/file.py\0"),
+    )
+
+    snapshot = capture_project_snapshot(tmp_path)
+
+    assert snapshot.files == (
+        FileStamp(path="dir/file.py", present=False, mode=None, size=None, mtime_ns=None),
+    )
+
+
 def test_capture_snapshot_wraps_git_execution_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(*args, **kwargs):
         raise OSError("git unavailable")
