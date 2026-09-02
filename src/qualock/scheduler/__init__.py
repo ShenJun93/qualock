@@ -1,3 +1,13 @@
+from .commands import (
+    BackendFactory,
+    ScheduleOutcome,
+    ScheduleStatus,
+    default_backend_factories,
+    disable_schedule,
+    enable_schedule,
+    schedule_status,
+    select_backend,
+)
 from .models import (
     NativeScheduleInspection,
     NativeScheduleState,
@@ -20,6 +30,7 @@ from .state import (
 )
 
 __all__ = [
+    "BackendFactory",
     "FileRegistrationStore",
     "NativeScheduleInspection",
     "NativeScheduleState",
@@ -28,12 +39,19 @@ __all__ = [
     "RegistrationLoadKind",
     "RegistrationStore",
     "ScheduleIdentity",
+    "ScheduleOutcome",
     "ScheduleRegistration",
+    "ScheduleStatus",
     "SchedulerBackendKind",
     "backend_label",
+    "default_backend_factories",
+    "disable_schedule",
+    "enable_schedule",
     "native_id_for",
     "operationally_equal",
     "parse_daily_time",
     "run_process",
     "schedule_identity",
+    "schedule_status",
+    "select_backend",
 ]
