@@ -38,7 +38,13 @@ def assert_watch_control(
     *,
     key_path: Path | None = None,
 ) -> None:
-    raw = _authenticated_raw_lock(root, key_path)
+    try:
+        raw = _authenticated_raw_lock(root, key_path)
+    except FileNotFoundError as exc:
+        raise WatchControlChangedError(
+            "project protection lock disappeared during this watch session; "
+            "restart qualock watch after intentionally re-protecting the project"
+        ) from exc
     current = hashlib.sha256(raw).hexdigest()
     if not hmac.compare_digest(current, frozen.lock_sha256):
         raise WatchControlChangedError(
