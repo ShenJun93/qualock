@@ -108,3 +108,16 @@ def test_invalid_state_is_ignored_with_warning(tmp_path: Path, payload: str) -> 
     assert loaded is None
     assert warning is not None
     assert "ignored" in warning
+
+
+def test_invalid_utf8_state_is_ignored_with_warning(tmp_path: Path) -> None:
+    store = FileMonitorStateStore(base_dir=tmp_path / "state")
+    path = store.path_for(tmp_path / "project")
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\xff")
+
+    loaded, warning = store.load(tmp_path / "project")
+
+    assert loaded is None
+    assert warning is not None
+    assert "ignored" in warning

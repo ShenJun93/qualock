@@ -47,7 +47,7 @@ class FileMonitorStateStore:
             raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return None, None
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             return None, f"release monitor state ignored: {exc}"
         try:
             return MonitorState.model_validate_json(raw), None
