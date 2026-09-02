@@ -20,12 +20,7 @@ def _normalize_path(raw: str) -> str:
 
 
 def _excluded(path: str) -> bool:
-    return (
-        path == ".git"
-        or path.startswith(".git/")
-        or path == ".qualock"
-        or path.startswith(".qualock/")
-    )
+    return path in {".git", ".qualock"} or path.startswith((".git/", ".qualock/"))
 
 
 def _discover_paths(root: Path) -> tuple[str, ...]:

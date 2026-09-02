@@ -248,6 +248,22 @@ The protected behavior is still intact.
 
 A regression returns `DON'T KEEP THIS CHANGE` and exit code `2`. A timeout or missing command returns `CHECK COULD NOT FINISH` and exit code `4`. JSON evidence is saved under `.qualock/results/` for both protect and verify runs.
 
+### Watch AI edits automatically
+
+Keep QuaLock in the foreground while an AI edits the project:
+
+```bash
+qualock watch
+```
+
+Watch mode authenticates and freezes the current signed `project.lock`, runs an initial real verification, then monitors Git-visible tracked files plus untracked non-ignored files. `.git/` and `.qualock/` are excluded from ordinary change snapshots so QuaLock's own evidence does not trigger a loop; `project.lock` is authenticated separately on every poll. If the signed lock or signing key changes, the watch session stops fail-closed and must be restarted after an intentional new `qualock protect`.
+
+Changes are debounced before verification, so a burst of AI edits normally produces one check after the tree settles. If the project changes while a verification is running, QuaLock suppresses that stale result and checks the settled tree again instead of printing `SAFE TO KEEP` for code that has already changed. A regression or incomplete check is reported but watch mode keeps running so the AI can fix the project and trigger another verification.
+
+V1 uses Git-aware metadata polling rather than a background daemon or native filesystem watcher. File identity uses path, presence, mode/type, size, and `mtime_ns`; it does not hash every project file. Consequently, a deliberate edit that preserves all watched metadata may not trigger V1 watch mode. Ignored files are not watched, monorepo/workspace fan-out is not performed, and watch mode does not auto-fix or auto-revert changes.
+
+`qualock watch` exists only while its terminal process is running. Press Ctrl+C to stop; the exit code reflects the last authoritative watch state (`0` safe, `2` regression, `4` incomplete/no authoritative result).
+
 Generated and manual project protections use argv-style commands and execute directly in the project root without a shell. Built-in setup packs are deterministic recommendations, not downloadable marketplace packages. Shell pipes, browser recording, dependency installation, and framework-specific runtime recording are not supported in V1.
 
 ## Exit codes

@@ -24,6 +24,7 @@ VerifyFn = Callable[..., ProjectVerifyResult]
 FreezeControlFn = Callable[..., WatchControlIdentity]
 AssertControlFn = Callable[..., None]
 EventFn = Callable[[WatchEvent], None]
+DEFAULT_WATCH_TIMING = WatchTiming()
 
 
 def _emit(on_event: EventFn | None, kind: WatchEventKind, result: ProjectVerifyResult | None = None) -> None:
@@ -61,7 +62,7 @@ def run_stable_cycle(
 def run_watch(
     root: Path,
     *,
-    timing: WatchTiming = WatchTiming(),
+    timing: WatchTiming = DEFAULT_WATCH_TIMING,
     key_path: Path | None = None,
     snapshot_fn: SnapshotFn = capture_project_snapshot,
     verify_fn: VerifyFn = execute_verify,

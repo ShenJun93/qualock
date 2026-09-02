@@ -15,7 +15,6 @@ from qualock.project_watch.control import (
     freeze_watch_control,
 )
 
-
 KEY = b"k" * 32
 
 
