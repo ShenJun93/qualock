@@ -1,7 +1,7 @@
 # Foreground Auto-Verify Watch Design
 
-**Date:** 2026-09-02  
-**Status:** Approved in chat; written-spec review pending  
+**Date:** 2026-09-02
+**Status:** Approved in chat; written-spec review pending
 **Branch:** `feat/auto-verify-watch`
 
 ## Goal
