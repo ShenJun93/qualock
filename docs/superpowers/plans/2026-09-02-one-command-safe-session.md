@@ -276,8 +276,8 @@ def test_configured_unlocked_rechecks_lock_before_protect(tmp_path: Path, monkey
 ```python
 def test_unconfigured_rechecks_lock_before_apply_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(... "assert_bootstrap_lock_absent", lambda root: calls.append("guard"))
-    monkeypatch.setattr(... "apply_setup_plan", lambda root, plan, key_path=None:
+    monkeypatch.setattr("qualock.project_start.commands.assert_bootstrap_lock_absent", lambda root: calls.append("guard"))
+    monkeypatch.setattr("qualock.project_start.commands.apply_setup_plan", lambda root, plan, key_path=None:
                         calls.append("setup") or pass_protect_result())
     apply_start_bootstrap(tmp_path, unconfigured_plan())
     assert calls == ["guard", "setup"]
@@ -285,8 +285,8 @@ def test_unconfigured_rechecks_lock_before_apply_setup(tmp_path: Path, monkeypat
 
 ```python
 def test_locked_plan_does_no_bootstrap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(... "execute_protect", fail_if_called)
-    monkeypatch.setattr(... "apply_setup_plan", fail_if_called)
+    monkeypatch.setattr("qualock.project_start.commands.execute_protect", fail_if_called)
+    monkeypatch.setattr("qualock.project_start.commands.apply_setup_plan", fail_if_called)
     result = apply_start_bootstrap(tmp_path, locked_plan())
     assert result.bootstrap_performed is False
     assert result.protect_result is None
@@ -425,8 +425,8 @@ Pseudo-structure:
 ```python
 @app.command("start")
 def start_command(
-    level: Annotated[ProtectionLevel, typer.Option("--level", ...)] = ProtectionLevel.RECOMMENDED,
-    yes: Annotated[bool, typer.Option("--yes", "-y", ...)] = False,
+    level: Annotated[ProtectionLevel, typer.Option("--level", help="Protection level: minimal, recommended, or strong.")] = ProtectionLevel.RECOMMENDED,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip only the bootstrap confirmation.")] = False,
 ) -> None:
     root = Path.cwd()
     console.print("QuaLock\\n", end="", markup=False)
@@ -444,15 +444,20 @@ def start_command(
         if plan.setup_plan.readiness.status is ReadinessStatus.NEEDS_SETUP:
             raise typer.Exit(4)
     else:
-        render configured protection names with markup=False
+        for protection in plan.configured_protections:
+            console.print(f"- {protection.name}", markup=False)
 
-    if not yes and not typer.confirm(...):
+    if not yes and not typer.confirm("Protect the current state and start watching?"):
         console.print("Setup cancelled. No files changed.", markup=False)
         return
 
     bootstrap = apply_start_bootstrap(root, plan)
-    render existing protect result
-    require PASS + lock_created
+    assert bootstrap.protect_result is not None
+    result = bootstrap.protect_result
+    evidence_path = f".qualock/results/{result.operation_id}/"
+    console.print(render_protect_terminal(result, evidence_path), end="", markup=False)
+    if result.status is not ProtectionStatus.PASS or not result.lock_created:
+        raise typer.Exit(4)
     outcome = run_project_watch(root, on_event=_print_watch_event)
     _exit_for_watch_outcome(outcome)
 ```
