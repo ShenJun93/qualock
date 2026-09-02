@@ -3,9 +3,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from packaging.version import Version
 from rich.console import Console
 
-from qualock.baseline.io import BaselineStaleError
+from qualock.baseline.io import BaselineStaleError, read_baseline_lock
 from qualock.canary.loader import CanaryLoadError
 from qualock.commands import (
     BaselineUnstableError,
@@ -48,13 +49,39 @@ from qualock.project_watch.engine import run_watch as run_project_watch
 from qualock.project_watch.models import WatchEvent, WatchEventKind
 from qualock.project_watch.render import render_watch_event
 from qualock.project_watch.snapshot import ProjectWatchSnapshotError
-from qualock.qualification.models import Verdict
+from qualock.qualification.models import QualificationResult, Verdict
+from qualock.release_monitor.commands import execute_monitor
+from qualock.release_monitor.models import MonitorAction
 from qualock.report.render import render_safety_terminal, render_terminal
 from qualock.report.safety import build_safety_summary
 from qualock.run.docker import DockerRunner
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
+
+
+def _render_safety_result(root: Path, result: QualificationResult) -> None:
+    try:
+        _config, canaries = load_project(root)
+        display_names = {canary.id: canary.name for canary in canaries}
+    except (ConfigError, CanaryLoadError, FileNotFoundError):
+        display_names = {}
+    summary = build_safety_summary(result, display_names)
+    evidence_path = f".qualock/results/{result.qualification_id}/"
+    console.print(render_safety_terminal(summary, evidence_path), end="", markup=False)
+
+
+def _monitor_check_executor(root: Path, candidate_spec: str) -> QualificationResult:
+    version = candidate_spec.rsplit("@", 1)[1]
+    lock = read_baseline_lock(project_dir(root) / "baseline.lock")
+    console.print(f"Baseline: Codex {lock.agent.version}", markup=False)
+    console.print(f"Latest:   Codex {version}", markup=False)
+    console.print(
+        f"\nNew Codex release found. Qualifying {version} against baseline "
+        f"{lock.agent.version}.",
+        markup=False,
+    )
+    return execute_check(root, candidate_spec)
 
 
 @app.command("init")
@@ -134,15 +161,82 @@ def check_command(
     if technical:
         console.print(render_terminal(result), end="")
     else:
-        try:
-            _config, canaries = load_project(root)
-            display_names = {canary.id: canary.name for canary in canaries}
-        except (ConfigError, CanaryLoadError, FileNotFoundError):
-            display_names = {}
-        summary = build_safety_summary(result, display_names)
-        evidence_path = f".qualock/results/{result.qualification_id}/"
-        console.print(render_safety_terminal(summary, evidence_path), end="", markup=False)
+        _render_safety_result(root, result)
 
+    if result.verdict is Verdict.BLOCK:
+        raise typer.Exit(2)
+    if result.verdict is Verdict.INCOMPLETE:
+        raise typer.Exit(4)
+
+
+@app.command("monitor")
+def monitor_command(
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Re-run the matching newer Codex release if it was already qualified.",
+        ),
+    ] = False,
+) -> None:
+    root = Path.cwd()
+    console.print("QuaLock Release Monitor\n", end="", markup=False)
+    try:
+        outcome = execute_monitor(
+            root,
+            force=force,
+            check_executor=_monitor_check_executor,
+        )
+    except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except BaselineStaleError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(4) from exc
+    except Exception as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
+    if outcome.action is not MonitorAction.CHECKED:
+        console.print(f"Baseline: Codex {outcome.baseline_version}", markup=False)
+        console.print(f"Latest:   Codex {outcome.latest_version}", markup=False)
+    if outcome.state_warning:
+        console.print(f"Warning: {outcome.state_warning}", markup=False)
+
+    if outcome.action is MonitorAction.NO_NEW_RELEASE:
+        if Version(outcome.latest_version) < Version(outcome.baseline_version):
+            console.print(
+                "Your baseline is newer than npm latest. No downgrade qualification was run.",
+                markup=False,
+            )
+        else:
+            console.print("No newer Codex release needs qualification.", markup=False)
+        return
+    if outcome.action is MonitorAction.NO_DOWNGRADE:
+        console.print(
+            "A newer candidate was already qualified; no downgrade check was run.",
+            markup=False,
+        )
+        return
+    if outcome.action is MonitorAction.ALREADY_QUALIFIED:
+        if outcome.recorded_verdict is None:
+            console.print("Release monitor state is missing its verdict.", markup=False)
+            raise typer.Exit(1)
+        console.print(
+            f"Codex {outcome.latest_version} was already qualified for this baseline: "
+            f"{outcome.recorded_verdict.value.upper()}",
+            markup=False,
+        )
+        console.print("Run `qualock monitor --force` to qualify it again.", markup=False)
+        if outcome.recorded_verdict is Verdict.BLOCK:
+            raise typer.Exit(2)
+        return
+
+    result = outcome.qualification_result
+    if result is None:
+        console.print("Release monitor check result is missing.", markup=False)
+        raise typer.Exit(1)
+    _render_safety_result(root, result)
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)
     if result.verdict is Verdict.INCOMPLETE:

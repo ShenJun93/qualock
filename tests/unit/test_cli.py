@@ -6,7 +6,6 @@ from qualock.cli import app
 from qualock.qualification.models import Verdict
 from tests.unit.test_report import sample_result
 
-
 runner = CliRunner()
 
 
@@ -38,6 +37,27 @@ def test_check_block_verdict_exits_2(tmp_path: Path, monkeypatch) -> None:
     assert "DON'T UPDATE YET" in result.stdout
     assert "critical-bug" in result.stdout
     assert "Technical evidence: .qualock/results/q1/" in result.stdout
+
+
+def test_check_easy_output_is_exactly_preserved(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qualock.cli.execute_check", lambda root, candidate: sample_result())
+
+    result = runner.invoke(app, ["check", "codex@0.151.0"])
+
+    assert result.exit_code == 2
+    assert result.stdout == (
+        "QuaLock Safety Check\n\n"
+        "DON'T UPDATE YET\n\n"
+        "At least one critical protected workflow regressed.\n\n"
+        "Codex 0.150.0 -> 0.151.0\n\n"
+        "Protected workflows\n"
+        "- REGRESSED: critical-bug  3/3 -> 0/3\n\n"
+        "Recommendation:\n"
+        "Keep using Codex 0.150.0 for now. Do not update to Codex 0.151.0 until the \n"
+        "regression is understood.\n\n"
+        "Technical evidence: .qualock/results/q1/\n"
+    )
 
 
 def test_check_incomplete_exits_4(tmp_path: Path, monkeypatch) -> None:
