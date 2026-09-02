@@ -193,3 +193,33 @@ def test_assert_fails_closed_if_signing_key_rotates_during_session(tmp_path: Pat
 
     with pytest.raises(ProjectLockIntegrityError, match="signature does not match"):
         assert_watch_control(tmp_path, identity, key_path=key_path)
+
+
+def test_assert_authenticates_and_hashes_one_raw_lock_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = _write(tmp_path, _lock())
+    key_path = _key_path(tmp_path)
+    identity = freeze_watch_control(tmp_path, key_path=key_path)
+    raw = json.loads(lock_path.read_text(encoding="utf-8"))
+    raw["lock"]["git_head"] = "b" * 40
+    tampered = json.dumps(raw).encode("utf-8")
+    original_read_bytes = Path.read_bytes
+    lock_reads = 0
+
+    def racing_read_bytes(path: Path) -> bytes:
+        nonlocal lock_reads
+        result = original_read_bytes(path)
+        if path == lock_path:
+            lock_reads += 1
+            if lock_reads == 1:
+                lock_path.write_bytes(tampered)
+        return result
+
+    monkeypatch.setattr(Path, "read_bytes", racing_read_bytes)
+
+    assert_watch_control(tmp_path, identity, key_path=key_path)
+    assert lock_reads == 1
+
+    with pytest.raises(ProjectLockIntegrityError, match="signature does not match"):
+        assert_watch_control(tmp_path, identity, key_path=key_path)
