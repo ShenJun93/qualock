@@ -137,13 +137,23 @@ qualock report
 
 ## Protect a project from AI edits
 
-The easiest path is one command:
+The simplest foreground safe-session path is one command:
 
 ```bash
-qualock setup
+qualock start
 ```
 
-QuaLock passively inspects project metadata and recommends built-in checks without executing project code. Project protection requires a Git repository with a committed HEAD; setup validates that before creating `.qualock/`. V1 recognizes Git, Python, pytest, uv, Poetry, local virtual environments, Node/npm, Django, FastAPI, Next.js, React, Vite, TypeScript, and existing npm scripts named `test`, `build`, `lint`, and `typecheck`.
+`qualock start` only orchestrates the existing setup, protection, and watch paths:
+
+- an existing signed baseline goes straight to normal watch startup;
+- existing manual protections without a lock are shown as-is, then QuaLock asks before running the normal protect path and starting watch;
+- a fresh supported project uses the normal setup detector and readiness checks, asks before establishing trust, then starts watch only after protection succeeds.
+
+Use `qualock start --level minimal|recommended|strong` to choose the setup protection level for a fresh/unconfigured project. `qualock start --yes` skips only that new-baseline confirmation. It does not install dependencies, ignore readiness, accept failing protections, bypass signed-lock integrity, or skip watch authentication and its fresh initial verification.
+
+Safety stays fail-closed: any existing `.qualock/project.lock` directory entry, including a corrupt or unusable one, is never auto-repaired or treated as permission to re-baseline. Existing manual protections are not replaced by built-in packs. After a successful bootstrap, QuaLock still performs the normal fresh watch initial verification. `qualock start` remains a foreground process; Ctrl+C uses the same last-authoritative watch exits as `qualock watch` (`0` safe, `2` regression, `4` incomplete/no authoritative result).
+
+For explicit setup planning and manual lifecycle control, the underlying commands remain available. `qualock setup` passively inspects project metadata and recommends built-in checks without executing project code. Project protection requires a Git repository with a committed HEAD; setup validates that before creating `.qualock/`. V1 recognizes Git, Python, pytest, uv, Poetry, local virtual environments, Node/npm, Django, FastAPI, Next.js, React, Vite, TypeScript, and existing npm scripts named `test`, `build`, `lint`, and `typecheck`.
 
 For Python protections, runner selection is deterministic: uv first, then Poetry, then a valid project-local `.venv` or `venv`. QuaLock never falls back to the Python interpreter that happens to run QuaLock itself.
 
