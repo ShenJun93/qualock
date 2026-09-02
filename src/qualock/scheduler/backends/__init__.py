@@ -4,10 +4,12 @@ from .base import (
     SchedulerOperationalError,
     SchedulerUnsupportedError,
 )
+from .launchd import LaunchdAgentBackend
 from .systemd import SystemdUserBackend
 from .windows import WindowsTaskSchedulerBackend
 
 __all__ = [
+    "LaunchdAgentBackend",
     "SchedulerBackend",
     "SchedulerError",
     "SchedulerOperationalError",
