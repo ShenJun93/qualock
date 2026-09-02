@@ -143,15 +143,21 @@ The easiest path is one command:
 qualock setup
 ```
 
-QuaLock passively inspects project metadata and recommends built-in checks without executing project code. Project protection requires a Git repository with a committed HEAD; setup validates that before creating `.qualock/`. V1 recognizes Git, Python, pytest, Node/npm, React, Vite, and existing npm scripts named `test`, `build`, `lint`, and `typecheck`.
+QuaLock passively inspects project metadata and recommends built-in checks without executing project code. Project protection requires a Git repository with a committed HEAD; setup validates that before creating `.qualock/`. V1 recognizes Git, Python, pytest, uv, Poetry, local virtual environments, Node/npm, Django, FastAPI, Next.js, React, Vite, TypeScript, and existing npm scripts named `test`, `build`, `lint`, and `typecheck`.
 
-Example:
+For Python protections, runner selection is deterministic: uv first, then Poetry, then a valid project-local `.venv` or `venv`. QuaLock never falls back to the Python interpreter that happens to run QuaLock itself.
+
+A ready uv project looks like:
 
 ```text
 QuaLock Setup
 
-Detected: Python, pytest, Git
+Detected: Python, pytest, uv, FastAPI, Git
 Protection level: recommended
+
+Environment
+- OK: uv is available
+- OK: project Python environment is ready
 
 Recommended protection
 - Tests still pass
@@ -164,7 +170,7 @@ Apply these protections and protect this project? [y/N]:
 Protection levels are intentionally simple:
 
 - `minimal` chooses one highest-signal available check;
-- `recommended` adds normal test/build/compile checks plus Git patch hygiene;
+- `recommended` adds normal test/build/compile checks plus Git patch hygiene and a Django system check when Django + `manage.py` are detected;
 - `strong` also adds detected lint/typecheck scripts.
 
 Use another level or skip the prompt for automation:
@@ -174,9 +180,27 @@ qualock setup --level strong
 qualock setup --yes
 ```
 
-When a project-local `.venv` or `venv` Python exists, generated Python checks use that interpreter. npm checks are generated only for scripts that actually exist in `package.json`. Setup does not install dependencies. Python compile protection is omitted when QuaLock cannot identify a safe source, test, package, or module target.
+Environment readiness is checked before QuaLock creates or changes `.qualock/`. uv projects require an existing project environment before QuaLock invokes `uv run --no-sync`; Poetry projects query their existing environment; local virtual environments are probed with fixed standard-library Python code. npm protections require `node` and `npm` on PATH plus an existing `node_modules` directory.
 
-If every generated check passes, setup delegates to the normal protection engine and creates the same signed `.qualock/project.lock`. If a check fails, the generated config remains so you can fix the project or environment and rerun `qualock protect`, but no known-good lock is created. After you accept a new setup, if that baseline cannot be locked, QuaLock removes any older `project.lock` so `qualock verify` cannot silently fall back to obsolete protections.
+If the environment is not ready, setup exits with code `4` without mutating the project. For example:
+
+```text
+Detected: Python, pytest, uv, Git
+
+Environment
+- OK: uv is available
+- NEEDS SETUP: project Python environment is not ready
+
+QuaLock did not change your project.
+
+Recommended action:
+Run: uv sync
+Then run: qualock setup
+```
+
+QuaLock does not run `uv sync`, `poetry install`, `npm install`, or `npm ci` during setup. Those commands may be shown as user-owned remediation only. Framework labels do not invent unsafe convention-based commands: FastAPI/Next.js/React/Vite use only checks or npm scripts the project actually exposes.
+
+Once readiness is READY, setup delegates to the normal protection engine and creates the same signed `.qualock/project.lock` only if every generated check passes. A failing protection remains a project-health failure, not an environment-readiness failure. If an accepted new baseline cannot be locked, QuaLock removes any older `project.lock` so `qualock verify` cannot silently fall back to obsolete protections.
 
 For manual control, add or edit local checks in `.qualock/config.yaml`:
 

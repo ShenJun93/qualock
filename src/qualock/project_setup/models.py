@@ -12,6 +12,33 @@ class ProtectionLevel(str, Enum):
     STRONG = "strong"
 
 
+class PythonRunner(str, Enum):
+    UV = "uv"
+    POETRY = "poetry"
+    VENV = "venv"
+    NONE = "none"
+
+
+
+class ReadinessStatus(str, Enum):
+    READY = "ready"
+    NEEDS_SETUP = "needs_setup"
+
+
+@dataclass(frozen=True)
+class ReadinessCheck:
+    id: str
+    name: str
+    status: ReadinessStatus
+    detail: str | None = None
+    recommendation: str | None = None
+
+
+@dataclass(frozen=True)
+class EnvironmentReadiness:
+    status: ReadinessStatus
+    checks: tuple[ReadinessCheck, ...] = ()
+
 class ProjectCapabilities(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -21,8 +48,14 @@ class ProjectCapabilities(BaseModel):
     node: bool = False
     react: bool = False
     vite: bool = False
+    django: bool = False
+    fastapi: bool = False
+    nextjs: bool = False
+    typescript: bool = False
     npm_scripts: tuple[str, ...] = ()
     python_targets: tuple[str, ...] = ()
+    python_runner: PythonRunner = PythonRunner.NONE
+    python_environment: str | None = None
     python_executable: str | None = None
 
     @property
@@ -35,9 +68,16 @@ class ProjectCapabilities(BaseModel):
         for enabled, label in (
             (self.python, "Python"),
             (self.pytest, "pytest"),
+            (self.python_runner is PythonRunner.UV, "uv"),
+            (self.python_runner is PythonRunner.POETRY, "Poetry"),
+            (self.python_runner is PythonRunner.VENV, "venv"),
+            (self.django, "Django"),
+            (self.fastapi, "FastAPI"),
             (self.node, "Node/npm"),
+            (self.nextjs, "Next.js"),
             (self.react, "React"),
             (self.vite, "Vite"),
+            (self.typescript, "TypeScript"),
             (self.git, "Git"),
         ):
             if enabled:
@@ -50,3 +90,4 @@ class SetupPlan:
     capabilities: ProjectCapabilities
     level: ProtectionLevel
     protections: tuple[ProjectProtectionConfig, ...]
+    readiness: EnvironmentReadiness
