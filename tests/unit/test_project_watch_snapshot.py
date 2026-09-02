@@ -145,6 +145,19 @@ def test_capture_snapshot_rejects_unsafe_discovered_paths(tmp_path: Path, monkey
         capture_project_snapshot(tmp_path)
 
 
+def test_capture_snapshot_rejects_absolute_discovered_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nul = chr(92) + "0"
+    monkeypatch.setattr(
+        "qualock.project_watch.snapshot.run_process",
+        lambda *args, **kwargs: _result(stdout="/absolute.txt" + nul),
+    )
+
+    with pytest.raises(ProjectWatchSnapshotError, match="unsafe project path"):
+        capture_project_snapshot(tmp_path)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permits backslash in filenames")
 def test_capture_snapshot_preserves_backslash_in_posix_filename(tmp_path: Path) -> None:
     _init_git(tmp_path)

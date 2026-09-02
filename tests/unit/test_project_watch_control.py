@@ -93,6 +93,17 @@ def test_freeze_authenticates_the_same_raw_bytes_it_hashes(
         freeze_watch_control(tmp_path, key_path=key_path)
 
 
+def test_freeze_rejects_well_formed_tampered_lock(tmp_path: Path) -> None:
+    lock_path = _write(tmp_path, _lock())
+    key_path = _key_path(tmp_path)
+    raw = json.loads(lock_path.read_text(encoding="utf-8"))
+    raw["lock"]["git_head"] = "b" * 40
+    lock_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ProjectLockIntegrityError, match="signature does not match"):
+        freeze_watch_control(tmp_path, key_path=key_path)
+
+
 def test_freeze_rejects_missing_key(tmp_path: Path) -> None:
     _write(tmp_path, _lock())
 
