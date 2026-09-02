@@ -176,7 +176,7 @@ qualock setup --yes
 
 When a project-local `.venv` or `venv` Python exists, generated Python checks use that interpreter. npm checks are generated only for scripts that actually exist in `package.json`. Setup does not install dependencies. Python compile protection is omitted when QuaLock cannot identify a safe source, test, package, or module target.
 
-If every generated check passes, setup delegates to the normal protection engine and creates the same signed `.qualock/project.lock`. If a check fails, the generated config remains so you can fix the project or environment and rerun `qualock protect`, but no known-good lock is created.
+If every generated check passes, setup delegates to the normal protection engine and creates the same signed `.qualock/project.lock`. If a check fails, the generated config remains so you can fix the project or environment and rerun `qualock protect`, but no known-good lock is created. After you accept a new setup, if that baseline cannot be locked, QuaLock removes any older `project.lock` so `qualock verify` cannot silently fall back to obsolete protections.
 
 For manual control, add or edit local checks in `.qualock/config.yaml`:
 

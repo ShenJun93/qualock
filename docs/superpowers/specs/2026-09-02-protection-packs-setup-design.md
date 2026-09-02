@@ -31,7 +31,7 @@ If the user declines confirmation, no file is changed and no protection command 
 ## Protection
 After config is written, setup calls the existing `execute_protect`. Therefore all existing behavior remains authoritative: every check must pass, evidence is written under `.qualock/results/`, and `project.lock` is signed with the external user-level key.
 
-If protection fails or is incomplete, setup keeps the generated protection config so the user can fix the project/check environment and rerun `qualock protect`; it does not create a known-good lock.
+If protection fails or is incomplete, setup keeps the generated protection config so the user can fix the project/check environment and rerun `qualock protect`; it does not create a known-good lock. Once a new setup has been accepted, any older `project.lock` is removed when the new baseline cannot be locked, preventing later verification from silently using obsolete protection definitions.
 
 ## Errors and scope
 A project with no recognized capability and no Git repository is unsupported and exits as invalid input. Missing required executable during protect remains an incomplete protection result.

@@ -68,12 +68,15 @@ def test_setup_yes_creates_config_and_signed_lock_for_generic_git_project(
     assert key_path.is_file()
 
 
-def test_setup_failing_baseline_keeps_config_but_does_not_create_lock(
+def test_setup_failing_baseline_keeps_config_and_invalidates_old_lock(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     init_git_with_commit(tmp_path)
     patch_signing_key(tmp_path, monkeypatch)
+    qdir = tmp_path / ".qualock"
+    qdir.mkdir()
+    (qdir / "project.lock").write_text("old signed lock", encoding="utf-8")
     (tmp_path / "README.md").write_text("trailing whitespace   \n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 

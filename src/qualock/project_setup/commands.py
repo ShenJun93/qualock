@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from qualock.project import project_dir
 from qualock.project_protection.commands import execute_protect
 from qualock.project_protection.models import ProjectProtectResult
 from qualock.run.process import run_process
@@ -60,4 +61,12 @@ def apply_setup_plan(
 ) -> ProjectProtectResult:
     config_path = ensure_qualock_project(root)
     write_protections(config_path, plan.protections)
-    return execute_protect(root, key_path=key_path)
+    lock_path = project_dir(root) / "project.lock"
+    try:
+        result = execute_protect(root, key_path=key_path)
+    except Exception:
+        lock_path.unlink(missing_ok=True)
+        raise
+    if not result.lock_created:
+        lock_path.unlink(missing_ok=True)
+    return result
