@@ -207,7 +207,6 @@ Cover:
 - snapshot differs -> result suppressed and cycle marked unstable;
 - frozen control is checked before and after every verify;
 - a control error after verify suppresses the verify result and propagates fatal error;
-- a control error during idle polling propagates before the next project snapshot is accepted;
 - evidence generation remains delegated to existing `execute_verify`; engine does not write project-protection evidence itself.
 
 - [ ] **Step 2: Implement one stable verification cycle**
@@ -229,6 +228,7 @@ Use a fake clock/sleeper and queued snapshots/results. Cover:
 - stable initial PASS/FAIL/INCOMPLETE becomes authoritative;
 - change burst keeps resetting settle deadline and causes exactly one verify after 1.0 second of stability;
 - no project change means no extra verify;
+- a control error during an idle/no-change poll propagates before the next project snapshot is accepted;
 - `.qualock/results` activity is invisible because it is absent from snapshots;
 - regression and incomplete results continue polling rather than terminating.
 

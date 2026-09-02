@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -156,6 +157,38 @@ def test_capture_snapshot_rejects_absolute_discovered_path(
 
     with pytest.raises(ProjectWatchSnapshotError, match="unsafe project path"):
         capture_project_snapshot(tmp_path)
+
+
+def test_capture_snapshot_rejects_embedded_parent_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nul = chr(92) + "0"
+    monkeypatch.setattr(
+        "qualock.project_watch.snapshot.run_process",
+        lambda *args, **kwargs: _result(stdout="src/../../outside.txt" + nul),
+    )
+
+    with pytest.raises(ProjectWatchSnapshotError, match="unsafe project path"):
+        capture_project_snapshot(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlink semantics are pinned on POSIX")
+def test_capture_snapshot_uses_symlink_metadata_without_following_external_target(tmp_path: Path) -> None:
+    _init_git(tmp_path)
+    target = tmp_path.parent / f"{tmp_path.name}-external-target.txt"
+    target.write_text("one", encoding="utf-8")
+    link = tmp_path / "tracked-link"
+    link.symlink_to(target)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked-link"], check=True)
+
+    first = capture_project_snapshot(tmp_path)
+    assert len(first.files) == 1
+    assert stat.S_ISLNK(first.files[0].mode or 0)
+
+    target.write_text("target contents changed substantially", encoding="utf-8")
+    second = capture_project_snapshot(tmp_path)
+
+    assert second == first
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permits backslash in filenames")
