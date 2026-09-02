@@ -90,3 +90,4 @@ class SetupPlan:
     capabilities: ProjectCapabilities
     level: ProtectionLevel
     protections: tuple[ProjectProtectionConfig, ...]
+    readiness: EnvironmentReadiness

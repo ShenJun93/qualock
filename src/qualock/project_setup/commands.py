@@ -9,11 +9,16 @@ from qualock.run.process import run_process
 
 from .config import ensure_qualock_project, write_protections
 from .detect import detect_project
-from .models import ProtectionLevel, SetupPlan
+from .models import ProtectionLevel, ReadinessStatus, SetupPlan
 from .packs import recommend_protections
+from .readiness import check_environment_readiness
 
 
 class SetupUnsupportedError(ValueError):
+    pass
+
+
+class SetupReadinessError(RuntimeError):
     pass
 
 
@@ -46,10 +51,12 @@ def build_setup_plan(root: Path, level: ProtectionLevel) -> SetupPlan:
         raise SetupUnsupportedError(
             "QuaLock could not detect a supported project with a protection check."
         )
+    readiness = check_environment_readiness(root, capabilities, protections)
     return SetupPlan(
         capabilities=capabilities,
         level=level,
         protections=protections,
+        readiness=readiness,
     )
 
 
@@ -59,6 +66,8 @@ def apply_setup_plan(
     *,
     key_path: Path | None = None,
 ) -> ProjectProtectResult:
+    if plan.readiness.status is not ReadinessStatus.READY:
+        raise SetupReadinessError("QuaLock project environment is not ready.")
     config_path = ensure_qualock_project(root)
     write_protections(config_path, plan.protections)
     lock_path = project_dir(root) / "project.lock"

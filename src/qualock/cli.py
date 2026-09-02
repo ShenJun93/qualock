@@ -25,11 +25,12 @@ from qualock.project_protection.models import ProtectionStatus
 from qualock.project_protection.runner import ProjectProtectionError
 from qualock.project_protection.signing import ProjectLockIntegrityError
 from qualock.project_setup.commands import (
+    SetupReadinessError,
     SetupUnsupportedError,
     apply_setup_plan,
     build_setup_plan,
 )
-from qualock.project_setup.models import ProtectionLevel
+from qualock.project_setup.models import ProtectionLevel, ReadinessStatus
 from qualock.project_setup.render import render_setup_plan
 from qualock.qualification.models import Verdict
 from qualock.report.render import render_safety_terminal, render_terminal
@@ -156,13 +157,15 @@ def setup_command(
         raise typer.Exit(3) from exc
 
     console.print(render_setup_plan(plan), end="", markup=False)
+    if plan.readiness.status is ReadinessStatus.NEEDS_SETUP:
+        raise typer.Exit(4)
     if not yes and not typer.confirm("Apply these protections and protect this project?"):
         console.print("Setup cancelled. No files changed.")
         return
 
     try:
         result = apply_setup_plan(root, plan)
-    except ProjectLockIntegrityError as exc:
+    except (ProjectLockIntegrityError, SetupReadinessError) as exc:
         console.print(str(exc))
         raise typer.Exit(4) from exc
     except (ConfigError, ProjectProtectionConfigError, FileNotFoundError, ValueError) as exc:
