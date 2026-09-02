@@ -19,6 +19,26 @@ class PythonRunner(str, Enum):
     NONE = "none"
 
 
+
+class ReadinessStatus(str, Enum):
+    READY = "ready"
+    NEEDS_SETUP = "needs_setup"
+
+
+@dataclass(frozen=True)
+class ReadinessCheck:
+    id: str
+    name: str
+    status: ReadinessStatus
+    detail: str | None = None
+    recommendation: str | None = None
+
+
+@dataclass(frozen=True)
+class EnvironmentReadiness:
+    status: ReadinessStatus
+    checks: tuple[ReadinessCheck, ...] = ()
+
 class ProjectCapabilities(BaseModel):
     model_config = ConfigDict(frozen=True)
 
