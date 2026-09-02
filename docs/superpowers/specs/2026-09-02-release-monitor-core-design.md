@@ -593,7 +593,7 @@ tests/unit/test_release_monitor_cli.py
 Expected modifications:
 
 ```text
-src/qualock/agents/codex.py
+src/qualock/agents/resolver.py
 src/qualock/cli.py
 README.md
 ```
