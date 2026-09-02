@@ -314,6 +314,25 @@ def test_expected_none_without_owned_files_requires_known_loaded_timer(
     assert calls == [load_state_argv(registration.native_id)]
 
 
+def test_expected_none_rejects_unrelated_missing_diagnostic_naming_timer(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    backend = SystemdUserBackend(
+        process_runner=lambda *args, **kwargs: result(
+            1,
+            stdout="not-found\n",
+            stderr=(
+                "Manager endpoint not found while processing "
+                f"{registration.native_id}"
+            ),
+        ),
+        config_home=tmp_path / "xdg",
+    )
+
+    with pytest.raises(SchedulerOperationalError):
+        backend.inspect(identity(registration), None)
+
+
 @pytest.mark.parametrize("failed_query", ["is-enabled", "is-active"])
 def test_expected_inspection_raises_for_unknown_state_query_failure(
     registration: ScheduleRegistration, tmp_path: Path, failed_query: str
@@ -430,4 +449,31 @@ def test_remove_does_not_swallow_unrelated_missing_file_failure(
     with pytest.raises(SchedulerOperationalError):
         backend.remove(identity(registration))
 
+    assert timer_path.is_file()
+
+
+def test_remove_does_not_swallow_unrelated_missing_diagnostic_naming_timer(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    unit_root = tmp_path / "xdg" / "systemd" / "user"
+    unit_root.mkdir(parents=True)
+    service_path = unit_root / service_name(registration.project_key)
+    timer_path = unit_root / registration.native_id
+    service_path.write_text("owned")
+    timer_path.write_text("owned")
+    backend = SystemdUserBackend(
+        process_runner=lambda *args, **kwargs: result(
+            1,
+            stderr=(
+                "Manager endpoint not found while processing "
+                f"{registration.native_id}"
+            ),
+        ),
+        config_home=tmp_path / "xdg",
+    )
+
+    with pytest.raises(SchedulerOperationalError):
+        backend.remove(identity(registration))
+
+    assert service_path.is_file()
     assert timer_path.is_file()

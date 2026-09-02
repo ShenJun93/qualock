@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import uuid
 from collections.abc import Callable
@@ -99,14 +100,23 @@ def disable_argv(timer: str) -> list[str]:
     return ["systemctl", "--user", "disable", "--now", timer]
 
 
+def _is_missing_load_state(result: ProcessResult) -> bool:
+    return result.stdout.strip() == "not-found" and not result.stderr.strip()
+
+
 def _is_missing_unit(result: ProcessResult, timer: str) -> bool:
-    detail = f"{result.stdout}\n{result.stderr}".lower()
-    if result.stdout.strip().lower() == "not-found" and not result.stderr.strip():
-        return True
-    target = timer.lower()
-    return target in detail and any(
-        marker in detail
-        for marker in ("not found", "does not exist", "could not be found")
+    if result.stdout.strip() or not result.stderr.strip():
+        return False
+    target = re.escape(timer)
+    patterns = (
+        rf"(?:Failed to disable unit: )?Unit (?:file )?{target} does not exist\.?",
+        rf"Unit {target} (?:not found|could not be found|not loaded)\.?",
+        rf"Failed to stop {target}: Unit {target} not loaded\.?",
+    )
+    return all(
+        any(re.fullmatch(pattern, line) for pattern in patterns)
+        for line in result.stderr.splitlines()
+        if line
     )
 
 
@@ -194,7 +204,7 @@ class SystemdUserBackend:
             load_state = self._run(load_state_argv(identity.native_id))
             if load_state.timed_out:
                 self._raise_failure("show LoadState", load_state)
-            if _is_missing_unit(load_state, identity.native_id):
+            if _is_missing_load_state(load_state):
                 return NativeScheduleInspection(NativeScheduleState.MISSING)
             known_load_states = {
                 "bad-setting",
