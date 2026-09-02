@@ -162,3 +162,14 @@ def test_assert_rejects_logically_equivalent_reserialization(tmp_path: Path) -> 
 
     with pytest.raises(WatchControlChangedError, match="restart qualock watch"):
         assert_watch_control(tmp_path, identity, key_path=key_path)
+
+
+def test_assert_treats_lock_replaced_by_directory_as_changed_control(tmp_path: Path) -> None:
+    lock_path = _write(tmp_path, _lock())
+    key_path = _key_path(tmp_path)
+    identity = freeze_watch_control(tmp_path, key_path=key_path)
+    lock_path.unlink()
+    lock_path.mkdir()
+
+    with pytest.raises(WatchControlChangedError, match="restart qualock watch"):
+        assert_watch_control(tmp_path, identity, key_path=key_path)
