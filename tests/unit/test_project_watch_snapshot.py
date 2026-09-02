@@ -127,3 +127,17 @@ def test_capture_snapshot_rejects_unsafe_discovered_paths(tmp_path: Path, monkey
 
     with pytest.raises(ProjectWatchSnapshotError, match="unsafe project path"):
         capture_project_snapshot(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permits backslash in filenames")
+def test_capture_snapshot_preserves_backslash_in_posix_filename(tmp_path: Path) -> None:
+    _init_git(tmp_path)
+    name = "folder\\name.txt"
+    source = tmp_path / name
+    source.write_text("tracked\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "--", name], check=True)
+
+    snapshot = capture_project_snapshot(tmp_path)
+
+    assert tuple(item.path for item in snapshot.files) == (name,)
+    assert snapshot.files[0].present is True

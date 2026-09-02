@@ -12,8 +12,7 @@ class ProjectWatchSnapshotError(RuntimeError):
 
 
 def _normalize_path(raw: str) -> str:
-    normalized = raw.replace("\\", "/")
-    path = PurePosixPath(normalized)
+    path = PurePosixPath(raw)
     if path.is_absolute() or ".." in path.parts:
         raise ProjectWatchSnapshotError(f"unsafe project path from Git: {raw!r}")
     return path.as_posix()

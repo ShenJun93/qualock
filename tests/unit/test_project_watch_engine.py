@@ -293,3 +293,14 @@ def test_keyboard_interrupt_during_followup_verify_keeps_previous_authoritative_
     assert outcome.last_result is not None
     assert outcome.last_result.operation_id == "initial"
     assert outcome.exit_status is ProtectionStatus.PASS
+
+
+def test_keyboard_interrupt_during_control_freeze_returns_no_authoritative_result(tmp_path: Path) -> None:
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    outcome = run_watch(tmp_path, freeze_control_fn=interrupt)
+
+    assert outcome.interrupted is True
+    assert outcome.last_result is None
+    assert outcome.exit_status is None

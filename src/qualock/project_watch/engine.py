@@ -72,9 +72,6 @@ def run_watch(
     sleep_fn: Callable[[float], None] = time.sleep,
     on_event: EventFn | None = None,
 ) -> WatchOutcome:
-    frozen = freeze_control_fn(root, key_path=key_path)
-    _emit(on_event, WatchEventKind.CONTROL_VERIFIED)
-
     last_result: ProjectVerifyResult | None = None
     exit_status: ProtectionStatus | None = None
     observed: ProjectSnapshot | None = None
@@ -83,6 +80,8 @@ def run_watch(
     unstable_cycles = 0
 
     try:
+        frozen = freeze_control_fn(root, key_path=key_path)
+        _emit(on_event, WatchEventKind.CONTROL_VERIFIED)
         _emit(on_event, WatchEventKind.CHECKING)
         cycle = run_stable_cycle(
             root,
