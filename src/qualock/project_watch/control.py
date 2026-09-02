@@ -40,7 +40,7 @@ def assert_watch_control(
 ) -> None:
     try:
         raw = _authenticated_raw_lock(root, key_path)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, NotADirectoryError) as exc:
         raise WatchControlChangedError(
             "project protection lock disappeared during this watch session; "
             "restart qualock watch after intentionally re-protecting the project"

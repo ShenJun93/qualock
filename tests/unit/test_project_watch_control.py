@@ -117,6 +117,20 @@ def test_assert_treats_lock_removed_during_session_as_changed_control(tmp_path: 
         assert_watch_control(tmp_path, identity, key_path=key_path)
 
 
+
+def test_assert_treats_lock_parent_replaced_by_file_as_changed_control(tmp_path: Path) -> None:
+    _write(tmp_path, _lock())
+    key_path = _key_path(tmp_path)
+    identity = freeze_watch_control(tmp_path, key_path=key_path)
+    qdir = tmp_path / ".qualock"
+    for child in qdir.iterdir():
+        child.unlink()
+    qdir.rmdir()
+    qdir.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(WatchControlChangedError, match="restart qualock watch"):
+        assert_watch_control(tmp_path, identity, key_path=key_path)
+
 def test_assert_rejects_tampered_lock_via_existing_integrity_error(tmp_path: Path) -> None:
     lock_path = _write(tmp_path, _lock())
     key_path = _key_path(tmp_path)
