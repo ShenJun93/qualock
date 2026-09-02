@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -358,3 +359,23 @@ def test_tsconfig_alone_detects_typescript_for_node_project(tmp_path: Path) -> N
     (tmp_path / "tsconfig.json").write_text("{}" + chr(10), encoding="utf-8")
 
     assert detect_project(tmp_path).typescript is True
+
+
+def test_local_venv_ignores_wrong_platform_python(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    pyproject = "[project]" + chr(10) + "name='demo'" + chr(10)
+    (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+    venv = tmp_path / ".venv"
+    venv.mkdir()
+    (venv / "pyvenv.cfg").write_text("home = ignored" + chr(10), encoding="utf-8")
+    if os.name == "nt":
+        wrong = venv / "bin/python"
+    else:
+        wrong = venv / "Scripts/python.exe"
+    wrong.parent.mkdir(parents=True)
+    wrong.write_text("", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.python_runner is PythonRunner.NONE
+    assert capabilities.python_executable is None

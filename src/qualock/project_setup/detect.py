@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import os
 import re
 import tomllib
 from pathlib import Path
@@ -12,7 +13,6 @@ KNOWN_NPM_SCRIPTS = ("test", "build", "lint", "typecheck")
 PYTHON_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
 PYTHON_TARGETS = ("src", "tests", "app")
 LOCAL_VENVS = (".venv", "venv")
-VENV_PYTHONS = ("bin/python", "Scripts/python.exe")
 _DEPENDENCY_NAME = re.compile(r"^[A-Za-z0-9_.-]+")
 
 
@@ -135,15 +135,19 @@ def _tool_table(pyproject: dict[str, object], name: str) -> dict[object, object]
     return value if isinstance(value, dict) else None
 
 
+def _venv_python_path() -> str:
+    return "Scripts/python.exe" if os.name == "nt" else "bin/python"
+
+
 def _valid_local_venv(root: Path) -> tuple[str, str] | None:
+    relative_python = _venv_python_path()
     for environment in LOCAL_VENVS:
         env_path = root / environment
         if not (env_path / "pyvenv.cfg").is_file():
             continue
-        for relative_python in VENV_PYTHONS:
-            executable = env_path / relative_python
-            if executable.is_file():
-                return environment, executable.relative_to(root).as_posix()
+        executable = env_path / relative_python
+        if executable.is_file():
+            return environment, executable.relative_to(root).as_posix()
     return None
 
 
