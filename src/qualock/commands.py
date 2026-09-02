@@ -14,6 +14,7 @@ from qualock.agents.resolver import CodexResolver
 from qualock.baseline.io import BaselineStaleError, assert_suite_fresh, read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
 from qualock.canary.models import CanarySpec
+from qualock.config.models import QualockConfig
 from qualock.evidence.storage import write_baseline_artifacts, write_qualification_artifacts
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
 from qualock.qualification.models import AttemptResult, QualificationResult
@@ -54,7 +55,7 @@ def _default_resolver() -> CodexResolver:
     return CodexResolver(Path(user_cache_dir("qualock")))
 
 
-def _default_backend(root: Path, config) -> DockerQualificationBackend:
+def _default_backend(root: Path, config: QualockConfig) -> DockerQualificationBackend:
     cache = Path(user_cache_dir("qualock"))
     auth_home = Path.home() / ".codex"
     return DockerQualificationBackend(
