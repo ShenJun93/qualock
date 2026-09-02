@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import stat
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from qualock.scheduler.backends.base import (
     SchedulerUnsupportedError,
 )
 from qualock.scheduler.backends.launchd import (
+    LAUNCHD_TIMEOUT_SECONDS,
     LaunchdAgentBackend,
     bootout_argv,
     bootstrap_argv,
@@ -125,6 +127,149 @@ def test_install_uses_only_owned_launchagent_path_and_exact_gui_calls(
     ]
     assert all("/Library/LaunchDaemons" not in value for call in calls for value in call)
     assert all(value not in {"sh", "bash", "/bin/sh"} for call in calls for value in call)
+
+
+def test_process_calls_use_exact_cwd_env_and_timeout(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    calls: list[tuple[list[str], Path | None, object, float]] = []
+
+    def fake_run(
+        argv: Sequence[str],
+        *,
+        cwd: Path | None,
+        env: object,
+        timeout_seconds: float,
+    ) -> ProcessResult:
+        calls.append((list(argv), cwd, env, timeout_seconds))
+        return result()
+
+    backend = LaunchdAgentBackend(
+        process_runner=fake_run, which=lambda name: name, home=tmp_path, uid=501
+    )
+    backend.install(registration)
+    backend.inspect(identity(registration), registration)
+    backend.remove(identity(registration))
+
+    assert calls
+    assert all(
+        cwd is None and env is None and timeout == LAUNCHD_TIMEOUT_SECONDS
+        for _, cwd, env, timeout in calls
+    )
+
+
+def test_install_writes_mode_0600_plist(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    backend = LaunchdAgentBackend(
+        process_runner=lambda *args, **kwargs: result(),
+        which=lambda name: name,
+        home=tmp_path,
+        uid=501,
+    )
+
+    backend.install(registration)
+
+    plist_path = (
+        tmp_path / "Library" / "LaunchAgents" / f"{registration.native_id}.plist"
+    )
+    assert stat.S_IMODE(plist_path.stat().st_mode) == 0o600
+
+
+def test_install_bootout_failure_stops_before_write_and_bootstrap(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
+        calls.append(list(argv))
+        return result(1, stderr="Operation not permitted")
+
+    backend = LaunchdAgentBackend(
+        process_runner=fake_run, which=lambda name: name, home=tmp_path, uid=501
+    )
+
+    with pytest.raises(SchedulerOperationalError, match="bootout failed"):
+        backend.install(registration)
+
+    assert calls == [bootout_argv(501, registration.native_id)]
+    assert not (tmp_path / "Library" / "LaunchAgents").exists()
+
+
+def test_install_bootstrap_failure_occurs_after_atomic_write(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
+        calls.append(list(argv))
+        if list(argv)[1] == "bootstrap":
+            return result(1, stderr="Bootstrap failed")
+        return result()
+
+    backend = LaunchdAgentBackend(
+        process_runner=fake_run, which=lambda name: name, home=tmp_path, uid=501
+    )
+
+    with pytest.raises(SchedulerOperationalError, match="bootstrap failed"):
+        backend.install(registration)
+
+    plist_path = (
+        tmp_path / "Library" / "LaunchAgents" / f"{registration.native_id}.plist"
+    )
+    assert plist_path.read_bytes() == render_plist(registration)
+    assert calls == [
+        bootout_argv(501, registration.native_id),
+        bootstrap_argv(501, plist_path),
+    ]
+
+
+def test_atomic_write_failure_preserves_old_plist_cleans_temp_and_skips_bootstrap(
+    registration: ScheduleRegistration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+    plist_path = (
+        tmp_path / "Library" / "LaunchAgents" / f"{registration.native_id}.plist"
+    )
+    plist_path.parent.mkdir(parents=True)
+    plist_path.write_bytes(b"old")
+
+    def fail_replace(source: Path, destination: Path) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("qualock.scheduler.backends.launchd.os.replace", fail_replace)
+
+    def fake_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
+        calls.append(list(argv))
+        return result()
+
+    backend = LaunchdAgentBackend(
+        process_runner=fake_run, which=lambda name: name, home=tmp_path, uid=501
+    )
+
+    with pytest.raises(SchedulerOperationalError, match="write plist failed"):
+        backend.install(registration)
+
+    assert plist_path.read_bytes() == b"old"
+    assert list(plist_path.parent.iterdir()) == [plist_path]
+    assert calls == [bootout_argv(501, registration.native_id)]
+
+
+@pytest.mark.parametrize("operation", ["bootout", "bootstrap"])
+def test_install_timeout_is_operational(
+    registration: ScheduleRegistration, tmp_path: Path, operation: str
+) -> None:
+    def fake_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
+        if list(argv)[1] == operation:
+            return result(None, timed_out=True)
+        return result()
+
+    backend = LaunchdAgentBackend(
+        process_runner=fake_run, which=lambda name: name, home=tmp_path, uid=501
+    )
+
+    with pytest.raises(SchedulerOperationalError, match=rf"{operation} timed out"):
+        backend.install(registration)
 
 
 def test_matching_requires_canonical_bytes_and_loaded_gui_label(
@@ -265,6 +410,53 @@ def test_no_plist_and_known_absent_service_is_missing(
     )
 
 
+@pytest.mark.parametrize("native_id", ["other.service", "../../../escaped"])
+@pytest.mark.parametrize("operation", ["inspect", "remove"])
+def test_malformed_identity_fails_closed_before_path_or_service_use(
+    registration: ScheduleRegistration,
+    tmp_path: Path,
+    native_id: str,
+    operation: str,
+) -> None:
+    calls: list[list[str]] = []
+    malformed = ScheduleIdentity(
+        registration.project_key, SchedulerBackendKind.LAUNCHD_AGENT, native_id
+    )
+    escaped = tmp_path / "escaped.plist"
+    escaped.write_bytes(b"not owned")
+
+    def fake_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
+        calls.append(list(argv))
+        return result()
+
+    backend = LaunchdAgentBackend(
+        process_runner=fake_run, which=lambda name: name, home=tmp_path, uid=501
+    )
+
+    with pytest.raises(SchedulerOperationalError, match="identity"):
+        if operation == "inspect":
+            backend.inspect(malformed, None)
+        else:
+            backend.remove(malformed)
+
+    assert calls == []
+    assert escaped.read_bytes() == b"not owned"
+
+
+def test_inspect_timeout_is_operational(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    backend = LaunchdAgentBackend(
+        process_runner=lambda *args, **kwargs: result(None, timed_out=True),
+        which=lambda name: name,
+        home=tmp_path,
+        uid=501,
+    )
+
+    with pytest.raises(SchedulerOperationalError, match="print timed out"):
+        backend.inspect(identity(registration), None)
+
+
 def test_remove_boots_out_before_removing_only_owned_plist(
     registration: ScheduleRegistration, tmp_path: Path
 ) -> None:
@@ -329,6 +521,27 @@ def test_remove_real_failure_preserves_plist(
     )
     with pytest.raises(SchedulerOperationalError):
         backend.remove(identity(registration))
+    assert plist_path.read_bytes() == b"owned"
+
+
+def test_remove_timeout_preserves_plist(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    plist_path = (
+        tmp_path / "Library" / "LaunchAgents" / f"{registration.native_id}.plist"
+    )
+    plist_path.parent.mkdir(parents=True)
+    plist_path.write_bytes(b"owned")
+    backend = LaunchdAgentBackend(
+        process_runner=lambda *args, **kwargs: result(None, timed_out=True),
+        which=lambda name: name,
+        home=tmp_path,
+        uid=501,
+    )
+
+    with pytest.raises(SchedulerOperationalError, match="bootout timed out"):
+        backend.remove(identity(registration))
+
     assert plist_path.read_bytes() == b"owned"
 
 

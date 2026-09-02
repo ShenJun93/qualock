@@ -17,6 +17,7 @@ from ..models import (
     ScheduleIdentity,
     SchedulerBackendKind,
     ScheduleRegistration,
+    native_id_for,
     run_process,
 )
 from .base import SchedulerOperationalError, SchedulerUnsupportedError
@@ -101,6 +102,17 @@ class LaunchdAgentBackend:
     def _path(self, native_id: str) -> Path:
         return self._agent_root / f"{native_id}.plist"
 
+    @staticmethod
+    def _validated_native_id(identity: ScheduleIdentity) -> str:
+        if (
+            identity.backend is not SchedulerBackendKind.LAUNCHD_AGENT
+            or re.fullmatch(r"[0-9a-f]{64}", identity.project_key) is None
+            or identity.native_id
+            != native_id_for(SchedulerBackendKind.LAUNCHD_AGENT, identity.project_key)
+        ):
+            raise SchedulerOperationalError("invalid launchd schedule identity")
+        return identity.native_id
+
     def _run(self, argv: list[str]) -> ProcessResult:
         try:
             return self._process_runner(
@@ -134,9 +146,12 @@ class LaunchdAgentBackend:
         ):
             self._raise_failure("bootout", bootout)
 
-        self._agent_root.mkdir(parents=True, exist_ok=True)
-        plist_path = self._path(registration.native_id)
-        self._atomic_write(plist_path, render_plist(registration))
+        try:
+            self._agent_root.mkdir(parents=True, exist_ok=True)
+            plist_path = self._path(registration.native_id)
+            self._atomic_write(plist_path, render_plist(registration))
+        except OSError as exc:
+            raise SchedulerOperationalError(f"launchd write plist failed: {exc}") from exc
         bootstrap = self._run(bootstrap_argv(self._uid, plist_path))
         if bootstrap.timed_out or bootstrap.exit_code != 0:
             self._raise_failure("bootstrap", bootstrap)
@@ -146,13 +161,14 @@ class LaunchdAgentBackend:
         identity: ScheduleIdentity,
         expected: ScheduleRegistration | None,
     ) -> NativeScheduleInspection:
-        plist_path = self._path(identity.native_id)
+        native_id = self._validated_native_id(identity)
+        plist_path = self._path(native_id)
         plist_present = plist_path.exists()
-        printed = self._run(print_argv(self._uid, identity.native_id))
+        printed = self._run(print_argv(self._uid, native_id))
         if printed.timed_out:
             self._raise_failure("print", printed)
         loaded = printed.exit_code == 0
-        if not loaded and not _is_absent_service(printed, self._uid, identity.native_id):
+        if not loaded and not _is_absent_service(printed, self._uid, native_id):
             self._raise_failure("print", printed)
 
         if expected is None:
@@ -175,12 +191,13 @@ class LaunchdAgentBackend:
         return NativeScheduleInspection(state)
 
     def remove(self, identity: ScheduleIdentity) -> None:
-        bootout = self._run(bootout_argv(self._uid, identity.native_id))
+        native_id = self._validated_native_id(identity)
+        bootout = self._run(bootout_argv(self._uid, native_id))
         if (bootout.timed_out or bootout.exit_code != 0) and not _is_absent_service(
-            bootout, self._uid, identity.native_id
+            bootout, self._uid, native_id
         ):
             self._raise_failure("bootout", bootout)
-        self._path(identity.native_id).unlink(missing_ok=True)
+        self._path(native_id).unlink(missing_ok=True)
 
 
 __all__ = [
