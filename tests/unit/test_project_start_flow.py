@@ -277,3 +277,46 @@ def test_unconfigured_bootstrap_rejects_new_manual_protections_after_confirmatio
         apply_start_bootstrap(tmp_path, unconfigured_plan())
 
     assert "New manual check" in (tmp_path / ".qualock/config.yaml").read_text(encoding="utf-8")
+
+
+def test_configured_bootstrap_rechecks_config_after_lock_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = StartPlan(
+        state=StartProjectState.CONFIGURED_UNLOCKED,
+        level=ProtectionLevel.RECOMMENDED,
+        configured_protections=(_manual_protection("Approved check"),),
+    )
+    _write_manual_config(tmp_path, "Approved check")
+
+    def mutate_config(root: Path) -> None:
+        _write_manual_config(root, "Changed during lock guard")
+
+    monkeypatch.setattr(
+        "qualock.project_start.commands.assert_bootstrap_lock_absent",
+        mutate_config,
+    )
+    monkeypatch.setattr("qualock.project_start.commands.execute_protect", fail_if_called)
+
+    with pytest.raises(StartStateChangedError, match="state changed"):
+        apply_start_bootstrap(tmp_path, plan)
+
+
+def test_unconfigured_bootstrap_rechecks_config_after_lock_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def add_manual_config(root: Path) -> None:
+        _write_manual_config(root, "Added during lock guard")
+
+    monkeypatch.setattr(
+        "qualock.project_start.commands.assert_bootstrap_lock_absent",
+        add_manual_config,
+    )
+    monkeypatch.setattr("qualock.project_start.commands.apply_setup_plan", fail_if_called)
+
+    with pytest.raises(StartStateChangedError, match="state changed"):
+        apply_start_bootstrap(tmp_path, unconfigured_plan())
+
+    assert "Added during lock guard" in (tmp_path / ".qualock/config.yaml").read_text(encoding="utf-8")

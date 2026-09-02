@@ -132,8 +132,8 @@ def apply_start_bootstrap(
     if plan.state is StartProjectState.LOCKED:
         return StartBootstrapResult(protect_result=None, bootstrap_performed=False)
 
-    _assert_bootstrap_config_compatible(root, plan)
     assert_bootstrap_lock_absent(root)
+    _assert_bootstrap_config_compatible(root, plan)
 
     if plan.state is StartProjectState.CONFIGURED_UNLOCKED:
         result = execute_protect(root, key_path=key_path)
