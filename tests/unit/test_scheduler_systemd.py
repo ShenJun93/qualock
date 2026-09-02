@@ -18,6 +18,7 @@ from qualock.scheduler.backends.systemd import (
     disable_argv,
     enable_argv,
     enabled_argv,
+    load_state_argv,
     manager_probe_argv,
     reload_argv,
     render_service,
@@ -135,6 +136,14 @@ def test_argument_escaping_and_exact_manager_argv(
         "systemctl",
         "--user",
         "is-active",
+        registration.native_id,
+    ]
+    assert load_state_argv(registration.native_id) == [
+        "systemctl",
+        "--user",
+        "show",
+        "--property=LoadState",
+        "--value",
         registration.native_id,
     ]
     assert disable_argv(registration.native_id) == [
@@ -278,10 +287,53 @@ def test_expected_none_presence_and_true_missing(
         return backend.inspect(identity(registration), None).state
 
     assert inspect(result(1, "not-found\n")) is NativeScheduleState.MISSING
-    assert inspect(result(1, "disabled\n")) is NativeScheduleState.PRESENT_BUT_UNVERIFIED
+    assert inspect(result(stdout="loaded\n")) is NativeScheduleState.PRESENT_BUT_UNVERIFIED
     unit_root.mkdir(parents=True)
     timer_path.write_text("stale")
     assert inspect(result(1, "not-found\n")) is NativeScheduleState.PRESENT_BUT_UNVERIFIED
+
+
+def test_expected_none_without_owned_files_requires_known_loaded_timer(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
+        calls.append(list(argv))
+        if list(argv) == load_state_argv(registration.native_id):
+            return result(1, stderr="Failed to connect to bus: permission denied")
+        return result(stdout="loaded\n")
+
+    backend = SystemdUserBackend(
+        process_runner=fake_run, config_home=tmp_path / "xdg"
+    )
+
+    with pytest.raises(SchedulerOperationalError):
+        backend.inspect(identity(registration), None)
+
+    assert calls == [load_state_argv(registration.native_id)]
+
+
+@pytest.mark.parametrize("failed_query", ["is-enabled", "is-active"])
+def test_expected_inspection_raises_for_unknown_state_query_failure(
+    registration: ScheduleRegistration, tmp_path: Path, failed_query: str
+) -> None:
+    backend = SystemdUserBackend(
+        process_runner=successful_run, config_home=tmp_path / "xdg"
+    )
+    backend.install(registration)
+
+    def fake_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
+        if list(argv)[2:3] == [failed_query]:
+            return result(1, stderr="Failed to connect to bus: permission denied")
+        return successful_run(argv, **kwargs)
+
+    backend = SystemdUserBackend(
+        process_runner=fake_run, config_home=tmp_path / "xdg"
+    )
+
+    with pytest.raises(SchedulerOperationalError):
+        backend.inspect(identity(registration), registration)
 
 
 def test_remove_missing_is_idempotent_removes_stale_files_then_reloads(
@@ -292,7 +344,10 @@ def test_remove_missing_is_idempotent_removes_stale_files_then_reloads(
     def fake_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
         calls.append(list(argv))
         if list(argv) == disable_argv(registration.native_id):
-            return result(1, stderr="Failed to disable unit: Unit file does not exist.\n")
+            return result(
+                1,
+                stderr=f"Unit {registration.native_id} does not exist.\n",
+            )
         return result()
 
     unit_root = tmp_path / "xdg" / "systemd" / "user"
@@ -355,4 +410,24 @@ def test_remove_unexpected_failure_keeps_files(
     )
     with pytest.raises(SchedulerOperationalError):
         backend.remove(identity(registration))
+    assert timer_path.is_file()
+
+
+def test_remove_does_not_swallow_unrelated_missing_file_failure(
+    registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    unit_root = tmp_path / "xdg" / "systemd" / "user"
+    unit_root.mkdir(parents=True)
+    timer_path = unit_root / registration.native_id
+    timer_path.write_text("owned")
+    backend = SystemdUserBackend(
+        process_runner=lambda *args, **kwargs: result(
+            1, stderr="Failed to connect to bus: No such file or directory"
+        ),
+        config_home=tmp_path / "xdg",
+    )
+
+    with pytest.raises(SchedulerOperationalError):
+        backend.remove(identity(registration))
+
     assert timer_path.is_file()

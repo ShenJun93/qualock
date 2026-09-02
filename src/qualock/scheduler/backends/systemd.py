@@ -84,22 +84,34 @@ def active_argv(timer: str) -> list[str]:
     return ["systemctl", "--user", "is-active", timer]
 
 
+def load_state_argv(timer: str) -> list[str]:
+    return [
+        "systemctl",
+        "--user",
+        "show",
+        "--property=LoadState",
+        "--value",
+        timer,
+    ]
+
+
 def disable_argv(timer: str) -> list[str]:
     return ["systemctl", "--user", "disable", "--now", timer]
 
 
-def _is_missing_unit(result: ProcessResult) -> bool:
+def _is_missing_unit(result: ProcessResult, timer: str) -> bool:
     detail = f"{result.stdout}\n{result.stderr}".lower()
-    return any(
+    if result.stdout.strip().lower() == "not-found" and not result.stderr.strip():
+        return True
+    target = timer.lower()
+    return target in detail and any(
         marker in detail
-        for marker in (
-            "not-found",
-            "not found",
-            "does not exist",
-            "could not be found",
-            "no such file",
-        )
+        for marker in ("not found", "does not exist", "could not be found")
     )
+
+
+def _state_output(result: ProcessResult) -> str:
+    return result.stdout.strip().lower()
 
 
 class SystemdUserBackend:
@@ -178,17 +190,23 @@ class SystemdUserBackend:
     ) -> NativeScheduleInspection:
         service_path, timer_path = self._paths(identity.project_key, identity.native_id)
         files_present = service_path.exists() or timer_path.exists()
-        enabled = self._run(enabled_argv(identity.native_id))
-        native_missing = (
-            not enabled.timed_out
-            and enabled.exit_code != 0
-            and _is_missing_unit(enabled)
-        )
-        if not files_present and native_missing:
-            return NativeScheduleInspection(NativeScheduleState.MISSING)
+        if not files_present:
+            load_state = self._run(load_state_argv(identity.native_id))
+            if load_state.timed_out:
+                self._raise_failure("show LoadState", load_state)
+            if _is_missing_unit(load_state, identity.native_id):
+                return NativeScheduleInspection(NativeScheduleState.MISSING)
+            known_load_states = {
+                "bad-setting",
+                "error",
+                "loaded",
+                "masked",
+                "merged",
+                "stub",
+            }
+            if load_state.exit_code != 0 or _state_output(load_state) not in known_load_states:
+                self._raise_failure("show LoadState", load_state)
         if expected is None:
-            if enabled.timed_out:
-                self._raise_failure("is-enabled", enabled)
             return NativeScheduleInspection(NativeScheduleState.PRESENT_BUT_UNVERIFIED)
 
         try:
@@ -198,7 +216,46 @@ class SystemdUserBackend:
             )
         except OSError:
             bytes_match = False
+        enabled = self._run(enabled_argv(identity.native_id))
+        known_enabled_states = {
+            "alias",
+            "bad",
+            "disabled",
+            "enabled",
+            "enabled-runtime",
+            "generated",
+            "indirect",
+            "linked",
+            "linked-runtime",
+            "masked",
+            "masked-runtime",
+            "not-found",
+            "static",
+            "transient",
+        }
+        if (
+            enabled.timed_out
+            or _state_output(enabled) not in known_enabled_states
+            or (enabled.exit_code != 0 and bool(enabled.stderr.strip()))
+        ):
+            self._raise_failure("is-enabled", enabled)
         active = self._run(active_argv(identity.native_id))
+        known_active_states = {
+            "active",
+            "activating",
+            "deactivating",
+            "failed",
+            "inactive",
+            "maintenance",
+            "reloading",
+            "unknown",
+        }
+        if (
+            active.timed_out
+            or _state_output(active) not in known_active_states
+            or (active.exit_code != 0 and bool(active.stderr.strip()))
+        ):
+            self._raise_failure("is-active", active)
         matches = (
             bytes_match
             and enabled.exit_code == 0
@@ -214,7 +271,7 @@ class SystemdUserBackend:
     def remove(self, identity: ScheduleIdentity) -> None:
         result = self._run(disable_argv(identity.native_id))
         if (result.timed_out or result.exit_code != 0) and (
-            result.timed_out or not _is_missing_unit(result)
+            result.timed_out or not _is_missing_unit(result, identity.native_id)
         ):
             self._raise_failure("disable", result)
         service_path, timer_path = self._paths(identity.project_key, identity.native_id)
@@ -232,6 +289,7 @@ __all__ = [
     "disable_argv",
     "enable_argv",
     "enabled_argv",
+    "load_state_argv",
     "manager_probe_argv",
     "reload_argv",
     "render_service",
