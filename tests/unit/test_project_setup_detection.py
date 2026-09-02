@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 
 from qualock.project_setup.detect import detect_project
-from qualock.project_setup.models import ProtectionLevel
+from qualock.project_setup.models import ProtectionLevel, PythonRunner
 from qualock.project_setup.packs import recommend_protections
 
 
@@ -120,6 +120,7 @@ def test_python_pack_prefers_project_local_venv_interpreter(tmp_path: Path) -> N
     interpreter = tmp_path / ".venv/bin/python"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text("", encoding="utf-8")
+    (tmp_path / ".venv/pyvenv.cfg").write_text("home = /usr/bin" + chr(10), encoding="utf-8")
 
     capabilities = detect_project(tmp_path)
     protections = recommend_protections(capabilities, ProtectionLevel.RECOMMENDED)
@@ -251,3 +252,109 @@ def test_poetry_legacy_dev_dependency_detects_pytest(tmp_path: Path) -> None:
 
     assert capabilities.python is True
     assert capabilities.pytest is True
+
+
+def test_uv_runner_wins_over_poetry_and_venv(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+    (tmp_path / "poetry.lock").write_text("", encoding="utf-8")
+    venv = tmp_path / ".venv"
+    venv.mkdir()
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin" + chr(10), encoding="utf-8")
+    python = venv / "bin/python"
+    python.parent.mkdir(exist_ok=True)
+    python.write_text("", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.python_runner is PythonRunner.UV
+
+
+def test_poetry_runner_wins_over_local_venv(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "poetry.lock").write_text("", encoding="utf-8")
+    venv = tmp_path / ".venv"
+    venv.mkdir()
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin" + chr(10), encoding="utf-8")
+    python = venv / "bin/python"
+    python.parent.mkdir(exist_ok=True)
+    python.write_text("", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.python_runner is PythonRunner.POETRY
+
+
+def test_local_venv_requires_pyvenv_cfg_and_python(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    pyproject = "[project]" + chr(10) + "name='demo'" + chr(10)
+    (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+    (tmp_path / ".venv/bin").mkdir(parents=True)
+    (tmp_path / ".venv/bin/python").write_text("", encoding="utf-8")
+
+    assert detect_project(tmp_path).python_runner is PythonRunner.NONE
+
+
+def test_valid_local_venv_records_relative_environment(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    pyproject = "[project]" + chr(10) + "name='demo'" + chr(10)
+    (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+    venv = tmp_path / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin" + chr(10), encoding="utf-8")
+    (venv / "bin/python").write_text("", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.python_runner is PythonRunner.VENV
+    assert capabilities.python_environment == ".venv"
+
+
+def test_detects_python_frameworks_from_declared_dependencies(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "manage.py").write_text("", encoding="utf-8")
+    pyproject = (
+        "[project]" + chr(10)
+        + "name='demo'" + chr(10)
+        + "dependencies=['Django>=5', 'fastapi>=0.115']" + chr(10)
+    )
+    (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.django is True
+    assert capabilities.fastapi is True
+    assert "Django" in capabilities.labels
+    assert "FastAPI" in capabilities.labels
+
+
+def test_django_dependency_without_manage_py_is_labelled_false(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    pyproject = "[project]" + chr(10) + "name='demo'" + chr(10) + "dependencies=['Django>=5']" + chr(10)
+    (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+
+    assert detect_project(tmp_path).django is False
+
+
+def test_detects_nextjs_and_typescript_from_package_metadata(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    payload = {
+        "dependencies": {"next": "16.0.0", "react": "19.0.0"},
+        "devDependencies": {"typescript": "6.0.0", "vite": "7.0.0"},
+    }
+    (tmp_path / "package.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.nextjs is True
+    assert capabilities.typescript is True
+    assert "Next.js" in capabilities.labels
+    assert "TypeScript" in capabilities.labels
+
+
+def test_tsconfig_alone_detects_typescript_for_node_project(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "package.json").write_text("{}" + chr(10), encoding="utf-8")
+    (tmp_path / "tsconfig.json").write_text("{}" + chr(10), encoding="utf-8")
+
+    assert detect_project(tmp_path).typescript is True

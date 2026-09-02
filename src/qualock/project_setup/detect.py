@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import configparser
 import json
+import re
 import tomllib
 from pathlib import Path
 
-from .models import ProjectCapabilities
+from .models import ProjectCapabilities, PythonRunner
 
 KNOWN_NPM_SCRIPTS = ("test", "build", "lint", "typecheck")
 PYTHON_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
 PYTHON_TARGETS = ("src", "tests", "app")
-PYTHON_EXECUTABLES = (".venv/bin/python", ".venv/Scripts/python.exe", "venv/bin/python", "venv/Scripts/python.exe")
+LOCAL_VENVS = (".venv", "venv")
+VENV_PYTHONS = ("bin/python", "Scripts/python.exe")
+_DEPENDENCY_NAME = re.compile(r"^[A-Za-z0-9_.-]+")
 
 
 def _load_pyproject(root: Path) -> dict[str, object]:
@@ -35,71 +38,79 @@ def _load_package_json(root: Path) -> dict[str, object] | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _dependency_string_is_pytest(value: object) -> bool:
+def _normalize_dependency_name(value: object) -> str | None:
     if not isinstance(value, str):
-        return False
-    normalized = value.strip().lower()
-    return normalized == "pytest" or normalized.startswith((
-        "pytest[",
-        "pytest<",
-        "pytest>",
-        "pytest=",
-        "pytest!",
-        "pytest~",
-        "pytest ",
-        "pytest;",
-    ))
+        return None
+    match = _DEPENDENCY_NAME.match(value.strip())
+    if match is None:
+        return None
+    return re.sub(r"[-_.]+", "-", match.group(0)).lower()
 
 
-def _dependency_list_mentions_pytest(value: object) -> bool:
-    return isinstance(value, list) and any(_dependency_string_is_pytest(item) for item in value)
+def _dependency_list_names(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {
+        name
+        for item in value
+        if (name := _normalize_dependency_name(item)) is not None
+    }
 
 
-def _mapping_has_pytest_key(value: object) -> bool:
-    return isinstance(value, dict) and any(str(key).lower() == "pytest" for key in value)
+def _mapping_dependency_names(value: object) -> set[str]:
+    if not isinstance(value, dict):
+        return set()
+    return {
+        name
+        for key in value
+        if (name := _normalize_dependency_name(str(key))) is not None
+    }
 
 
-def _pyproject_mentions_pytest(pyproject: dict[str, object]) -> bool:
+def _pyproject_dependency_names(pyproject: dict[str, object]) -> set[str]:
+    names: set[str] = set()
     project = pyproject.get("project")
     if isinstance(project, dict):
-        if _dependency_list_mentions_pytest(project.get("dependencies")):
-            return True
+        names.update(_dependency_list_names(project.get("dependencies")))
         optional = project.get("optional-dependencies")
-        if isinstance(optional, dict) and any(
-            _dependency_list_mentions_pytest(group) for group in optional.values()
-        ):
-            return True
+        if isinstance(optional, dict):
+            for group in optional.values():
+                names.update(_dependency_list_names(group))
 
     dependency_groups = pyproject.get("dependency-groups")
-    if isinstance(dependency_groups, dict) and any(
-        _dependency_list_mentions_pytest(group) for group in dependency_groups.values()
-    ):
-        return True
+    if isinstance(dependency_groups, dict):
+        for group in dependency_groups.values():
+            names.update(_dependency_list_names(group))
 
     tool = pyproject.get("tool")
     poetry = tool.get("poetry") if isinstance(tool, dict) else None
     if isinstance(poetry, dict):
-        if _mapping_has_pytest_key(poetry.get("dependencies")):
-            return True
-        if _mapping_has_pytest_key(poetry.get("dev-dependencies")):
-            return True
+        names.update(_mapping_dependency_names(poetry.get("dependencies")))
+        names.update(_mapping_dependency_names(poetry.get("dev-dependencies")))
         groups = poetry.get("group")
         if isinstance(groups, dict):
             for group in groups.values():
-                if isinstance(group, dict) and _mapping_has_pytest_key(group.get("dependencies")):
-                    return True
-    return False
+                if isinstance(group, dict):
+                    names.update(_mapping_dependency_names(group.get("dependencies")))
+    names.discard("python")
+    return names
 
 
-def _requirements_mention_pytest(root: Path) -> bool:
+def _requirements_dependency_names(root: Path) -> set[str]:
+    names: set[str] = set()
     for path in root.glob("requirements*.txt"):
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError):
             continue
-        if any(_dependency_string_is_pytest(line.split("#", 1)[0]) for line in lines):
-            return True
-    return False
+        for line in lines:
+            candidate = line.split("#", 1)[0].strip()
+            if candidate.startswith(("-", "http:", "https:", "git+")):
+                continue
+            name = _normalize_dependency_name(candidate)
+            if name is not None:
+                names.add(name)
+    return names
 
 
 def _ini_mentions_pytest(root: Path) -> bool:
@@ -118,24 +129,63 @@ def _ini_mentions_pytest(root: Path) -> bool:
     return False
 
 
+def _tool_table(pyproject: dict[str, object], name: str) -> dict[object, object] | None:
+    tool = pyproject.get("tool")
+    value = tool.get(name) if isinstance(tool, dict) else None
+    return value if isinstance(value, dict) else None
+
+
+def _valid_local_venv(root: Path) -> tuple[str, str] | None:
+    for environment in LOCAL_VENVS:
+        env_path = root / environment
+        if not (env_path / "pyvenv.cfg").is_file():
+            continue
+        for relative_python in VENV_PYTHONS:
+            executable = env_path / relative_python
+            if executable.is_file():
+                return environment, executable.relative_to(root).as_posix()
+    return None
+
+
+def _detect_python_runner(
+    root: Path,
+    pyproject: dict[str, object],
+) -> tuple[PythonRunner, str | None, str | None]:
+    if (root / "uv.lock").is_file() or _tool_table(pyproject, "uv") is not None:
+        return PythonRunner.UV, None, None
+    if (root / "poetry.lock").is_file() or _tool_table(pyproject, "poetry") is not None:
+        return PythonRunner.POETRY, None, None
+    local = _valid_local_venv(root)
+    if local is not None:
+        environment, executable = local
+        return PythonRunner.VENV, environment, executable
+    return PythonRunner.NONE, None, None
+
+
 def detect_project(root: Path) -> ProjectCapabilities:
     pyproject = _load_pyproject(root)
-    python = any((root / marker).is_file() for marker in PYTHON_MARKERS) or any(
-        root.glob("requirements*.txt")
+    pyproject_dependencies = _pyproject_dependency_names(pyproject)
+    requirements_dependencies = _requirements_dependency_names(root)
+    python_dependencies = pyproject_dependencies | requirements_dependencies
+
+    uv_project = (root / "uv.lock").is_file() or _tool_table(pyproject, "uv") is not None
+    poetry_project = (root / "poetry.lock").is_file() or _tool_table(pyproject, "poetry") is not None
+    python = (
+        any((root / marker).is_file() for marker in PYTHON_MARKERS)
+        or bool(tuple(root.glob("requirements*.txt")))
+        or uv_project
+        or poetry_project
     )
+
     tool_config = pyproject.get("tool")
     pytest_config = tool_config.get("pytest") if isinstance(tool_config, dict) else None
     explicit_pytest = (
         (root / "pytest.ini").is_file()
         or (root / "conftest.py").is_file()
         or isinstance(pytest_config, dict)
-    )
-    pytest = (
-        explicit_pytest
-        or _pyproject_mentions_pytest(pyproject)
-        or _requirements_mention_pytest(root)
         or _ini_mentions_pytest(root)
     )
+    pytest = explicit_pytest or "pytest" in python_dependencies
 
     python_targets = tuple(name for name in PYTHON_TARGETS if (root / name).is_dir())
     if python and not python_targets:
@@ -153,10 +203,7 @@ def detect_project(root: Path) -> ProjectCapabilities:
         )
         python_targets = package_dirs + module_files
 
-    python_executable = next(
-        (candidate for candidate in PYTHON_EXECUTABLES if (root / candidate).is_file()),
-        None,
-    )
+    python_runner, python_environment, python_executable = _detect_python_runner(root, pyproject)
 
     package = _load_package_json(root)
     node = package is not None
@@ -164,20 +211,25 @@ def detect_project(root: Path) -> ProjectCapabilities:
     scripts = scripts_raw if isinstance(scripts_raw, dict) else {}
     npm_scripts = tuple(name for name in KNOWN_NPM_SCRIPTS if name in scripts)
 
-    dependencies: set[str] = set()
+    node_dependencies: set[str] = set()
     for field in ("dependencies", "devDependencies"):
         values = package.get(field, {}) if package is not None else {}
-        if isinstance(values, dict):
-            dependencies.update(str(key) for key in values)
+        node_dependencies.update(_mapping_dependency_names(values))
 
     return ProjectCapabilities(
         git=(root / ".git").exists(),
         python=python,
         pytest=pytest,
         node=node,
-        react="react" in dependencies,
-        vite="vite" in dependencies,
+        react="react" in node_dependencies,
+        vite="vite" in node_dependencies,
+        django="django" in python_dependencies and (root / "manage.py").is_file(),
+        fastapi="fastapi" in python_dependencies,
+        nextjs="next" in node_dependencies,
+        typescript="typescript" in node_dependencies or (root / "tsconfig.json").is_file(),
         npm_scripts=npm_scripts,
         python_targets=python_targets,
+        python_runner=python_runner,
+        python_environment=python_environment,
         python_executable=python_executable,
     )
