@@ -129,6 +129,25 @@ Or resolve the current npm release to an exact version before qualification:
 qualock check codex@latest
 ```
 
+Run the release monitor once, or force a matching newer candidate to run again:
+
+```bash
+qualock monitor
+qualock monitor --force
+```
+
+The monitor:
+
+- checks npm metadata for the newest Codex version without downloading it first;
+- does nothing expensive when latest is not newer than the baseline;
+- qualifies a genuinely newer exact version through the same `qualock check` engine;
+- remembers terminal PASS/WARN/BLOCK per fresh baseline so repeated one-shot runs are cheap;
+- retries INCOMPLETE later;
+- `--force` reruns only a matching newer candidate and never bypasses stale baseline checks;
+- treats user-state corruption or deletion conservatively by checking again, never by falsely trusting state.
+
+This command is one-shot. Automatic scheduling is intentionally Batch #27.
+
 View the latest local report:
 
 ```bash

@@ -1,5 +1,5 @@
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 from rich.console import Console
 from rich.table import Table
@@ -19,7 +19,7 @@ def _encode(value: Any) -> Any:
 
 
 def render_json(result: QualificationResult) -> dict[str, Any]:
-    return _encode(asdict(result))
+    return cast(dict[str, Any], _encode(asdict(result)))
 
 
 def render_markdown(result: QualificationResult) -> str:
