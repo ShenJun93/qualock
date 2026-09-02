@@ -82,6 +82,36 @@ def test_watch_cli_renders_authoritative_result_and_pass_exit(tmp_path: Path, mo
 
 
 @pytest.mark.parametrize(
+    ("status", "exit_code", "expected_text"),
+    [
+        (ProtectionStatus.FAIL, 2, "DON'T KEEP THIS CHANGE"),
+        (ProtectionStatus.INCOMPLETE, 4, "CHECK COULD NOT FINISH"),
+    ],
+)
+def test_watch_cli_renders_authoritative_non_pass_result(
+    tmp_path: Path,
+    monkeypatch,
+    status: ProtectionStatus,
+    exit_code: int,
+    expected_text: str,
+) -> None:
+    result = _result(status)
+
+    def fake_watch(root: Path, **kwargs):
+        kwargs["on_event"](WatchEvent(WatchEventKind.RESULT, result))
+        return WatchOutcome(last_result=result, exit_status=status, interrupted=True)
+
+    monkeypatch.setattr("qualock.cli.run_project_watch", fake_watch)
+    monkeypatch.chdir(tmp_path)
+
+    cli_result = runner.invoke(app, ["watch"])
+
+    assert cli_result.exit_code == exit_code
+    assert expected_text in cli_result.stdout
+    assert "SAFE TO KEEP" not in cli_result.stdout
+
+
+@pytest.mark.parametrize(
     ("status", "exit_code"),
     [
         (ProtectionStatus.FAIL, 2),
