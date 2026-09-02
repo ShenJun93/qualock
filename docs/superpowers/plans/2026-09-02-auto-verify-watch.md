@@ -183,7 +183,7 @@ Commit:
 **Interfaces:**
 - Produces frozen `WatchTiming(poll_seconds: float = 0.5, settle_seconds: float = 1.0, max_unstable_cycles: int = 2)`.
 - Produces `StableCycle` carrying either an authoritative `ProjectVerifyResult` or an unstable post-snapshot.
-- Produces `WatchOutcome(last_result: ProjectVerifyResult | None, interrupted: bool, fatal_error: Exception | None)`.
+- Produces `WatchOutcome(last_result: ProjectVerifyResult | None, exit_status: ProtectionStatus | None, interrupted: bool)`.
 - Main engine entry point:
 ```python
 run_watch(
@@ -207,6 +207,7 @@ Cover:
 - snapshot differs -> result suppressed and cycle marked unstable;
 - frozen control is checked before and after every verify;
 - a control error after verify suppresses the verify result and propagates fatal error;
+- a control error during idle polling propagates before the next project snapshot is accepted;
 - evidence generation remains delegated to existing `execute_verify`; engine does not write project-protection evidence itself.
 
 - [ ] **Step 2: Implement one stable verification cycle**

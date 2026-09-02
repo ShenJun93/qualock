@@ -153,6 +153,29 @@ def test_control_failure_after_verify_propagates_and_suppresses_result(tmp_path:
         )
 
 
+def test_idle_poll_reauthenticates_control_before_reading_project_snapshot(tmp_path: Path) -> None:
+    snap = _snapshot("same")
+    checks = 0
+
+    def assert_control(*args, **kwargs) -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 3:
+            raise RuntimeError("control changed while idle")
+
+    with pytest.raises(RuntimeError, match="control changed while idle"):
+        run_watch(
+            tmp_path,
+            snapshot_fn=_queued([snap, snap]),
+            verify_fn=lambda *args, **kwargs: _result(ProtectionStatus.PASS, "initial"),
+            freeze_control_fn=_freeze,
+            assert_control_fn=assert_control,
+            sleep_fn=lambda seconds: None,
+        )
+
+    assert checks == 3
+
+
 def test_run_watch_initial_pass_becomes_authoritative_before_polling(tmp_path: Path) -> None:
     snap = _snapshot("same")
     clock = FakeClock(interrupt_after_sleeps=1)
@@ -259,7 +282,9 @@ def test_two_consecutive_unstable_cycles_yield_incomplete_without_third_retry(tm
         on_event=events.append,
     )
 
-    assert WatchEventKind.INSTABILITY_INCOMPLETE in [event.kind for event in events]
+    kinds = [event.kind for event in events]
+    assert kinds.count(WatchEventKind.STALE) == 2
+    assert kinds.count(WatchEventKind.INSTABILITY_INCOMPLETE) == 1
     assert outcome.exit_status is ProtectionStatus.INCOMPLETE
 
 
