@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Annotated
 import shutil
 
 import typer
@@ -23,6 +24,13 @@ from qualock.project_protection.render import render_protect_terminal, render_ve
 from qualock.project_protection.models import ProtectionStatus
 from qualock.project_protection.runner import ProjectProtectionError
 from qualock.project_protection.signing import ProjectLockIntegrityError
+from qualock.project_setup.commands import (
+    SetupUnsupportedError,
+    apply_setup_plan,
+    build_setup_plan,
+)
+from qualock.project_setup.models import ProtectionLevel
+from qualock.project_setup.render import render_setup_plan
 from qualock.qualification.models import Verdict
 from qualock.report.render import render_safety_terminal, render_terminal
 from qualock.report.safety import build_safety_summary
@@ -122,6 +130,51 @@ def check_command(
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)
     if result.verdict is Verdict.INCOMPLETE:
+        raise typer.Exit(4)
+
+
+@app.command("setup")
+def setup_command(
+    level: Annotated[
+        ProtectionLevel,
+        typer.Option("--level", help="Protection level: minimal, recommended, or strong."),
+    ] = ProtectionLevel.RECOMMENDED,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Apply the recommended protections without asking for confirmation.",
+        ),
+    ] = False,
+) -> None:
+    root = Path.cwd()
+    try:
+        plan = build_setup_plan(root, level)
+    except SetupUnsupportedError as exc:
+        console.print(str(exc))
+        raise typer.Exit(3) from exc
+
+    console.print(render_setup_plan(plan), end="", markup=False)
+    if not yes and not typer.confirm("Apply these protections and protect this project?"):
+        console.print("Setup cancelled. No files changed.")
+        return
+
+    try:
+        result = apply_setup_plan(root, plan)
+    except ProjectLockIntegrityError as exc:
+        console.print(str(exc))
+        raise typer.Exit(4) from exc
+    except (ConfigError, ProjectProtectionConfigError, FileNotFoundError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(3) from exc
+    except ProjectProtectionError as exc:
+        console.print(str(exc))
+        raise typer.Exit(1) from exc
+
+    evidence_path = f".qualock/results/{result.operation_id}/"
+    console.print(render_protect_terminal(result, evidence_path), end="", markup=False)
+    if result.status is not ProtectionStatus.PASS:
         raise typer.Exit(4)
 
 
