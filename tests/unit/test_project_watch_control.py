@@ -173,3 +173,23 @@ def test_assert_treats_lock_replaced_by_directory_as_changed_control(tmp_path: P
 
     with pytest.raises(WatchControlChangedError, match="restart qualock watch"):
         assert_watch_control(tmp_path, identity, key_path=key_path)
+
+
+def test_assert_fails_closed_if_signing_key_disappears_during_session(tmp_path: Path) -> None:
+    _write(tmp_path, _lock())
+    key_path = _key_path(tmp_path)
+    identity = freeze_watch_control(tmp_path, key_path=key_path)
+    key_path.unlink()
+
+    with pytest.raises(ProjectLockIntegrityError, match="signing key is missing"):
+        assert_watch_control(tmp_path, identity, key_path=key_path)
+
+
+def test_assert_fails_closed_if_signing_key_rotates_during_session(tmp_path: Path) -> None:
+    _write(tmp_path, _lock())
+    key_path = _key_path(tmp_path)
+    identity = freeze_watch_control(tmp_path, key_path=key_path)
+    key_path.write_bytes(b"r" * 32)
+
+    with pytest.raises(ProjectLockIntegrityError, match="signature does not match"):
+        assert_watch_control(tmp_path, identity, key_path=key_path)
