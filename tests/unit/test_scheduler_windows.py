@@ -222,6 +222,29 @@ def test_inspect_matching_and_every_required_drift(
         assert inspect(ET.tostring(changed)) is NativeScheduleState.DRIFTED
 
 
+@pytest.mark.parametrize("duplicated_tag", ["CalendarTrigger", "Exec"])
+def test_inspect_multiple_trigger_or_action_is_drifted(
+    registration: ScheduleRegistration,
+    identity: ScheduleIdentity,
+    duplicated_tag: str,
+) -> None:
+    root = ET.fromstring(task_xml(registration, user_id="alice"))
+    namespace = "http://schemas.microsoft.com/windows/2004/02/mit/task"
+    node = root.find(f".//{{{namespace}}}{duplicated_tag}")
+    assert node is not None
+    parent_tag = "Triggers" if duplicated_tag == "CalendarTrigger" else "Actions"
+    parent = root.find(f".//{{{namespace}}}{parent_tag}")
+    assert parent is not None
+    parent.append(ET.fromstring(ET.tostring(node)))
+    backend = WindowsTaskSchedulerBackend(
+        process_runner=lambda *args, **kwargs: result(stdout=ET.tostring(root).decode()),
+        which=lambda name: name,
+        user_id="alice",
+    )
+
+    assert backend.inspect(identity, registration).state is NativeScheduleState.DRIFTED
+
+
 @pytest.mark.parametrize("payload", ["not xml", '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"/>'])
 def test_malformed_or_unreadable_xml_is_unverified(
     registration: ScheduleRegistration, identity: ScheduleIdentity, payload: str

@@ -153,6 +153,11 @@ class WindowsTaskSchedulerBackend:
     ) -> NativeScheduleInspection:
         try:
             root = ET.fromstring(payload)
+            if (
+                len(root.findall(f".//{_q('CalendarTrigger')}")) > 1
+                or len(root.findall(f".//{_q('Exec')}")) > 1
+            ):
+                return NativeScheduleInspection(NativeScheduleState.DRIFTED)
             values = {
                 name: root.findtext(f".//{_q(name)}")
                 for name in (
