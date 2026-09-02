@@ -35,7 +35,7 @@ def test_setup_previews_python_recommendations_and_cancel_has_zero_mutation(
     init_git_with_commit(tmp_path)
     (tmp_path / "src").mkdir()
     (tmp_path / "tests").mkdir()
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\ndependencies=['pytest>=8']\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["setup"], input="n\n")

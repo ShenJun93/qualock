@@ -11,7 +11,7 @@ For automation, `--yes` skips confirmation. `--level` accepts `minimal`, `recomm
 ## Detection
 Detection is filesystem/package-metadata based and never executes project code. The detector stays passive; before preview or mutation, setup separately verifies with Git that the repository has a committed HEAD. V1 recognizes Git, Python, pytest, Node/npm, React, Vite, and npm scripts named `test`, `build`, `lint`, and `typecheck`.
 
-Python is detected from `pyproject.toml`, `setup.py`, `setup.cfg`, or requirements files. Pytest is detected from a `tests/` directory, `pytest.ini`, `conftest.py`, or pytest configuration in `pyproject.toml`. Node metadata comes only from `package.json`; React/Vite are detected from dependencies/devDependencies and scripts.
+Python is detected from `pyproject.toml`, `setup.py`, `setup.cfg`, or requirements files. Pytest is detected only from explicit pytest config (`pytest.ini`, `conftest.py`, `setup.cfg`/`tox.ini`, or pytest config in `pyproject.toml`) or a declared pytest dependency in supported Python dependency metadata. A `tests/` directory alone is not treated as proof of pytest. Node metadata comes only from `package.json`; React/Vite are detected from dependencies/devDependencies and scripts.
 
 ## Built-in checks
 Checks are plain `ProjectProtectionConfig` records, so no second execution engine is introduced.

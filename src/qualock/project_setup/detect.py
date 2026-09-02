@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import json
 import tomllib
 from pathlib import Path
@@ -18,7 +19,7 @@ def _load_pyproject(root: Path) -> dict[str, object]:
         return {}
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return {}
     return raw if isinstance(raw, dict) else {}
 
@@ -29,9 +30,92 @@ def _load_package_json(root: Path) -> dict[str, object] | None:
         return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return raw if isinstance(raw, dict) else None
+
+
+def _dependency_string_is_pytest(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized == "pytest" or normalized.startswith((
+        "pytest[",
+        "pytest<",
+        "pytest>",
+        "pytest=",
+        "pytest!",
+        "pytest~",
+        "pytest ",
+        "pytest;",
+    ))
+
+
+def _dependency_list_mentions_pytest(value: object) -> bool:
+    return isinstance(value, list) and any(_dependency_string_is_pytest(item) for item in value)
+
+
+def _mapping_has_pytest_key(value: object) -> bool:
+    return isinstance(value, dict) and any(str(key).lower() == "pytest" for key in value)
+
+
+def _pyproject_mentions_pytest(pyproject: dict[str, object]) -> bool:
+    project = pyproject.get("project")
+    if isinstance(project, dict):
+        if _dependency_list_mentions_pytest(project.get("dependencies")):
+            return True
+        optional = project.get("optional-dependencies")
+        if isinstance(optional, dict) and any(
+            _dependency_list_mentions_pytest(group) for group in optional.values()
+        ):
+            return True
+
+    dependency_groups = pyproject.get("dependency-groups")
+    if isinstance(dependency_groups, dict) and any(
+        _dependency_list_mentions_pytest(group) for group in dependency_groups.values()
+    ):
+        return True
+
+    tool = pyproject.get("tool")
+    poetry = tool.get("poetry") if isinstance(tool, dict) else None
+    if isinstance(poetry, dict):
+        if _mapping_has_pytest_key(poetry.get("dependencies")):
+            return True
+        if _mapping_has_pytest_key(poetry.get("dev-dependencies")):
+            return True
+        groups = poetry.get("group")
+        if isinstance(groups, dict):
+            for group in groups.values():
+                if isinstance(group, dict) and _mapping_has_pytest_key(group.get("dependencies")):
+                    return True
+    return False
+
+
+def _requirements_mention_pytest(root: Path) -> bool:
+    for path in root.glob("requirements*.txt"):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if any(_dependency_string_is_pytest(line.split("#", 1)[0]) for line in lines):
+            return True
+    return False
+
+
+def _ini_mentions_pytest(root: Path) -> bool:
+    for filename, section in (("setup.cfg", "tool:pytest"), ("tox.ini", "pytest")):
+        path = root / filename
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read_string(text)
+        except (OSError, UnicodeDecodeError, configparser.Error):
+            continue
+        if parser.has_section(section):
+            return True
+    return False
 
 
 def detect_project(root: Path) -> ProjectCapabilities:
@@ -46,7 +130,12 @@ def detect_project(root: Path) -> ProjectCapabilities:
         or (root / "conftest.py").is_file()
         or isinstance(pytest_config, dict)
     )
-    pytest = explicit_pytest or (python and (root / "tests").is_dir())
+    pytest = (
+        explicit_pytest
+        or _pyproject_mentions_pytest(pyproject)
+        or _requirements_mention_pytest(root)
+        or _ini_mentions_pytest(root)
+    )
 
     python_targets = tuple(name for name in PYTHON_TARGETS if (root / name).is_dir())
     if python and not python_targets:

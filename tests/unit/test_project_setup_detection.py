@@ -56,7 +56,7 @@ def test_recommended_python_pack_is_deterministic(tmp_path: Path) -> None:
     init_git(tmp_path)
     (tmp_path / "src").mkdir()
     (tmp_path / "tests").mkdir()
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\ndependencies=['pytest>=8']\n", encoding="utf-8")
     capabilities = detect_project(tmp_path)
 
     first = recommend_protections(capabilities, ProtectionLevel.RECOMMENDED)
@@ -69,7 +69,7 @@ def test_recommended_python_pack_is_deterministic(tmp_path: Path) -> None:
 def test_minimal_selects_single_highest_signal_check(tmp_path: Path) -> None:
     init_git(tmp_path)
     (tmp_path / "tests").mkdir()
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\ndependencies=['pytest>=8']\n", encoding="utf-8")
 
     protections = recommend_protections(detect_project(tmp_path), ProtectionLevel.MINIMAL)
 
@@ -180,3 +180,74 @@ def test_valid_empty_package_json_still_detects_node(tmp_path: Path) -> None:
 
     assert capabilities.node is True
     assert "Node/npm" in capabilities.labels
+
+
+def test_python_tests_directory_without_pytest_signal_does_not_detect_pytest(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='demo'\n",
+        encoding="utf-8",
+    )
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.python is True
+    assert capabilities.pytest is False
+    assert "pytest" not in {
+        item.id
+        for item in recommend_protections(capabilities, ProtectionLevel.RECOMMENDED)
+    }
+
+
+def test_requirements_dependency_detects_pytest(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "requirements-dev.txt").write_text('pytest>=8\n', encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.python is True
+    assert capabilities.pytest is True
+
+
+def test_invalid_utf8_metadata_does_not_crash_detection(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "pyproject.toml").write_bytes(bytes([255]))
+    (tmp_path / "package.json").write_bytes(bytes([255]))
+    (tmp_path / "requirements-dev.txt").write_bytes(bytes([255]))
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.python is True
+    assert capabilities.pytest is False
+    assert capabilities.node is False
+
+
+def test_setup_cfg_pytest_section_is_detected(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "setup.cfg").write_text("[tool:pytest]\naddopts = -q\n", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.pytest is True
+
+
+def test_tox_ini_pytest_section_is_detected(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    (tmp_path / "tox.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.pytest is True
+
+
+def test_poetry_legacy_dev_dependency_detects_pytest(tmp_path: Path) -> None:
+    init_git(tmp_path)
+    payload = "[tool.poetry]\nname='demo'\n[tool.poetry.dev-dependencies]\npytest='^8'\n"
+    (tmp_path / "pyproject.toml").write_text(payload, encoding="utf-8")
+
+    capabilities = detect_project(tmp_path)
+
+    assert capabilities.python is True
+    assert capabilities.pytest is True
