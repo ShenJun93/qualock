@@ -62,7 +62,7 @@ class CodexResolver:
             )
         return package
 
-    def _resolve_latest(self) -> str:
+    def latest_version(self) -> str:
         result = run_process(
             [self.npm_executable, "view", "@openai/codex", "version"],
             timeout_seconds=30,
@@ -75,7 +75,7 @@ class CodexResolver:
         return version
 
     def resolve(self, requested_version: str) -> AgentBinary:
-        version = self._resolve_latest() if requested_version == "latest" else requested_version
+        version = self.latest_version() if requested_version == "latest" else requested_version
         if not _VERSION_RE.match(version):
             raise CodexResolveError(f"invalid Codex version: {version!r}")
 

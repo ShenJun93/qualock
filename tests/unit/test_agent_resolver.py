@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from qualock.agents.resolver import CodexResolver
+import pytest
+
+from qualock.agents.resolver import CodexResolveError, CodexResolver
+from qualock.run.process import ProcessResult
 
 
 def make_fake_npm(path: Path) -> Path:
@@ -58,6 +61,64 @@ def test_latest_is_resolved_to_exact_version_before_install(tmp_path: Path) -> N
     binary = resolver.resolve("latest")
     assert binary.version == "0.151.0"
     assert "0.151.0" in binary.path.parts
+
+
+def test_latest_version_queries_metadata_without_install_or_cache(tmp_path: Path) -> None:
+    npm = make_fake_npm(tmp_path / "npm")
+    cache = tmp_path / "cache"
+    resolver = CodexResolver(cache, npm_executable=str(npm), machine="x86_64")
+
+    assert resolver.latest_version() == "0.151.0"
+    assert not cache.exists()
+
+
+def test_latest_version_rejects_malformed_registry_output(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "qualock.agents.resolver.run_process",
+        lambda *args, **kwargs: ProcessResult(0, "not-a-version\n", "", 0.01, False),
+    )
+    resolver = CodexResolver(tmp_path / "cache", machine="x86_64")
+
+    with pytest.raises(CodexResolveError, match="unexpected Codex version"):
+        resolver.latest_version()
+
+
+def test_latest_version_rejects_registry_timeout(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "qualock.agents.resolver.run_process",
+        lambda *args, **kwargs: ProcessResult(None, "", "registry timeout", 30.0, True),
+    )
+    resolver = CodexResolver(tmp_path / "cache", machine="x86_64")
+
+    with pytest.raises(CodexResolveError, match="registry timeout"):
+        resolver.latest_version()
+
+
+def test_latest_version_rejects_registry_nonzero(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "qualock.agents.resolver.run_process",
+        lambda *args, **kwargs: ProcessResult(1, "", "registry failed", 0.02, False),
+    )
+    resolver = CodexResolver(tmp_path / "cache", machine="x86_64")
+
+    with pytest.raises(CodexResolveError, match="registry failed"):
+        resolver.latest_version()
+
+
+def test_resolve_latest_delegates_to_public_latest_version(tmp_path: Path, monkeypatch) -> None:
+    npm = make_fake_npm(tmp_path / "npm")
+    resolver = CodexResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        resolver,
+        "latest_version",
+        lambda: calls.append("latest") or "0.151.0",
+    )
+
+    binary = resolver.resolve("latest")
+
+    assert calls == ["latest"]
+    assert binary.version == "0.151.0"
 
 
 def test_existing_cached_native_binary_is_reused_without_npm(tmp_path: Path) -> None:
