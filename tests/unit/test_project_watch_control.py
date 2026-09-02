@@ -69,6 +69,30 @@ def test_freeze_authenticates_lock_and_hashes_raw_bytes(tmp_path: Path) -> None:
     assert_watch_control(tmp_path, identity, key_path=key_path)
 
 
+def test_freeze_authenticates_the_same_raw_bytes_it_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = _write(tmp_path, _lock())
+    key_path = _key_path(tmp_path)
+    valid_raw = lock_path.read_bytes()
+    lock_path.write_bytes(b"{not-json")
+    original_read_bytes = Path.read_bytes
+    swapped = False
+
+    def racing_read_bytes(path: Path) -> bytes:
+        nonlocal swapped
+        raw = original_read_bytes(path)
+        if path == lock_path and not swapped:
+            swapped = True
+            lock_path.write_bytes(valid_raw)
+        return raw
+
+    monkeypatch.setattr(Path, "read_bytes", racing_read_bytes)
+
+    with pytest.raises(ProjectLockIntegrityError, match="malformed"):
+        freeze_watch_control(tmp_path, key_path=key_path)
+
+
 def test_freeze_rejects_missing_key(tmp_path: Path) -> None:
     _write(tmp_path, _lock())
 

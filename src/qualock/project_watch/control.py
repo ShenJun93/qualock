@@ -5,7 +5,7 @@ import hmac
 from pathlib import Path
 
 from qualock.project import project_dir
-from qualock.project_protection.io import read_project_lock
+from qualock.project_protection.io import parse_project_lock_bytes
 from qualock.project_protection.signing import load_signing_key
 
 from .models import WatchControlIdentity
@@ -19,7 +19,7 @@ def _authenticated_raw_lock(root: Path, key_path: Path | None) -> bytes:
     lock_path = project_dir(root) / "project.lock"
     raw = lock_path.read_bytes()
     key = load_signing_key(key_path)
-    read_project_lock(lock_path, key)
+    parse_project_lock_bytes(raw, key)
     return raw
 
 
