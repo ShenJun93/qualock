@@ -49,6 +49,14 @@ def test_render_watch_event_has_plain_language_message(kind: WatchEventKind, tex
     assert text in render_watch_event(WatchEvent(kind=kind))
 
 
+def test_render_watch_event_falls_back_if_internal_message_mapping_is_missing(monkeypatch) -> None:
+    import qualock.project_watch.render as watch_render
+
+    monkeypatch.delitem(watch_render._MESSAGES, WatchEventKind.CHANGED)
+
+    assert watch_render.render_watch_event(WatchEvent(WatchEventKind.CHANGED)) == "Watch state changed.\n"
+
+
 def test_watch_cli_renders_authoritative_result_and_pass_exit(tmp_path: Path, monkeypatch) -> None:
     result = _result(ProtectionStatus.PASS)
 

@@ -21,4 +21,4 @@ _MESSAGES = {
 def render_watch_event(event: WatchEvent) -> str:
     if event.kind is WatchEventKind.RESULT:
         return ""
-    return _MESSAGES[event.kind] + "\n"
+    return _MESSAGES.get(event.kind, "Watch state changed.") + "\n"
