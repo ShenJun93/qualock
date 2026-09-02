@@ -5,10 +5,11 @@ from pathlib import Path
 
 from qualock.config.io import load_config
 from qualock.project import project_dir
-from qualock.project_setup.commands import build_setup_plan
+from qualock.project_protection.commands import execute_protect
+from qualock.project_setup.commands import apply_setup_plan, build_setup_plan
 from qualock.project_setup.models import ProtectionLevel
 
-from .models import StartPlan, StartProjectState
+from .models import StartBootstrapResult, StartPlan, StartProjectState
 
 
 class StartStateError(ValueError):
@@ -71,3 +72,29 @@ def assert_bootstrap_lock_absent(root: Path) -> None:
             "QuaLock project protection state changed while preparing this session. "
             "Run qualock start again."
         )
+
+
+def apply_start_bootstrap(
+    root: Path,
+    plan: StartPlan,
+    *,
+    key_path: Path | None = None,
+) -> StartBootstrapResult:
+    if plan.state is StartProjectState.LOCKED:
+        return StartBootstrapResult(protect_result=None, bootstrap_performed=False)
+
+    assert_bootstrap_lock_absent(root)
+
+    if plan.state is StartProjectState.CONFIGURED_UNLOCKED:
+        result = execute_protect(root, key_path=key_path)
+    elif plan.state is StartProjectState.UNCONFIGURED:
+        if plan.setup_plan is None:
+            raise ValueError("unconfigured start plan is missing setup plan")
+        result = apply_setup_plan(root, plan.setup_plan, key_path=key_path)
+    else:
+        raise ValueError(f"unsupported start state: {plan.state}")
+
+    return StartBootstrapResult(
+        protect_result=result,
+        bootstrap_performed=True,
+    )
