@@ -189,8 +189,9 @@ def test_install_uses_xdg_unit_root_atomic_files_and_exact_calls(
 
 
 def test_default_unit_root_is_home_config(
-    registration: ScheduleRegistration, tmp_path: Path
+    registration: ScheduleRegistration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     backend = SystemdUserBackend(
         process_runner=successful_run,
         which=lambda name: name,
@@ -205,6 +206,22 @@ def test_default_unit_root_is_home_config(
         / "user"
         / registration.native_id
     ).is_file()
+
+
+def test_default_unit_root_honors_xdg_config_home(
+    registration: ScheduleRegistration,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    xdg = tmp_path / "ambient-xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    backend = SystemdUserBackend(
+        process_runner=successful_run,
+        which=lambda name: name,
+        home=tmp_path / "home",
+    )
+    backend.install(registration)
+    assert (xdg / "systemd" / "user" / registration.native_id).is_file()
 
 
 def test_matching_timer_requires_enabled_and_active(
