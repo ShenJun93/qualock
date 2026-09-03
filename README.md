@@ -175,6 +175,31 @@ whether the last monitor run passed.
 Disable the schedule before moving or copying a project. Project identity is
 path-derived, and V1 does not migrate orphan schedules.
 
+### Find the first bad release
+
+If a later stable Codex release regressed your protected behavior but you do not know
+exactly which version, scan forward from the current baseline:
+
+```bash
+qualock bisect codex@0.160.0
+```
+
+The upper bound must be an exact published stable `X.Y.Z` version. Coding-agent quality
+is not assumed to regress monotonically across releases, so V1 scans forward through
+every published stable version between the baseline and the upper bound instead of
+assuming the false monotonic-regression pattern a binary search would require.
+
+Each candidate runs a normal contemporaneous baseline-vs-candidate check, identical to
+`qualock check`. `PASS` continues the scan; `BLOCK` is reported as the first confirmed
+bad release and stops the scan; `WARN` or `INCOMPLETE` stop the scan unresolved and make
+no first-bad claim, because QuaLock cannot prove a later `BLOCK` is really first once an
+earlier result is inconclusive. Because every candidate reruns the full qualification,
+cost can be high across a wide version range.
+
+`.qualock/results/bisect-.../summary.json` is the orchestration provenance for a bisect
+run: it records the frozen candidate list and links every completed version to its
+normal qualification id.
+
 View the latest local report:
 
 ```bash

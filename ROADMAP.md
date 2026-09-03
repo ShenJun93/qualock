@@ -8,10 +8,10 @@
 - Local PASS/WARN/BLOCK/INCOMPLETE verdicts.
 - Native per-user daily release monitoring.
 - Publish one reproducible real-world upgrade regression or meaningful behavioral difference.
+- Forward version scan for the first confirmed bad stable coding-agent release.
 
 ## Next, only after v0.1 validation
 
-- Version bisect for the first bad coding-agent release.
 - GitHub pull-request qualification reports.
 - Additional coding-agent adapters.
 - Smarter canary selection and cost controls.
