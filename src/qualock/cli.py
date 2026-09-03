@@ -1,3 +1,4 @@
+import os
 import shutil
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
@@ -17,6 +18,21 @@ from qualock.commands import (
     execute_check,
 )
 from qualock.config.io import ConfigError, write_default_config
+from qualock.github_pr.commands import prepare_pr, qualify_prepared_pr
+from qualock.github_pr.publisher import (
+    GitHubPublishError,
+    HttpxGitHubPublisher,
+    publish_pr_report,
+)
+from qualock.github_pr.report import (
+    PrArtifactError,
+    read_context,
+    read_report,
+    write_context,
+    write_report,
+)
+from qualock.github_pr.setup import GitHubSetupConflictError, install_github_workflows
+from qualock.github_pr.source import HttpxGitHubPrSource, PrContextError
 from qualock.project import load_project, project_dir
 from qualock.project_protection.commands import (
     ProjectProtectionConfigError,
@@ -74,6 +90,8 @@ from qualock.version_bisect.models import BisectOutcome, BisectStep, BisectStop
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 schedule_app = typer.Typer(no_args_is_help=True, add_completion=False)
 app.add_typer(schedule_app, name="schedule")
+github_app = typer.Typer(no_args_is_help=True, add_completion=False)
+app.add_typer(github_app, name="github")
 console = Console()
 
 
@@ -649,6 +667,157 @@ def report_command() -> None:
         raise typer.Exit(1)
     latest = max(candidates, key=lambda path: path.stat().st_mtime_ns)
     console.print((latest / "report.md").read_text(encoding="utf-8"), end="")
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise CommandError(f"required workflow environment is missing: {name}")
+    return value
+
+
+def _trusted_canary_display_names(root: Path) -> dict[str, str]:
+    try:
+        _config, canaries = load_project(root)
+    except (ConfigError, CanaryLoadError, FileNotFoundError):
+        return {}
+    return {canary.id: canary.name for canary in canaries}
+
+
+@github_app.command("setup")
+def github_setup_command() -> None:
+    root = Path.cwd()
+    try:
+        outcome = install_github_workflows(root)
+    except GitHubSetupConflictError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+
+    console.print(f"Producer workflow: {outcome.producer_path}", markup=False, soft_wrap=True)
+    console.print(f"Reporter workflow: {outcome.reporter_path}", markup=False, soft_wrap=True)
+    console.print(
+        "\nCommit these workflow files to your repository, then create a repository "
+        "secret named QUALOCK_CODEX_AUTH_B64 containing your base64-encoded Codex "
+        "auth.json. You can produce it with:\n",
+        markup=False,
+        soft_wrap=True,
+    )
+    console.print(
+        "python -c \"import base64,pathlib; "
+        "p=pathlib.Path.home()/'.codex/auth.json'; "
+        "print(base64.b64encode(p.read_bytes()).decode())\"",
+        markup=False,
+        soft_wrap=True,
+    )
+    console.print(
+        "\nQualification results are published to the `qualock/pr` status check. "
+        "You may optionally configure branch protection to require it before merging.",
+        markup=False,
+        soft_wrap=True,
+    )
+
+
+@github_app.command("prepare-pr", hidden=True)
+def github_prepare_pr_command(
+    event: Annotated[Path, typer.Option("--event")],
+    context_out: Annotated[Path, typer.Option("--context-out")],
+    report_out: Annotated[Path, typer.Option("--report-out")],
+    proposed_lock_out: Annotated[Path, typer.Option("--proposed-lock-out")],
+) -> None:
+    try:
+        token = _required_env("GITHUB_TOKEN")
+        run_id_raw = _required_env("GITHUB_RUN_ID")
+        repository = _required_env("GITHUB_REPOSITORY")
+        run_id = int(run_id_raw)
+    except CommandError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except ValueError as exc:
+        console.print("GITHUB_RUN_ID must be an integer", markup=False)
+        raise typer.Exit(3) from exc
+
+    source = HttpxGitHubPrSource(token=token)
+    try:
+        outcome = prepare_pr(
+            Path.cwd(),
+            event,
+            source=source,
+            producer_run_id=run_id,
+            expected_repository=repository,
+        )
+        write_context(context_out, outcome.context)
+        if outcome.terminal_report is not None:
+            write_report(report_out, outcome.terminal_report)
+        if outcome.proposed_lock is not None:
+            proposed_lock_out.write_bytes(outcome.proposed_lock)
+    except (PrContextError, PrArtifactError, OSError) as exc:
+        del exc
+        console.print("GitHub PR context could not be established", markup=False)
+        raise typer.Exit(1) from None
+
+    console.print(outcome.context.classification.value, markup=False)
+
+
+def _read_bounded_file(path: Path, *, max_bytes: int) -> bytes:
+    if path.stat().st_size > max_bytes:
+        raise CommandError(f"workflow input is too large: {path.name}")
+    return path.read_bytes()
+
+
+@github_app.command("qualify-pr", hidden=True)
+def github_qualify_pr_command(
+    context: Annotated[Path, typer.Option("--context")],
+    proposed_lock: Annotated[Path, typer.Option("--proposed-lock")],
+    report_out: Annotated[Path, typer.Option("--report-out")],
+    credential_available: Annotated[str, typer.Option("--credential-available")],
+) -> None:
+    if credential_available not in {"true", "false"}:
+        console.print("--credential-available must be true or false", markup=False)
+        raise typer.Exit(3)
+
+    try:
+        result = qualify_prepared_pr(
+            Path.cwd(),
+            read_context(context),
+            _read_bounded_file(proposed_lock, max_bytes=131_072),
+            credential_available=credential_available == "true",
+        )
+        write_report(report_out, result)
+    except (PrArtifactError, CommandError, OSError) as exc:
+        del exc
+        console.print("GitHub PR qualification artifacts could not be processed", markup=False)
+        raise typer.Exit(1) from None
+
+
+@github_app.command("report-pr", hidden=True)
+def github_report_pr_command(
+    event: Annotated[Path, typer.Option("--event")],
+    context: Annotated[Path, typer.Option("--context")],
+    report: Annotated[Path, typer.Option("--report")],
+) -> None:
+    try:
+        token = _required_env("GITHUB_TOKEN")
+        repository = _required_env("GITHUB_REPOSITORY")
+    except CommandError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+
+    publisher = HttpxGitHubPublisher(token=token)
+    try:
+        context_model = read_context(context)
+        report_model = read_report(report) if report.is_file() else None
+        publish_pr_report(
+            event,
+            context_model,
+            report_model,
+            publisher=publisher,
+            display_names=_trusted_canary_display_names(Path.cwd()),
+            expected_repository=repository,
+        )
+    except (PrArtifactError, GitHubPublishError, OSError) as exc:
+        del exc
+        console.print("GitHub PR report could not be published", markup=False)
+        raise typer.Exit(1) from None
 
 
 if __name__ == "__main__":
