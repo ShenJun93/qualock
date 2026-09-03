@@ -206,6 +206,61 @@ View the latest local report:
 qualock report
 ```
 
+## Qualify GitHub pull requests
+
+Adopt automated qualification for Codex upgrade PRs:
+
+```bash
+qualock github setup
+```
+
+`qualock github setup` only writes `.github/workflows/qualock-pr.yml` and
+`.github/workflows/qualock-pr-report.yml` into the current project and prints
+setup instructions. It does not push, create a repository secret, or change
+any repository setting. Adoption is five steps, in order:
+
+1. run `qualock github setup` locally;
+2. review and commit the generated `.github/workflows/qualock-pr.yml` and
+   `.github/workflows/qualock-pr-report.yml`;
+3. create a repository secret named `QUALOCK_CODEX_AUTH_B64` containing the
+   base64-encoded contents of your local `~/.codex/auth.json`;
+4. optionally require the `qualock/pr` status check in branch protection or a
+   repository ruleset;
+5. propose future Codex upgrades as a pull request whose only changed path is
+   `.qualock/baseline.lock`.
+
+Once adopted, every pull request gets a `qualock/pr` status check:
+
+- an ordinary PR that does not touch `.qualock/baseline.lock` gets a
+  `qualock/pr` success status, no comment, and costs no agent qualification
+  run;
+- a PR that changes only `.qualock/baseline.lock` runs the normal
+  baseline-vs-candidate qualification with Codex and gets a sticky PR comment
+  with the verdict, per-canary results, and a link to the run;
+- a PR that changes `.qualock/baseline.lock` plus any other file is rejected
+  with an `INCOMPLETE`/`error` status asking for a dedicated upgrade PR,
+  because QuaLock only trusts a proposed baseline lock when it is the sole
+  change under review;
+- qualification `PASS` reports a `qualock/pr` success status, `WARN` or
+  `BLOCK` report a failure status, and `INCOMPLETE` (including a missing or
+  unavailable Codex credential) reports an error status.
+
+The generated qualification workflow is safe only because it checks out
+trusted base code and treats the PR head as data. Do not modify it to check
+out or execute PR-controlled code while model credentials are available.
+
+This feature does not qualify arbitrary code changes in a PR, does not merge
+or approve anything automatically, and does not mutate `.qualock/baseline.lock`
+itself; a human must open the upgrade PR from a locally produced lock. It
+targets GitHub-hosted runners triggered from this repository's own workflows,
+not a GitHub App or third-party hosting. It qualifies exact stable Codex
+releases only, not prereleases. Raw agent transcripts are never uploaded;
+only the structured PR context and qualification report artifacts are
+produced, and the sticky comment/status check are the only externally visible
+output. Running the qualification agent on GitHub-hosted runners still costs
+compute and, if applicable, Codex usage, same as running `qualock check`
+locally.
+
 ## Protect a project from AI edits
 
 The simplest foreground safe-session path is one command:
