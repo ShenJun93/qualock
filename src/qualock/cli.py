@@ -7,6 +7,7 @@ from packaging.version import Version
 from pydantic import ValidationError
 from rich.console import Console
 
+from qualock.agents.resolver import CodexResolveError
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock
 from qualock.canary.loader import CanaryLoadError
 from qualock.commands import (
@@ -67,6 +68,8 @@ from qualock.scheduler.commands import (
     enable_schedule,
     schedule_status,
 )
+from qualock.version_bisect.commands import execute_bisect
+from qualock.version_bisect.models import BisectOutcome, BisectStep, BisectStop
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 schedule_app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -255,6 +258,70 @@ def monitor_command(
         raise typer.Exit(2)
     if result.verdict is Verdict.INCOMPLETE:
         raise typer.Exit(4)
+
+
+def _print_bisect_start(baseline: str, upper: str, run_dir: Path) -> None:
+    del run_dir
+    console.print(f"Baseline: Codex {baseline}", markup=False)
+    console.print(f"Searching through: {upper}\n", markup=False)
+
+
+def _print_bisect_step(step: BisectStep) -> None:
+    console.print(f"{step.version}  {step.verdict.value.upper()}", markup=False)
+
+
+def _render_bisect_terminal(outcome: BisectOutcome) -> None:
+    evidence_path = f".qualock/results/{outcome.bisect_id}/"
+    if outcome.stop_reason is BisectStop.FIRST_BAD_FOUND:
+        assert outcome.first_bad is not None
+        console.print("FIRST BAD RELEASE", markup=False)
+        console.print(f"Codex {outcome.first_bad}", markup=False)
+        console.print(f"Last known good: Codex {outcome.last_known_good}", markup=False)
+        console.print(f"Evidence: {evidence_path}", markup=False)
+        raise typer.Exit(2)
+
+    if outcome.stop_reason is BisectStop.NO_BAD_FOUND:
+        console.print(
+            f"No confirmed bad release found through Codex {outcome.upper_version}.",
+            markup=False,
+        )
+        console.print(f"Last known good: Codex {outcome.last_known_good}", markup=False)
+        console.print(f"Evidence: {evidence_path}", markup=False)
+        return
+
+    last_step = outcome.steps[-1]
+    console.print("SEARCH STOPPED", markup=False)
+    console.print(f"{last_step.version}  {last_step.verdict.value.upper()}", markup=False)
+    console.print("No first bad release was claimed.", markup=False)
+    console.print(f"Evidence: {evidence_path}", markup=False)
+    raise typer.Exit(4)
+
+
+@app.command("bisect")
+def bisect_command(upper: str) -> None:
+    root = Path.cwd()
+    console.print("QuaLock Version Bisect\n", end="", markup=False)
+    try:
+        outcome = execute_bisect(
+            root,
+            upper,
+            on_start=_print_bisect_start,
+            on_step=_print_bisect_step,
+        )
+    except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except BaselineStaleError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(4) from exc
+    except CodexResolveError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
+    _render_bisect_terminal(outcome)
 
 
 def _render_schedule_outcome(
