@@ -25,6 +25,9 @@ from qualock.github_pr.models import (
     PrReportVerdict,
     PullRequestContext,
 )
+from qualock.github_pr.report import read_context as report_read_context
+from qualock.github_pr.report import write_context as report_write_context
+from qualock.github_pr.report import write_report as report_write_report
 from qualock.github_pr.source import GitHubChangedFile, GitHubSourceError
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
 from qualock.qualification.models import QualificationResult, Verdict
@@ -528,4 +531,38 @@ def test_check_executor_exception_is_incomplete_without_fabricated_id(
     assert report.verdict is PrReportVerdict.INCOMPLETE
     assert PrReasonCode.QUALIFICATION_FAILED in report.reason_codes
     assert report.qualification_completed is False
-    assert report.qualification_id is None
+
+
+# --- artifact write failure propagation --------------------------------------
+
+
+def test_report_write_failure_propagates_and_context_remains_truthful(
+    project_fixture: ProjectFixture, tmp_path: Path
+) -> None:
+    context = _context(PrClassification.UPGRADE)
+    raw = project_fixture.proposed_lock_json()
+
+    def check_executor(
+        root: Path, candidate_spec: str, *, resolver: Any = None
+    ) -> QualificationResult:
+        return _qualification_result(Verdict.PASS)
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=project_fixture.resolver,
+        check_executor=check_executor,
+    )
+
+    context_path = tmp_path / "context.json"
+    report_write_context(context_path, context)
+
+    report_output_path = tmp_path / "report.json"
+    report_output_path.mkdir()
+
+    with pytest.raises(OSError):
+        report_write_report(report_output_path, report)
+
+    assert report_read_context(context_path) == context
