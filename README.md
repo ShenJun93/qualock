@@ -146,7 +146,34 @@ The monitor:
 - `--force` reruns only a matching newer candidate and never bypasses stale baseline checks;
 - treats user-state corruption or deletion conservatively by checking again, never by falsely trusting state.
 
-This command is one-shot. Automatic scheduling is intentionally Batch #27.
+Enable native per-user daily release monitoring, optionally at a different local
+wall-clock time, inspect its native trigger health, or disable it:
+
+```bash
+qualock schedule enable
+qualock schedule enable --at 08:30
+qualock schedule status
+qualock schedule disable
+```
+
+The default is 09:00 local wall-clock time. Windows uses the current-user Task
+Scheduler, Linux uses `systemd --user`, and macOS uses a LaunchAgent. This needs
+no admin/root access and uses no QuaLock daemon, cron fallback, shell wrapper,
+LaunchDaemon, or arbitrary scheduled command. The OS trigger starts only the
+fixed QuaLock runner, and that runner only executes `qualock monitor`. It never
+updates Codex or changes or rebuilds the baseline.
+
+Only `PATH` is captured for sparse scheduler environments; credentials and other
+environment variables are not persisted. Logs live under the per-user
+release-scheduler state path and are retained after disable. Windows and macOS
+depend on an available user session. Linux depends on the per-user systemd
+manager, and QuaLock does not enable lingering. Native DST and catch-up behavior
+is authoritative: execution while powered off is not promised, and QuaLock adds
+no second retry scheduler. `status` reports only native trigger health, not
+whether the last monitor run passed.
+
+Disable the schedule before moving or copying a project. Project identity is
+path-derived, and V1 does not migrate orphan schedules.
 
 View the latest local report:
 
