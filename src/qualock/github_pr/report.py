@@ -14,7 +14,8 @@ from qualock.github_pr.models import (
 )
 from qualock.qualification.models import CanaryExecution, QualificationResult, Verdict
 
-DEFAULT_CONTEXT_MAX_BYTES = 131_072
+# Bounds a worst-case 3000-path x 4096-char context plus JSON overhead, with margin.
+DEFAULT_CONTEXT_MAX_BYTES = 16 * 1024 * 1024
 DEFAULT_REPORT_MAX_BYTES = 262_144
 
 

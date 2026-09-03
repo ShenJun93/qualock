@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +35,9 @@ class PrReasonCode(str, Enum):
 
 _SHA_PATTERN = r"^[0-9a-f]{40}$"
 _REPOSITORY_PATTERN = r"^[^/\s]+/[^/\s]+$"
+_MAX_CHANGED_PATHS = 3000
+_MAX_CHANGED_PATH_LENGTH = 4096
+_ChangedPath = Annotated[str, Field(max_length=_MAX_CHANGED_PATH_LENGTH)]
 
 
 class PrCanarySummary(BaseModel):
@@ -57,7 +60,7 @@ class PullRequestContext(BaseModel):
     base_sha: str = Field(pattern=_SHA_PATTERN)
     head_sha: str = Field(pattern=_SHA_PATTERN)
     producer_run_id: int = Field(gt=0)
-    changed_paths: tuple[str, ...]
+    changed_paths: Annotated[tuple[_ChangedPath, ...], Field(max_length=_MAX_CHANGED_PATHS)]
     classification: PrClassification
 
 

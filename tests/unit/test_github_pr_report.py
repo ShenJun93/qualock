@@ -161,6 +161,21 @@ def test_write_and_read_report_round_trip_atomically(tmp_path: Path) -> None:
     assert loaded == report
 
 
+def test_write_and_read_large_context_round_trip_with_default_bounds(
+    tmp_path: Path,
+) -> None:
+    base = valid_context().model_dump()
+    large_changed_paths = tuple(f"{'a' * 4089}/{i:06d}" for i in range(3000))
+    context = PullRequestContext.model_validate(
+        {**base, "changed_paths": large_changed_paths}
+    )
+    path = tmp_path / "pr-context.json"
+    write_context(path, context)
+    assert path.stat().st_size > 128 * 1024
+    loaded = read_context(path)
+    assert loaded == context
+
+
 def test_read_context_rejects_oversized_artifact(tmp_path: Path) -> None:
     path = tmp_path / "pr-context.json"
     path.write_text("x" * 200_000, encoding="utf-8")
