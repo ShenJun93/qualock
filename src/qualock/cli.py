@@ -805,7 +805,10 @@ def github_report_pr_command(
     publisher = HttpxGitHubPublisher(token=token)
     try:
         context_model = read_context(context)
-        report_model = read_report(report) if report.is_file() else None
+        try:
+            report_model = read_report(report) if report.is_file() else None
+        except PrArtifactError:
+            report_model = None
         publish_pr_report(
             event,
             context_model,
