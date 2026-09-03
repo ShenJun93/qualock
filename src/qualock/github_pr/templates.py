@@ -67,9 +67,10 @@ jobs:
           QUALOCK_CODEX_AUTH_B64: ${{{{ secrets.QUALOCK_CODEX_AUTH_B64 }}}}
         run: |
           set +x
-          mkdir -p "$HOME/.codex"
+          install -d -m 700 "$HOME/.codex"
           if [ -n "$QUALOCK_CODEX_AUTH_B64" ]; then
             printf '%s' "$QUALOCK_CODEX_AUTH_B64" | base64 -d > "$HOME/.codex/auth.json"
+            chmod 600 "$HOME/.codex/auth.json"
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"

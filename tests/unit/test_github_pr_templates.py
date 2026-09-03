@@ -202,3 +202,21 @@ def test_reporter_report_download_allowed_to_fail() -> None:
 
 def test_reporter_has_no_credential_reference() -> None:
     assert "QUALOCK_CODEX_AUTH_B64" not in REPORTER_WORKFLOW
+
+
+def test_producer_credential_directory_created_with_restrictive_mode() -> None:
+    assert 'install -d -m 700 "$HOME/.codex"' in PRODUCER_WORKFLOW
+
+
+def test_producer_credential_file_chmod_restrictive_after_decode() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    credential_step = next(
+        step
+        for step in _steps(doc)
+        if isinstance(step.get("run"), str) and "QUALOCK_CODEX_AUTH_B64" in step["run"]
+    )
+    run_script = credential_step["run"]
+    decode_index = run_script.index("base64 -d")
+    chmod_index = run_script.index('chmod 600 "$HOME/.codex/auth.json"')
+    assert chmod_index > decode_index
