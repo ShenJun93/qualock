@@ -1,7 +1,7 @@
 # Native Release Monitor Scheduler — Design
 
-**Status:** Approved design for Batch #27  
-**Date:** 2026-09-02  
+**Status:** Approved design for Batch #27
+**Date:** 2026-09-02
 **Base:** `964ee25` (`feat: add one-shot Codex release monitoring (#27)`)
 
 ## 1. Goal
