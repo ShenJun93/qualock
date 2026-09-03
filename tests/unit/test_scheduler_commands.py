@@ -27,7 +27,7 @@ from qualock.scheduler.models import (
     ScheduleRegistration,
     native_id_for,
 )
-from qualock.scheduler.state import RegistrationLoad, RegistrationLoadKind
+from qualock.scheduler.state import FileRegistrationStore, RegistrationLoad, RegistrationLoadKind
 
 
 def existing_python(tmp_path: Path) -> Path:
@@ -75,6 +75,7 @@ class FakeBackend:
         self.install_error = install_error
         self.remove_error: SchedulerOperationalError | None = None
         self.installed: list[ScheduleRegistration] = []
+        self.inspect_expected: list[ScheduleRegistration | None] = []
         self.remove_calls = 0
 
     def probe(self) -> None:
@@ -92,6 +93,7 @@ class FakeBackend:
         expected: ScheduleRegistration | None,
     ) -> NativeScheduleInspection:
         self.events.append("inspect")
+        self.inspect_expected.append(expected)
         state = self.inspection_states.pop(0) if self.inspection_states else self.final_state
         return NativeScheduleInspection(state)
 
@@ -360,6 +362,29 @@ def test_enable_rollback_warns_when_native_remove_fails(tmp_path: Path) -> None:
     assert store.delete_calls == 1
 
 
+def test_enable_rollback_preserves_existing_runs_log(tmp_path: Path) -> None:
+    backend = FakeBackend([], install_error=SchedulerOperationalError("install failed"))
+    store = FileRegistrationStore(tmp_path / "state")
+    root = tmp_path / "project"
+    root.mkdir()
+    key = project_key(root.resolve())
+    log_path = store.log_path(key)
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("sentinel\n", encoding="utf-8")
+
+    with pytest.raises(SchedulerOperationalError, match="install failed"):
+        enable_schedule(
+            root,
+            backend=backend,
+            store=store,
+            executable=existing_python(tmp_path),
+            home=tmp_path,
+        )
+
+    assert not store.registration_path(key).exists()
+    assert log_path.read_text(encoding="utf-8") == "sentinel\n"
+
+
 @pytest.mark.parametrize(
     ("load_kind", "native_state", "expected"),
     [
@@ -417,6 +442,23 @@ def test_status_backend_mismatch_needs_repair(healthy_registration: ScheduleRegi
     store = MemoryRegistrationStore([])
     store.loaded = RegistrationLoad(RegistrationLoadKind.VALID, healthy_registration)
     assert schedule_status(healthy_registration.project_root, backend=backend, store=store).status is ScheduleStatus.NEEDS_REPAIR
+    assert backend.inspect_expected == [None]
+
+
+def test_status_missing_project_root_needs_repair(
+    healthy_registration: ScheduleRegistration,
+) -> None:
+    store = MemoryRegistrationStore([])
+    store.loaded = RegistrationLoad(RegistrationLoadKind.VALID, healthy_registration)
+    healthy_registration.project_root.rmdir()
+
+    outcome = schedule_status(
+        healthy_registration.project_root,
+        backend=FakeBackend([]),
+        store=store,
+    )
+
+    assert outcome.status is ScheduleStatus.NEEDS_REPAIR
 
 
 def test_status_and_disable_never_preflight(
@@ -435,6 +477,45 @@ def test_disable_order_is_probe_remove_delete(tmp_path: Path) -> None:
     outcome = disable_schedule(tmp_path, backend=FakeBackend(events), store=MemoryRegistrationStore(events))
     assert events == ["probe", "remove", "delete"]
     assert outcome.status is ScheduleStatus.DISABLED
+
+
+def test_disable_missing_project_root_removes_native_and_registration(
+    healthy_registration: ScheduleRegistration,
+) -> None:
+    events: list[str] = []
+    backend = FakeBackend(events)
+    store = MemoryRegistrationStore(events)
+    store.loaded = RegistrationLoad(RegistrationLoadKind.VALID, healthy_registration)
+    healthy_registration.project_root.rmdir()
+
+    outcome = disable_schedule(
+        healthy_registration.project_root,
+        backend=backend,
+        store=store,
+    )
+
+    assert outcome.status is ScheduleStatus.DISABLED
+    assert events == ["probe", "remove", "delete"]
+    assert backend.remove_calls == 1
+    assert store.delete_calls == 1
+
+
+def test_disable_preserves_existing_runs_log(
+    healthy_registration: ScheduleRegistration, tmp_path: Path
+) -> None:
+    store = FileRegistrationStore(tmp_path / "state")
+    store.save(healthy_registration)
+    log_path = store.log_path(healthy_registration.project_key)
+    log_path.write_text("sentinel\n", encoding="utf-8")
+
+    disable_schedule(
+        healthy_registration.project_root,
+        backend=FakeBackend([]),
+        store=store,
+    )
+
+    assert not store.registration_path(healthy_registration.project_key).exists()
+    assert log_path.read_text(encoding="utf-8") == "sentinel\n"
 
 
 def test_disable_remove_failure_preserves_registration(tmp_path: Path) -> None:

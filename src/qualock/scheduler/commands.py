@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 
 from qualock.release_monitor.commands import monitor_preflight
+from qualock.release_monitor.state import project_key
 
 from .backends import (
     LaunchdAgentBackend,
@@ -20,9 +21,11 @@ from .backends import (
 )
 from .models import (
     NativeScheduleState,
+    ScheduleIdentity,
     SchedulerBackendKind,
     ScheduleRegistration,
     backend_label,
+    native_id_for,
     operationally_equal,
     parse_daily_time,
     schedule_identity,
@@ -52,6 +55,11 @@ class ScheduleOutcome:
 
 
 BackendFactory = Callable[[], SchedulerBackend]
+
+
+def _non_strict_identity(root: Path, kind: SchedulerBackendKind) -> ScheduleIdentity:
+    key = project_key(root)
+    return ScheduleIdentity(key, kind, native_id_for(kind, key))
 
 
 def default_backend_factories() -> Mapping[SchedulerBackendKind, BackendFactory]:
@@ -125,7 +133,7 @@ def _outcome(
     registration: ScheduleRegistration | None,
     detail: str | None = None,
 ) -> ScheduleOutcome:
-    identity = schedule_identity(root, backend.kind)
+    identity = _non_strict_identity(root, backend.kind)
     return ScheduleOutcome(
         status=status,
         project_root=root,
@@ -241,11 +249,11 @@ def schedule_status(
     backend: SchedulerBackend | None = None,
     store: RegistrationStore | None = None,
 ) -> ScheduleOutcome:
-    canonical_root = root.expanduser().resolve(strict=True)
+    canonical_root = root.expanduser().resolve(strict=False)
     active_backend = backend or select_backend()
     active_backend.probe()
     active_store = store or FileRegistrationStore()
-    identity = schedule_identity(canonical_root, active_backend.kind)
+    identity = _non_strict_identity(canonical_root, active_backend.kind)
     loaded = active_store.load(identity.project_key)
     registration = loaded.registration if loaded.kind is RegistrationLoadKind.VALID else None
     trusted_expected = (
@@ -299,11 +307,11 @@ def disable_schedule(
     backend: SchedulerBackend | None = None,
     store: RegistrationStore | None = None,
 ) -> ScheduleOutcome:
-    canonical_root = root.expanduser().resolve(strict=True)
+    canonical_root = root.expanduser().resolve(strict=False)
     active_backend = backend or select_backend()
     active_backend.probe()
     active_store = store or FileRegistrationStore()
-    identity = schedule_identity(canonical_root, active_backend.kind)
+    identity = _non_strict_identity(canonical_root, active_backend.kind)
     try:
         active_backend.remove(identity)
     except SchedulerOperationalError:
