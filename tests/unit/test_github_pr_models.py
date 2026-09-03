@@ -69,6 +69,34 @@ def test_context_rejects_invalid_repository_name_and_negative_ids() -> None:
         PullRequestContext.model_validate({**base, "base_sha": "not-hex-" + "a" * 32})
 
 
+def test_context_rejects_more_than_3000_changed_paths() -> None:
+    base = valid_context().model_dump()
+    with pytest.raises(ValidationError):
+        PullRequestContext.model_validate(
+            {**base, "changed_paths": tuple(f"path-{i}" for i in range(3001))}
+        )
+
+
+def test_context_accepts_exactly_3000_changed_paths() -> None:
+    base = valid_context().model_dump()
+    context = PullRequestContext.model_validate(
+        {**base, "changed_paths": tuple(f"path-{i}" for i in range(3000))}
+    )
+    assert len(context.changed_paths) == 3000
+
+
+def test_context_rejects_changed_path_longer_than_4096_characters() -> None:
+    base = valid_context().model_dump()
+    with pytest.raises(ValidationError):
+        PullRequestContext.model_validate({**base, "changed_paths": ("a" * 4097,)})
+
+
+def test_context_accepts_changed_path_exactly_4096_characters() -> None:
+    base = valid_context().model_dump()
+    context = PullRequestContext.model_validate({**base, "changed_paths": ("a" * 4096,)})
+    assert len(context.changed_paths[0]) == 4096
+
+
 def test_canary_summary_rejects_negative_counts_and_is_frozen() -> None:
     summary = PrCanarySummary(
         canary_id="canary-1",
