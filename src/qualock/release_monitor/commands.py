@@ -26,7 +26,7 @@ CheckExecutor = Callable[[Path, str], QualificationResult]
 
 
 @dataclass(frozen=True)
-class _MonitorContext:
+class MonitorPreflight:
     baseline_version: str
     baseline_sha256: str
 
@@ -35,13 +35,13 @@ def _default_release_source() -> ReleaseSource:
     return CodexResolver(Path(user_cache_dir("qualock")))
 
 
-def _prepare_context(root: Path) -> _MonitorContext:
+def monitor_preflight(root: Path) -> MonitorPreflight:
     config, canaries = load_project(root)
     lock = read_baseline_lock(project_dir(root) / "baseline.lock")
     assert_suite_fresh(lock, suite_fingerprint(canaries), config_fingerprint(config))
     if lock.agent.name != "codex":
         raise CommandError("release monitor supports only a Codex baseline")
-    return _MonitorContext(
+    return MonitorPreflight(
         baseline_version=lock.agent.version,
         baseline_sha256=baseline_sha256(lock),
     )
@@ -59,7 +59,7 @@ def execute_monitor(
     state_store: MonitorStateStore | None = None,
     check_executor: CheckExecutor = execute_check,
 ) -> MonitorOutcome:
-    context = _prepare_context(root)
+    context = monitor_preflight(root)
     source = release_source or _default_release_source()
     latest = source.latest_version()
     baseline_order = Version(context.baseline_version)

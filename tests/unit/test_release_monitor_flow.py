@@ -11,6 +11,7 @@ from qualock.commands import CommandError
 from qualock.qualification.models import QualificationResult, Verdict
 from qualock.release_monitor.commands import execute_monitor
 from qualock.release_monitor.models import MonitorAction, MonitorState, TerminalVerdict
+from qualock.release_monitor.state import baseline_sha256
 
 FRESH_SHA = "f" * 64
 
@@ -109,12 +110,13 @@ def test_non_codex_baseline_stops_before_release_or_state_lookup(
     monkeypatch.setattr("qualock.release_monitor.commands.read_baseline_lock", lambda path: baseline_lock("other"))
     monkeypatch.setattr("qualock.release_monitor.commands.assert_suite_fresh", lambda *args: None)
 
-    with pytest.raises(CommandError, match="release monitor supports only a Codex baseline"):
+    with pytest.raises(CommandError) as exc_info:
         execute_monitor(
             tmp_path,
             release_source=FailIfCalledReleaseSource(),
             state_store=FailIfCalledStateStore(),
         )
+    assert str(exc_info.value) == "release monitor supports only a Codex baseline"
 
 
 def test_missing_baseline_stops_before_release_or_state_lookup(
@@ -151,12 +153,56 @@ def patch_fresh_context(
 ) -> None:
     monkeypatch.setattr(
         monitor_commands,
-        "_prepare_context",
+        "monitor_preflight",
         lambda root: SimpleNamespace(
             baseline_version=baseline_version,
             baseline_sha256=FRESH_SHA,
         ),
     )
+
+
+def test_monitor_preflight_reuses_exact_freshness_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    lock = baseline_lock()
+    monkeypatch.setattr(
+        monitor_commands,
+        "load_project",
+        lambda root: events.append("load_project") or (object(), []),
+    )
+    monkeypatch.setattr(
+        monitor_commands,
+        "read_baseline_lock",
+        lambda path: events.append("read_baseline_lock") or lock,
+    )
+    monkeypatch.setattr(
+        monitor_commands,
+        "suite_fingerprint",
+        lambda canaries: events.append("suite_fingerprint") or "suite-now",
+    )
+    monkeypatch.setattr(
+        monitor_commands,
+        "config_fingerprint",
+        lambda config: events.append("config_fingerprint") or "config-now",
+    )
+    monkeypatch.setattr(
+        monitor_commands,
+        "assert_suite_fresh",
+        lambda *args: events.append("assert_suite_fresh"),
+    )
+
+    context = monitor_commands.monitor_preflight(tmp_path)
+
+    assert events == [
+        "load_project",
+        "read_baseline_lock",
+        "suite_fingerprint",
+        "config_fingerprint",
+        "assert_suite_fresh",
+    ]
+    assert context.baseline_version == lock.agent.version
+    assert context.baseline_sha256 == baseline_sha256(lock)
 
 
 def terminal_state(

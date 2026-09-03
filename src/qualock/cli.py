@@ -1,9 +1,10 @@
 import shutil
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal, NoReturn
 
 import typer
 from packaging.version import Version
+from pydantic import ValidationError
 from rich.console import Console
 
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock
@@ -55,8 +56,21 @@ from qualock.release_monitor.models import MonitorAction
 from qualock.report.render import render_safety_terminal, render_terminal
 from qualock.report.safety import build_safety_summary
 from qualock.run.docker import DockerRunner
+from qualock.scheduler.backends import (
+    SchedulerOperationalError,
+    SchedulerUnsupportedError,
+)
+from qualock.scheduler.commands import (
+    ScheduleOutcome,
+    ScheduleStatus,
+    disable_schedule,
+    enable_schedule,
+    schedule_status,
+)
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+schedule_app = typer.Typer(no_args_is_help=True, add_completion=False)
+app.add_typer(schedule_app, name="schedule")
 console = Console()
 
 
@@ -241,6 +255,115 @@ def monitor_command(
         raise typer.Exit(2)
     if result.verdict is Verdict.INCOMPLETE:
         raise typer.Exit(4)
+
+
+def _render_schedule_outcome(
+    outcome: ScheduleOutcome,
+    *,
+    mode: Literal["enable", "status", "disable"],
+) -> None:
+    lines = [
+        "QuaLock Release Schedule",
+        "",
+        outcome.status.value,
+        "",
+        f"Project: {outcome.project_root}",
+    ]
+    registration = outcome.registration
+    if mode == "enable" and registration is not None:
+        lines.append(
+            f"Runs: every day at {registration.hour:02d}:"
+            f"{registration.minute:02d} local time"
+        )
+    elif mode == "status" and registration is not None:
+        lines.append(
+            f"Daily time: {registration.hour:02d}:"
+            f"{registration.minute:02d} local time"
+        )
+    lines.append(f"Backend: {outcome.backend_label}")
+    if mode == "status" and registration is not None:
+        lines.append(f"Python: {registration.python_executable}")
+    lines.append(f"Logs: {outcome.log_path}")
+    if outcome.detail:
+        lines.extend(["", outcome.detail])
+    if outcome.status is ScheduleStatus.NEEDS_REPAIR:
+        lines.extend(
+            [
+                "",
+                (
+                    "Run `qualock schedule enable` to repair it or "
+                    "`qualock schedule disable` to remove it."
+                ),
+            ]
+        )
+    if mode == "enable":
+        lines.extend(
+            [
+                "",
+                "The scheduled job only runs `qualock monitor`.",
+                "It does not update Codex or change your baseline.",
+            ]
+        )
+    console.print("\n".join(lines) + "\n", end="", markup=False, soft_wrap=True)
+
+
+def _schedule_fail(error: Exception, code: int) -> NoReturn:
+    console.print(str(error), markup=False, soft_wrap=True)
+    raise typer.Exit(code)
+
+
+@schedule_app.command("enable")
+def schedule_enable_command(
+    at: Annotated[str, typer.Option("--at")] = "09:00",
+) -> None:
+    try:
+        outcome = enable_schedule(Path.cwd(), at)
+    except BaselineStaleError as exc:
+        _schedule_fail(exc, 4)
+    except SchedulerUnsupportedError as exc:
+        _schedule_fail(exc, 3)
+    except (
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        ValidationError,
+        ValueError,
+    ) as exc:
+        _schedule_fail(exc, 3)
+    except SchedulerOperationalError as exc:
+        _schedule_fail(exc, 1)
+    except Exception as exc:  # noqa: BLE001 - unexpected scheduler failures are operational
+        _schedule_fail(exc, 1)
+    _render_schedule_outcome(outcome, mode="enable")
+
+
+@schedule_app.command("status")
+def schedule_status_command() -> None:
+    try:
+        outcome = schedule_status(Path.cwd())
+    except SchedulerUnsupportedError as exc:
+        _schedule_fail(exc, 3)
+    except SchedulerOperationalError as exc:
+        _schedule_fail(exc, 1)
+    except Exception as exc:  # noqa: BLE001 - unexpected scheduler failures are operational
+        _schedule_fail(exc, 1)
+    _render_schedule_outcome(outcome, mode="status")
+    if outcome.status is ScheduleStatus.NEEDS_REPAIR:
+        raise typer.Exit(4)
+
+
+@schedule_app.command("disable")
+def schedule_disable_command() -> None:
+    try:
+        outcome = disable_schedule(Path.cwd())
+    except SchedulerUnsupportedError as exc:
+        _schedule_fail(exc, 3)
+    except SchedulerOperationalError as exc:
+        _schedule_fail(exc, 1)
+    except Exception as exc:  # noqa: BLE001 - unexpected scheduler failures are operational
+        _schedule_fail(exc, 1)
+    _render_schedule_outcome(outcome, mode="disable")
 
 
 @app.command("setup")
