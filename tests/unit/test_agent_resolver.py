@@ -105,6 +105,47 @@ def test_latest_version_rejects_registry_nonzero(tmp_path: Path, monkeypatch) ->
         resolver.latest_version()
 
 
+def test_stable_versions_filters_dedupes_and_sorts_numerically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], *, timeout_seconds: int) -> ProcessResult:
+        calls.append(args)
+        return ProcessResult(
+            0,
+            '["0.10.0","0.9.0","0.10.0","0.11.0-beta.1","1.0.0"]',
+            "",
+            0.01,
+            False,
+        )
+
+    monkeypatch.setattr("qualock.agents.resolver.run_process", fake_run)
+    cache = tmp_path / "cache"
+    resolver = CodexResolver(cache, npm_executable="npm", machine="x86_64")
+    assert resolver.stable_versions() == ("0.9.0", "0.10.0", "1.0.0")
+    assert calls == [["npm", "view", "@openai/codex", "versions", "--json"]]
+    assert not cache.exists()
+
+
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        (ProcessResult(None, "", "registry timeout", 30.0, True), "registry timeout"),
+        (ProcessResult(1, "", "registry failed", 0.02, False), "registry failed"),
+        (ProcessResult(0, "not-json", "", 0.01, False), "unexpected Codex versions"),
+        (ProcessResult(0, '{"0":"0.150.0"}', "", 0.01, False), "unexpected Codex versions"),
+        (ProcessResult(0, '["0.150.0",151]', "", 0.01, False), "unexpected Codex versions"),
+    ],
+)
+def test_stable_versions_rejects_bad_registry_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: ProcessResult, message: str
+) -> None:
+    monkeypatch.setattr("qualock.agents.resolver.run_process", lambda *args, **kwargs: result)
+    with pytest.raises(CodexResolveError, match=message):
+        CodexResolver(tmp_path / "cache", machine="x86_64").stable_versions()
+
+
 def test_resolve_latest_delegates_to_public_latest_version(tmp_path: Path, monkeypatch) -> None:
     npm = make_fake_npm(tmp_path / "npm")
     resolver = CodexResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
