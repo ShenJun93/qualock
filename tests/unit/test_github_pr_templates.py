@@ -103,6 +103,12 @@ def test_producer_context_artifact_name() -> None:
     assert "qualock-pr-context" in PRODUCER_WORKFLOW
 
 
+def test_producer_prepare_pr_writes_proposed_lock_consumed_by_qualify_pr() -> None:
+    assert (
+        '--proposed-lock-out "$RUNNER_TEMP/proposed-baseline.lock"' in PRODUCER_WORKFLOW
+    )
+
+
 def test_producer_report_artifact_upload_always() -> None:
     doc = parsed(PRODUCER_WORKFLOW)
     assert isinstance(doc, dict)

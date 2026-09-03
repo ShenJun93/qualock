@@ -44,7 +44,8 @@ jobs:
           qualock github prepare-pr \\
             --event "$GITHUB_EVENT_PATH" \\
             --context-out "$RUNNER_TEMP/pr-context.json" \\
-            --report-out "$RUNNER_TEMP/pr-report.json"
+            --report-out "$RUNNER_TEMP/pr-report.json" \\
+            --proposed-lock-out "$RUNNER_TEMP/proposed-baseline.lock"
 
       - name: Upload PR context artifact
         uses: actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}
