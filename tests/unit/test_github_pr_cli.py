@@ -558,6 +558,91 @@ def test_report_pr_passes_none_for_missing_report_file(
     assert captured["expected_repository"] == _REPO
 
 
+def test_report_pr_passes_none_for_malformed_report_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "secret-token-value")
+    monkeypatch.setenv("GITHUB_REPOSITORY", _REPO)
+    monkeypatch.chdir(tmp_path)
+
+    context = _context(PrClassification.UPGRADE)
+    context_path = tmp_path / "context.json"
+    from qualock.github_pr.report import write_context
+
+    write_context(context_path, context)
+
+    malformed_report = tmp_path / "report.json"
+    malformed_report.write_text("not valid json", encoding="utf-8")
+
+    captured: dict[str, Any] = {}
+
+    def _fake_publish_pr_report(
+        event_path: Path,
+        context_model: PullRequestContext,
+        report_model: PullRequestReport | None,
+        *,
+        publisher: Any,
+        display_names: dict[str, str],
+        expected_repository: str,
+    ) -> None:
+        captured["report_model"] = report_model
+        captured["expected_repository"] = expected_repository
+
+    monkeypatch.setattr(cli, "HttpxGitHubPublisher", lambda token: object())
+    monkeypatch.setattr(cli, "publish_pr_report", _fake_publish_pr_report)
+
+    event = tmp_path / "event.json"
+    event.write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "github",
+            "report-pr",
+            "--event",
+            str(event),
+            "--context",
+            str(context_path),
+            "--report",
+            str(malformed_report),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["report_model"] is None
+    assert captured["expected_repository"] == _REPO
+
+
+def test_report_pr_malformed_context_still_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "secret-token-value")
+    monkeypatch.setenv("GITHUB_REPOSITORY", _REPO)
+    monkeypatch.chdir(tmp_path)
+
+    malformed_context = tmp_path / "context.json"
+    malformed_context.write_text("not valid json", encoding="utf-8")
+
+    event = tmp_path / "event.json"
+    event.write_text("{}", encoding="utf-8")
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "github",
+            "report-pr",
+            "--event",
+            str(event),
+            "--context",
+            str(malformed_context),
+            "--report",
+            str(tmp_path / "does-not-exist.json"),
+        ],
+    )
+
+    assert result.exit_code == 1
+
+
 def test_report_pr_publisher_failure_exits_1_without_leaking_auth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
