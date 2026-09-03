@@ -531,6 +531,7 @@ def test_check_executor_exception_is_incomplete_without_fabricated_id(
     assert report.verdict is PrReportVerdict.INCOMPLETE
     assert PrReasonCode.QUALIFICATION_FAILED in report.reason_codes
     assert report.qualification_completed is False
+    assert report.qualification_id is None
 
 
 # --- artifact write failure propagation --------------------------------------
