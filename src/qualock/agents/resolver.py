@@ -1,4 +1,5 @@
 import hashlib
+import json
 import platform
 import re
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ class CodexResolveError(RuntimeError):
 
 
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+_STABLE_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,23 @@ class CodexResolver:
             raise CodexResolveError(f"unexpected Codex version from npm: {version!r}")
         return version
 
+    def stable_versions(self) -> tuple[str, ...]:
+        result = run_process(
+            [self.npm_executable, "view", "@openai/codex", "versions", "--json"],
+            timeout_seconds=30,
+        )
+        if result.timed_out or result.exit_code != 0:
+            raise CodexResolveError(result.stderr.strip() or "failed to resolve Codex versions")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise CodexResolveError("unexpected Codex versions from npm") from exc
+        if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+            raise CodexResolveError("unexpected Codex versions from npm")
+
+        stable = {item for item in payload if _STABLE_VERSION_RE.fullmatch(item)}
+        return tuple(sorted(stable, key=_stable_version_key))
+
     def resolve(self, requested_version: str) -> AgentBinary:
         version = self.latest_version() if requested_version == "latest" else requested_version
         if not _VERSION_RE.match(version):
@@ -131,3 +150,11 @@ class CodexResolver:
                 ),
             ),
         )
+
+
+def _stable_version_key(version: str) -> tuple[int, int, int]:
+    match = _STABLE_VERSION_RE.fullmatch(version)
+    if match is None:
+        raise ValueError(f"not a stable version: {version!r}")
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch)
