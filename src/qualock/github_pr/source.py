@@ -147,7 +147,7 @@ class HttpxGitHubPrSource:
         if not isinstance(content, str):
             raise GitHubSourceError(f"{path} at {ref} has no content")
         try:
-            decoded = base64.b64decode(content, validate=False)
+            decoded = base64.b64decode(content, validate=True)
         except binascii.Error as error:
             raise GitHubSourceError(
                 f"{path} at {ref} has malformed base64 content"

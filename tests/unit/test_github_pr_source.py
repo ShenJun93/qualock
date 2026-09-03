@@ -338,6 +338,27 @@ def test_contents_response_malformed_base64_is_rejected() -> None:
         source.read_file_at_ref("owner/repo", BASELINE, "b" * 40, max_bytes=131_072)
 
 
+def test_contents_response_base64_with_stray_characters_is_rejected() -> None:
+    # "aGVsbG8h!!!!" decodes to b"hello!" under permissive base64 (validate=False)
+    # because "!!!!" is silently discarded rather than treated as corruption.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"type": "file", "encoding": "base64", "content": "aGVsbG8h!!!!"},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    source = HttpxGitHubPrSource(token="test-token", client=client)
+    with pytest.raises(GitHubSourceError):
+        source.read_file_at_ref("owner/repo", BASELINE, "b" * 40, max_bytes=131_072)
+
+
+def test_production_client_uses_no_redirects_and_bounded_timeout() -> None:
+    source = HttpxGitHubPrSource(token="test-token")
+    assert source._client.follow_redirects is False
+    assert source._client.timeout == httpx.Timeout(15.0)
+
+
 def test_source_never_opens_a_real_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_connect(*args: object, **kwargs: object) -> None:
         raise AssertionError("real network access is forbidden in tests")
