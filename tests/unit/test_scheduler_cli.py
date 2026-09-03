@@ -292,17 +292,34 @@ def test_uncertain_rollback_warning_is_printed_once_and_literally(
         ["schedule", "enable", "--weekdays"],
         ["schedule", "enable", "--interval", "daily"],
         ["schedule", "enable", "--timezone", "UTC"],
+        ["schedule", "enable", "--schedule-time", "09:00"],
         ["schedule", "status", "--at", "09:00"],
+        ["schedule", "status", "--schedule-time", "09:00"],
         ["schedule", "disable", "--at", "09:00"],
+        ["schedule", "disable", "--schedule-time", "09:00"],
     ],
 )
-def test_schedule_rejects_non_public_commands_and_options(args: list[str]) -> None:
-    assert runner.invoke(cli.app, args).exit_code != 0
+def test_schedule_rejects_non_public_commands_and_options(
+    args: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_if_called(*args: object, **kwargs: object) -> None:
+        pytest.fail("scheduler orchestration was called before CLI parse rejection")
+
+    monkeypatch.setattr(cli, "enable_schedule", fail_if_called)
+    monkeypatch.setattr(cli, "schedule_status", fail_if_called)
+    monkeypatch.setattr(cli, "disable_schedule", fail_if_called)
+
+    assert runner.invoke(cli.app, args, catch_exceptions=False).exit_code != 0
 
 
 def test_schedule_help_exposes_exactly_three_commands() -> None:
     result = runner.invoke(cli.app, ["schedule", "--help"])
 
+    assert {command.name for command in cli.schedule_app.registered_commands} == {
+        "enable",
+        "status",
+        "disable",
+    }
     assert result.exit_code == 0
     assert "enable" in result.stdout
     assert "status" in result.stdout
