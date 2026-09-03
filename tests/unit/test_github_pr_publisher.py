@@ -6,10 +6,16 @@ import httpx
 import pytest
 
 import qualock
-from qualock.github_pr.models import PrClassification, PrReportVerdict, PullRequestContext, PullRequestReport
+from qualock.github_pr.models import (
+    PrClassification,
+    PrReportVerdict,
+    PullRequestContext,
+    PullRequestReport,
+)
 from qualock.github_pr.publisher import (
+    _DESCRIPTION_BY_VERDICT,
+    _MISSING_REPORT_DESCRIPTION,
     GitHubPublishError,
-    GitHubPublisher,
     HttpxGitHubPublisher,
     IssueComment,
     ReporterValidationError,
@@ -293,16 +299,17 @@ def test_validate_allows_not_applicable_without_report() -> None:
     validate_reporter_inputs(identity_fixture(context), context, None)
 
 
-def test_validate_rejects_missing_report_for_upgrade() -> None:
+def test_validate_allows_missing_report_for_upgrade() -> None:
+    # Binding validation must not reject a missing report before any status
+    # write; a missing upgrade/invalid_scope report is a publish-time
+    # synthetic reporter-error outcome, not a binding-validation failure.
     context = context_fixture(classification=PrClassification.UPGRADE)
-    with pytest.raises(ReporterValidationError):
-        validate_reporter_inputs(identity_fixture(context), context, None)
+    validate_reporter_inputs(identity_fixture(context), context, None)
 
 
-def test_validate_rejects_missing_report_for_invalid_scope() -> None:
+def test_validate_allows_missing_report_for_invalid_scope() -> None:
     context = context_fixture(classification=PrClassification.INVALID_SCOPE)
-    with pytest.raises(ReporterValidationError):
-        validate_reporter_inputs(identity_fixture(context), context, None)
+    validate_reporter_inputs(identity_fixture(context), context, None)
 
 
 def test_validate_accepts_matching_identity_context_report() -> None:
@@ -615,7 +622,7 @@ def test_current_head_upgrade_creates_one_marker_comment(tmp_path: Path) -> None
     )
     assert len(publisher.comments) == 1
     assert publisher.comments[0].author_login == "github-actions[bot]"
-    assert "<!-- qualock-pr-report -->" in publisher.comments[0].body
+    assert "<!-- qualock-pr-report:v1 -->" in publisher.comments[0].body
 
 
 def test_rerun_updates_newest_bot_marker_comment(tmp_path: Path) -> None:
@@ -623,10 +630,10 @@ def test_rerun_updates_newest_bot_marker_comment(tmp_path: Path) -> None:
     report = report_fixture(context)
     existing = [
         IssueComment(
-            id=1, author_login="github-actions[bot]", body="<!-- qualock-pr-report -->\nold-1"
+            id=1, author_login="github-actions[bot]", body="<!-- qualock-pr-report:v1 -->\nold-1"
         ),
         IssueComment(
-            id=2, author_login="github-actions[bot]", body="<!-- qualock-pr-report -->\nold-2"
+            id=2, author_login="github-actions[bot]", body="<!-- qualock-pr-report:v1 -->\nold-2"
         ),
     ]
     publisher = RecordingPublisher(current_head=report.head_sha, comments=list(existing))
@@ -640,7 +647,7 @@ def test_rerun_updates_newest_bot_marker_comment(tmp_path: Path) -> None:
         expected_repository=DEFAULT_REPOSITORY,
     )
     assert len(publisher.comments) == 2
-    assert publisher.comments[0].body == "<!-- qualock-pr-report -->\nold-1"
+    assert publisher.comments[0].body == "<!-- qualock-pr-report:v1 -->\nold-1"
     assert publisher.comments[1].id == 2
     assert "old-2" not in publisher.comments[1].body
 
@@ -649,7 +656,7 @@ def test_human_authored_copied_marker_is_ignored(tmp_path: Path) -> None:
     context = context_fixture()
     report = report_fixture(context)
     existing = [
-        IssueComment(id=1, author_login="a-human", body="<!-- qualock-pr-report -->\ncopied"),
+        IssueComment(id=1, author_login="a-human", body="<!-- qualock-pr-report:v1 -->\ncopied"),
     ]
     publisher = RecordingPublisher(current_head=report.head_sha, comments=list(existing))
     event_path = workflow_run_fixture(tmp_path, context)
@@ -686,7 +693,7 @@ def test_render_pr_comment_includes_marker_and_verdict() -> None:
     context = context_fixture()
     report = report_fixture(context, verdict=PrReportVerdict.WARN)
     body = render_pr_comment(context, report, {})
-    assert body.startswith("<!-- qualock-pr-report -->")
+    assert body.startswith("<!-- qualock-pr-report:v1 -->")
     assert "WARN" in body
 
 
@@ -705,3 +712,43 @@ def test_publish_propagates_status_write_failure(tmp_path: Path) -> None:
             expected_repository=DEFAULT_REPOSITORY,
         )
     assert publisher.comments == []
+
+
+@pytest.mark.parametrize(
+    "classification", [PrClassification.UPGRADE, PrClassification.INVALID_SCOPE]
+)
+def test_missing_report_writes_synthetic_error_status_never_rejected(
+    tmp_path: Path, classification: PrClassification
+) -> None:
+    context = context_fixture(classification=classification)
+    publisher = RecordingPublisher(current_head=context.head_sha)
+    event_path = workflow_run_fixture(tmp_path, context)
+    publish_pr_report(
+        event_path,
+        context,
+        None,
+        publisher=publisher,
+        display_names={},
+        expected_repository=DEFAULT_REPOSITORY,
+    )
+    assert publisher.statuses[-1].state == "error"
+    assert publisher.statuses[-1].context == "qualock/pr"
+    assert publisher.statuses[-1].sha == context.head_sha
+    assert publisher.comments == []
+
+
+def test_fixed_status_descriptions_are_bounded_and_free_of_pr_text() -> None:
+    context = context_fixture()
+    report = report_fixture(context)
+    forbidden = {
+        context.pr_author_login,
+        context.repository_full_name,
+        report.candidate_version,
+        report.baseline_version,
+        report.qualification_id,
+    }
+    descriptions = [*_DESCRIPTION_BY_VERDICT.values(), _MISSING_REPORT_DESCRIPTION]
+    for description in descriptions:
+        assert len(description) <= 140
+        for text in forbidden:
+            assert text is None or text not in description

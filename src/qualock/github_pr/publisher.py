@@ -1,8 +1,9 @@
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Protocol
+from typing import Protocol
 
 import httpx
 
@@ -24,7 +25,7 @@ _EXPECTED_WORKFLOW_NAME = "QuaLock PR Qualification"
 _EXPECTED_EVENT = "pull_request_target"
 _STATUS_CONTEXT = "qualock/pr"
 _BOT_LOGIN = "github-actions[bot]"
-_COMMENT_MARKER = "<!-- qualock-pr-report -->"
+_COMMENT_MARKER = "<!-- qualock-pr-report:v1 -->"
 
 _STATE_BY_VERDICT: dict[PrReportVerdict, str] = {
     PrReportVerdict.NOT_APPLICABLE: "success",
@@ -41,6 +42,8 @@ _DESCRIPTION_BY_VERDICT: dict[PrReportVerdict, str] = {
     PrReportVerdict.BLOCK: "qualification blocked",
     PrReportVerdict.INCOMPLETE: "qualification incomplete",
 }
+
+_MISSING_REPORT_DESCRIPTION = "reporter could not obtain a qualification report"
 
 
 class GitHubPublishError(Exception):
@@ -170,10 +173,9 @@ def validate_reporter_inputs(
     if identity.trusted_head_sha != context.base_sha:
         raise ReporterValidationError("workflow run head sha does not match trusted base sha")
     if report is None:
-        if context.classification is not PrClassification.NOT_APPLICABLE:
-            raise ReporterValidationError(
-                "report is required for upgrade/invalid_scope classification"
-            )
+        # A missing report for upgrade/invalid_scope is not a binding-validation
+        # failure: publish_pr_report turns it into a synthetic reporter-error
+        # GitHub status instead of rejecting before any status write.
         return
     if report.repository_id != context.repository_id:
         raise ReporterValidationError("report repository id does not match context")
@@ -376,26 +378,35 @@ def publish_pr_report(
     identity = parse_workflow_run_event(event_path, expected_repository=expected_repository)
     validate_reporter_inputs(identity, context, report)
 
-    artifact_sha = report.head_sha if report is not None else context.head_sha
-    verdict = report.verdict if report is not None else PrReportVerdict.NOT_APPLICABLE
+    if report is not None:
+        state = _STATE_BY_VERDICT[report.verdict]
+        description = _DESCRIPTION_BY_VERDICT[report.verdict]
+    elif context.classification is PrClassification.NOT_APPLICABLE:
+        state = _STATE_BY_VERDICT[PrReportVerdict.NOT_APPLICABLE]
+        description = _DESCRIPTION_BY_VERDICT[PrReportVerdict.NOT_APPLICABLE]
+    else:
+        # upgrade/invalid_scope with no report: synthetic reporter-error outcome.
+        state = "error"
+        description = _MISSING_REPORT_DESCRIPTION
+
     target_url = (
         f"https://github.com/{identity.repository_full_name}"
         f"/actions/runs/{context.producer_run_id}"
     )
     publisher.create_status(
         context.repository_full_name,
-        artifact_sha,
-        state=_STATE_BY_VERDICT[verdict],
+        context.head_sha,
+        state=state,
         context=_STATUS_CONTEXT,
-        description=_DESCRIPTION_BY_VERDICT[verdict],
+        description=description,
         target_url=target_url,
     )
 
-    if report is None or verdict is PrReportVerdict.NOT_APPLICABLE:
+    if report is None or report.verdict is PrReportVerdict.NOT_APPLICABLE:
         return
 
     current_head = publisher.current_pr_head(context.repository_full_name, context.pr_number)
-    if current_head != artifact_sha:
+    if current_head != context.head_sha:
         return
 
     body = render_pr_comment(context, report, display_names)
