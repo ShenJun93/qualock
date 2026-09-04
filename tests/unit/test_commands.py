@@ -41,11 +41,15 @@ class FakeResolver:
 class FakeBackend:
     def __init__(self, success_versions: set[str] | None = None) -> None:
         self.success_versions = success_versions or {"0.150.0"}
+        self.prepared: list[str] = []
+        self.calls: list[tuple[str, str, int]] = []
 
     def prepare(self, canary, qualification_id: str) -> PreparedImage:
+        self.prepared.append(canary.id)
         return PreparedImage(reference="prepared", digest=f"sha256:{canary.id}")
 
     def run_attempt(self, *, canary, prepared, binary, side: Side, repetition: int) -> AttemptResult:
+        self.calls.append((canary.id, side.value, repetition))
         return AttemptResult(
             side=side.value,
             repetition=repetition,
@@ -230,6 +234,62 @@ def test_check_reruns_pinned_baseline_and_candidate_and_writes_report(tmp_path: 
     assert result.baseline_version == "0.150.0"
     assert result.candidate_version == "0.151.0"
     assert (tmp_path / ".qualock/results/check-q/report.json").is_file()
+
+
+def test_check_forwards_attempt_budget_and_writes_incomplete_report(tmp_path: Path) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    baseline_backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=baseline_backend,
+        qualification_id="baseline-budget",
+        created_at="2026-09-05T00:00:00Z",
+    )
+    check_backend = FakeBackend()
+
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=check_backend,
+        qualification_id="check-budget",
+        max_attempts=5,
+    )
+
+    assert check_backend.prepared == []
+    assert check_backend.calls == []
+    assert result.verdict is Verdict.INCOMPLETE
+    payload = json.loads(
+        (tmp_path / ".qualock/results/check-budget/report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["verdict"] == "incomplete"
+    assert payload["executions"][0]["attempts"] == []
+    assert payload["executions"][0]["prepared_image_digest"] == ""
+    assert "max_attempts=5" in payload["executions"][0]["reason"]
+
+
+def test_check_rejects_nonpositive_attempt_budget_before_resolution(tmp_path: Path) -> None:
+    resolver = FakeResolver()
+    backend = FakeBackend()
+
+    for bad in (0, -1):
+        with pytest.raises(CommandError, match="max attempts must be greater than zero"):
+            execute_check(
+                tmp_path,
+                "codex@0.151.0",
+                resolver=resolver,
+                backend=backend,
+                max_attempts=bad,
+            )
+
+    assert resolver.calls == []
+    assert backend.prepared == []
+    assert backend.calls == []
 
 
 def test_check_candidate_agent_must_match_config_before_resolution(tmp_path: Path) -> None:
