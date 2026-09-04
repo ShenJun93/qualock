@@ -29,6 +29,7 @@ def test_build_safety_summary_maps_suite_verdict_to_plain_english(
     summary = build_safety_summary(
         result,
         {"critical-bug": "Login and checkout"},
+        agent_display_name="Codex",
     )
 
     assert summary.status is status
@@ -42,6 +43,18 @@ def test_build_safety_summary_maps_suite_verdict_to_plain_english(
 
 def test_build_safety_summary_falls_back_to_canary_id() -> None:
     source = sample_result()
-    summary = build_safety_summary(source, {})
+    summary = build_safety_summary(source, {}, agent_display_name="Codex")
 
     assert summary.workflows[0].name == "critical-bug"
+
+
+def test_safety_summary_uses_injected_agent_display_name() -> None:
+    summary = build_safety_summary(
+        sample_result(),
+        {},
+        agent_display_name="Claude Code",
+    )
+
+    assert summary.agent_display_name == "Claude Code"
+    assert "Keep using Claude Code 0.150.0" in summary.recommendation
+    assert "Codex" not in summary.recommendation

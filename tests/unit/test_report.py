@@ -41,7 +41,7 @@ def sample_result() -> QualificationResult:
 
 
 def test_markdown_report_shows_raw_counts_and_no_magic_score() -> None:
-    text = render_markdown(sample_result())
+    text = render_markdown(sample_result(), agent_display_name="Codex")
     assert "0.150.0" in text and "0.151.0" in text
     assert "3/3" in text and "0/3" in text
     assert "BLOCK" in text
@@ -57,18 +57,19 @@ def test_json_report_preserves_verdict_and_versions() -> None:
 
 
 def test_terminal_report_contains_independent_quality_verdict() -> None:
-    text = render_terminal(sample_result())
+    text = render_terminal(sample_result(), agent_display_name="Codex")
     assert "Quality" in text
     assert "BLOCK" in text
 
 
 def test_easy_terminal_report_leads_with_safety_and_evidence_path() -> None:
-    from qualock.report.safety import build_safety_summary
     from qualock.report.render import render_safety_terminal
+    from qualock.report.safety import build_safety_summary
 
     summary = build_safety_summary(
         sample_result(),
         {"critical-bug": "Login and checkout"},
+        agent_display_name="Codex",
     )
 
     text = render_safety_terminal(summary, ".qualock/results/q1/")
@@ -90,3 +91,13 @@ def test_easy_terminal_report_type_hints_resolve() -> None:
     hints = get_type_hints(render_safety_terminal)
 
     assert hints["summary"] is SafetySummary
+
+
+def test_technical_reports_use_injected_agent_display_name() -> None:
+    markdown = render_markdown(sample_result(), agent_display_name="Claude Code")
+    terminal = render_terminal(sample_result(), agent_display_name="Claude Code")
+
+    assert "**Claude Code:** `0.150.0` → `0.151.0`" in markdown
+    assert "Qualock qualification: Claude Code 0.150.0 -> 0.151.0" in terminal
+    assert "Codex" not in markdown
+    assert "Codex" not in terminal
