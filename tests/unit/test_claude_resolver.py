@@ -14,6 +14,7 @@ def make_fake_npm(
     reported_version: str | None = None,
 ) -> Path:
     flags = [
+        "-p",
         "--safe-mode",
         "--restricted",
         "--no-session-persistence",
@@ -31,7 +32,15 @@ def make_fake_npm(
     ]
     if missing_flag is not None:
         flags.remove(missing_flag)
-    help_text = " ".join(flags)
+    help_lines = []
+    for flag in flags:
+        if flag == "-p":
+            help_lines.append("  -p, --print                           Print response and exit")
+        elif flag == "--allowed-tools":
+            help_lines.append("  --allowedTools, --allowed-tools <tools...>  Allow tools")
+        else:
+            help_lines.append(f"  {flag} <value>  Test option")
+    help_text = "\n".join(help_lines)
     binary_template = (
         "#!/usr/bin/env python3\n"
         "import sys\n"
@@ -142,6 +151,14 @@ def test_resolved_binary_must_report_requested_version(tmp_path: Path) -> None:
         resolver.resolve("2.1.260")
 
 
+def test_resolved_binary_requires_print_flag_for_headless_contract(tmp_path: Path) -> None:
+    npm = make_fake_npm(tmp_path / "npm", missing_flag="-p")
+    resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+
+    with pytest.raises(ClaudeResolveError, match=r"missing required CLI flag -p"):
+        resolver.resolve("2.1.260")
+
+
 def test_resolved_binary_requires_verbose_for_stream_json_contract(tmp_path: Path) -> None:
     npm = make_fake_npm(tmp_path / "npm", missing_flag="--verbose")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
@@ -156,6 +173,51 @@ def test_resolved_binary_must_expose_required_cli_contract(tmp_path: Path) -> No
 
     with pytest.raises(ClaudeResolveError, match="missing required CLI flag --restricted"):
         resolver.resolve("2.1.260")
+
+
+def test_help_flag_must_be_an_option_not_prose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "claude"
+    binary.write_text("fake", encoding="utf-8")
+    required_except_tools = [
+        "-p", "--safe-mode", "--restricted", "--no-session-persistence",
+        "--output-format", "--verbose", "--permission-mode",
+        "--permission-prompts", "--model", "--effort", "--allowed-tools",
+        "--strict-mcp-config", "--mcp-config", "--settings",
+    ]
+    help_text = "\n".join(f"  {flag} <value>  option" for flag in required_except_tools)
+    help_text += "\n      prose mentions --tools but it is not an option\n"
+
+    def fake_run(argv, *, timeout_seconds, env=None):
+        del timeout_seconds, env
+        if "--version" in argv:
+            return ProcessResult(0, "2.1.260 (Claude Code)\n", "", 0.01, False)
+        return ProcessResult(0, help_text, "", 0.01, False)
+
+    monkeypatch.setattr("qualock.agents.claude_resolver.run_process", fake_run)
+    resolver = ClaudeResolver(tmp_path / "cache", machine="x86_64")
+    with pytest.raises(ClaudeResolveError, match="missing required CLI flag --tools"):
+        resolver._validate_binary_contract(binary, "2.1.260")
+
+
+def test_empty_version_output_raises_resolver_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "claude"
+    binary.write_text("fake", encoding="utf-8")
+
+    def fake_run(argv, *, timeout_seconds, env=None):
+        del timeout_seconds, env
+        if "--version" in argv:
+            return ProcessResult(0, "", "", 0.01, False)
+        raise AssertionError("help should not run after empty version output")
+
+    monkeypatch.setattr("qualock.agents.claude_resolver.run_process", fake_run)
+    with pytest.raises(ClaudeResolveError, match="empty version output"):
+        ClaudeResolver(tmp_path / "cache", machine="x86_64")._validate_binary_contract(
+            binary, "2.1.260"
+        )
 
 
 def test_binary_mutation_during_contract_validation_fails_closed(
@@ -186,7 +248,7 @@ def test_binary_contract_probes_use_scrubbed_environment(
     binary.write_text("fake", encoding="utf-8")
     calls: list[dict[str, str] | None] = []
     flags = (
-        "--safe-mode --restricted --no-session-persistence --output-format --verbose "
+        "-p --safe-mode --restricted --no-session-persistence --output-format --verbose "
         "--permission-mode --permission-prompts --model --effort --tools "
         "--allowed-tools --strict-mcp-config --mcp-config --settings"
     )

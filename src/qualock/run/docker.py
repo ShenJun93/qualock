@@ -104,6 +104,9 @@ class DockerRunner:
         )
         apt_packages = " ".join(shlex.quote(item.apt_package) for item in dependencies)
         dependency_names = " and ".join(item.command for item in dependencies)
+        dependency_message = shlex.quote(
+            f"Qualock agent runner requires {dependency_names} in the runtime image"
+        )
         dockerfile_lines = [
             f"FROM {canary.runtime.image}",
             "WORKDIR /workspace",
@@ -113,8 +116,7 @@ class DockerRunner:
                 "elif command -v apt-get >/dev/null 2>&1; then "
                 "apt-get update && apt-get install -y --no-install-recommends "
                 f"{apt_packages} && rm -rf /var/lib/apt/lists/*; "
-                f"else echo 'Qualock agent runner requires {dependency_names} "
-                "in the runtime image' >&2; exit 127; fi"
+                f"else echo {dependency_message} >&2; exit 127; fi"
             ),
         ]
         dockerfile_lines.extend(f"RUN {command}" for command in canary.setup)

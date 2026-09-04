@@ -105,6 +105,17 @@ def test_permission_denial_records_error() -> None:
     assert any("permission" in error.lower() for error in evidence.errors)
 
 
+def test_known_unhandled_event_variants_are_not_unknown_top_level_types() -> None:
+    evidence = parse_claude_stream_json(
+        [
+            line({"type": "system", "subtype": "status", "value": "ok"}),
+            line({"type": "user", "message": {"content": [{"type": "text", "text": "hi"}]}}),
+            line({"type": "result", "subtype": "success", "usage": result_usage()}),
+        ]
+    )
+    assert evidence.unknown_events == []
+
+
 def test_unknown_top_level_event_is_retained() -> None:
     payload = {"type": "future.event", "value": 1}
     evidence = parse_claude_stream_json(

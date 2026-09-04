@@ -257,6 +257,46 @@ def test_prepare_installs_adapter_runtime_dependencies(tmp_path: Path, monkeypat
     assert "socat=" not in seen["dockerfile"]
 
 
+def test_prepare_quotes_runtime_dependency_name_in_error_message(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from qualock.canary.models import CanarySpec
+    from qualock.run.process import ProcessResult
+
+    source = tmp_path / "source"
+    source.mkdir()
+    grader = tmp_path / "grader.patch"
+    grader.write_text("patch", encoding="utf-8")
+    spec = CanarySpec.model_validate({
+        "schema_version": 1, "id": "sample", "name": "Sample",
+        "repository": {"url": "https://example.invalid/repo.git", "base_sha": "a" * 40},
+        "runtime": {"image": "python:3.12-slim"}, "task": "Fix it", "setup": [],
+        "agent": {"timeout_seconds": 60},
+        "grader": {"patch": str(grader), "command": ["pytest -q"]},
+        "constraints": {"protected_paths": []}, "critical": True,
+    })
+    seen: dict[str, str] = {}
+    runner = DockerRunner()
+
+    def fake_run(argv, *, timeout_seconds):
+        del timeout_seconds
+        if "build" in argv:
+            path = Path(argv[argv.index("--file") + 1])
+            seen["dockerfile"] = path.read_text(encoding="utf-8")
+        return ProcessResult(0, "", "", 0.01, False)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_inspect_image_id", lambda reference: "sha256:prepared")
+    runner.prepare(
+        source, spec, image_tag="prepared",
+        runtime_dependencies=(AgentRuntimeDependency(command="odd'name", apt_package="socat"),),
+    )
+    assert (
+        "else echo 'Qualock agent runner requires bwrap and odd'\"'\"'name "
+        "in the runtime image'"
+    ) in seen["dockerfile"]
+
+
 def test_agent_container_relaxes_seccomp_only_for_inner_bubblewrap(tmp_path: Path) -> None:
     runner = DockerRunner(docker_executable="docker")
     argv = runner.build_agent_create_argv(
