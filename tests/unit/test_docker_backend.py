@@ -69,6 +69,7 @@ class FakeDocker:
         self.tmpfs_mounts: tuple[str, ...] = ()
         self.bootstrap_copy: tuple[str, str] | None = None
         self.agent_container_path: str | None = None
+        self.removed_containers: list[str] = []
 
     def prepare(
         self,
@@ -113,7 +114,7 @@ class FakeDocker:
         return GradeResult(exit_code=0, stdout="1 passed", stderr="", timed_out=False)
 
     def remove_container(self, container_name: str) -> None:
-        pass
+        self.removed_containers.append(container_name)
 
 
 def canary(tmp_path: Path) -> CanarySpec:
@@ -213,6 +214,25 @@ def test_backend_forwards_generic_invocation_runtime(tmp_path: Path) -> None:
     assert docker.tmpfs_mounts == ("/opt/fake/home",)
     assert docker.bootstrap_copy == ("/opt/fake/seed.json", "/opt/fake/home/config.json")
     assert docker.agent_container_path == "/opt/qualock/fake"
+
+
+def test_timeout_invalidates_attempt_and_cleans_container_before_grader(tmp_path: Path) -> None:
+    docker = FakeDocker(exit_code=None)
+    service = backend(tmp_path, docker)
+    result = run_once(tmp_path, service)
+    assert result.valid is False
+    assert result.invalid_reason == "agent timed out"
+    assert docker.grader_calls == 0
+    assert len(docker.removed_containers) == 1
+
+
+def test_evidence_parse_failure_cleans_container(tmp_path: Path) -> None:
+    docker = FakeDocker()
+    service = backend(tmp_path, docker, adapter=FakeAdapter(parse_error="bad evidence"))
+    result = run_once(tmp_path, service)
+    assert result.valid is False
+    assert result.invalid_reason == "bad evidence"
+    assert len(docker.removed_containers) == 1
 
 
 def test_agent_failure_invalidates_attempt_before_grader(tmp_path: Path) -> None:
