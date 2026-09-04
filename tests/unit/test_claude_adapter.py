@@ -22,7 +22,10 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
     ) as invocation:
         argv = list(invocation.argv)
         assert invocation.container_binary_path == "/opt/qualock/claude"
-        assert invocation.environment == (("CLAUDE_CONFIG_DIR", "/opt/qualock/claude-home"),)
+        assert invocation.environment == (
+            ("CLAUDE_CONFIG_DIR", "/opt/qualock/claude-home"),
+            ("DISABLE_AUTOUPDATER", "1"),
+        )
         assert invocation.tmpfs_mounts == ("/opt/qualock/claude-home",)
         assert argv[0] == str(tmp_path / "claude")
         assert "-p" in argv
@@ -94,7 +97,10 @@ def test_missing_credentials_keeps_isolated_config_without_secret_mount(tmp_path
     with adapter.invocation(
         binary(tmp_path), model="sonnet", reasoning_effort="medium", prompt="Fix it"
     ) as invocation:
-        assert invocation.environment == (("CLAUDE_CONFIG_DIR", "/opt/qualock/claude-home"),)
+        assert invocation.environment == (
+            ("CLAUDE_CONFIG_DIR", "/opt/qualock/claude-home"),
+            ("DISABLE_AUTOUPDATER", "1"),
+        )
         assert invocation.tmpfs_mounts == ("/opt/qualock/claude-home",)
         assert invocation.bootstrap_copy is None
         assert all(
@@ -116,3 +122,12 @@ def test_parse_evidence_delegates_to_claude_stream_parser() -> None:
     assert isinstance(evidence, AgentEvidence)
     assert evidence.input_tokens == 4
     assert evidence.output_tokens == 1
+
+
+def test_invocation_disables_claude_autoupdater(tmp_path: Path) -> None:
+    adapter = ClaudeAdapter()
+    with adapter.invocation(
+        binary(tmp_path), model="sonnet", reasoning_effort="high", prompt="Fix it"
+    ) as invocation:
+        environment = dict(invocation.environment)
+        assert environment["DISABLE_AUTOUPDATER"] == "1"

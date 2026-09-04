@@ -100,7 +100,7 @@ class ClaudeAdapter:
                     reasoning_effort=reasoning_effort,
                     prompt=prompt,
                 ),
-                environment=(("CLAUDE_CONFIG_DIR", _CONFIG_DIR),),
+                environment=(("CLAUDE_CONFIG_DIR", _CONFIG_DIR), ("DISABLE_AUTOUPDATER", "1")),
                 mounts=tuple(mounts),
                 tmpfs_mounts=(_CONFIG_DIR,),
                 bootstrap_copy=bootstrap_copy,

@@ -17,6 +17,7 @@
 - Default config and all existing Codex behavior remain Codex.
 - Claude support is local `baseline`/`check` only.
 - No original Claude credential file is mounted directly and no secret is passed through Docker environment metadata.
+- Exact Claude runs set `DISABLE_AUTOUPDATER=1` so the resolved version cannot self-update.
 - `release_monitor`, `version_bisect`, `scheduler`, and `github_pr` remain unchanged and Codex-only.
 - Use TDD for every production change and commit each task separately.
 
@@ -165,7 +166,10 @@ Assert invocation:
 
 ```python
 assert invocation.container_binary_path == "/opt/qualock/claude"
-assert invocation.environment == (("CLAUDE_CONFIG_DIR", "/opt/qualock/claude-home"),)
+assert invocation.environment == (
+    ("CLAUDE_CONFIG_DIR", "/opt/qualock/claude-home"),
+    ("DISABLE_AUTOUPDATER", "1"),
+)
 assert invocation.tmpfs_mounts == ("/opt/qualock/claude-home",)
 ```
 

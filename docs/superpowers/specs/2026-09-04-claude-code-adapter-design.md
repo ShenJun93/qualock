@@ -89,7 +89,7 @@ The default host credential source is `~/.claude/.credentials.json` when present
 
 The source credential file is never mounted directly. The adapter copies it into a temporary host file, mounts that copy read-only at `/opt/qualock/claude-credentials-seed.json`, mounts `/opt/qualock/claude-home` as tmpfs, and requests bootstrap copy to `/opt/qualock/claude-home/.credentials.json` with the existing restrictive bootstrap mechanism.
 
-`CLAUDE_CONFIG_DIR=/opt/qualock/claude-home` is non-secret and may be passed as an environment variable. The temporary credential seed and settings file must remain alive until Docker start/attach completes and must be deleted when the invocation context exits.
+`CLAUDE_CONFIG_DIR=/opt/qualock/claude-home` and `DISABLE_AUTOUPDATER=1` are non-secret and may be passed as environment variables. Disabling the Claude auto-updater is required so an exact resolved binary cannot mutate its runtime version. The temporary credential seed and settings file must remain alive until Docker start/attach completes and must be deleted when the invocation context exits.
 
 If no host credential file exists, the adapter still creates the isolated config tmpfs and settings but does not mount a credential seed. Claude then fails authentication normally; QuaLock does not smuggle host API keys into container environment metadata in this batch.
 
@@ -153,6 +153,7 @@ Existing reasoning effort values `low|medium|high|xhigh` are accepted by the cur
 - Credential destination is tmpfs and copied under restrictive bootstrap permissions.
 - Settings and seed mounts are read-only.
 - No user MCP/plugin/hook/rules config is inherited.
+- Claude auto-update is disabled with `DISABLE_AUTOUPDATER=1`.
 - Web tools are excluded from the available tool surface.
 - MCP configuration is explicit and empty.
 - Claude sandbox is enabled with `failIfUnavailable=true`.
@@ -166,7 +167,7 @@ Required TDD coverage:
 
 1. Claude resolver exact/latest/cache/architecture/error cases.
 2. Claude adapter argv contains isolation, model, effort, tool, MCP, settings, and container path requirements.
-3. Claude credential seed is a temporary copy, mounted read-only, bootstrapped into tmpfs, and deleted after context exit.
+3. Claude invocation sets `DISABLE_AUTOUPDATER=1`; the credential seed is a temporary copy, mounted read-only, bootstrapped into tmpfs, and deleted after context exit.
 4. Missing credential file yields isolated config/settings without a secret mount.
 5. Claude stream-json parser covers session, Bash, Edit/Write paths, web, MCP, final usage, permission denial, result errors, malformed JSON, and unknown events.
 6. Config accepts `claude` while default remains `codex`.
