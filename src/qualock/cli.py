@@ -101,7 +101,7 @@ def _render_safety_result(root: Path, result: QualificationResult) -> None:
         display_names = {canary.id: canary.name for canary in canaries}
     except (ConfigError, CanaryLoadError, FileNotFoundError):
         display_names = {}
-    summary = build_safety_summary(result, display_names)
+    summary = build_safety_summary(result, display_names, agent_display_name="Codex")
     evidence_path = f".qualock/results/{result.qualification_id}/"
     console.print(render_safety_terminal(summary, evidence_path), end="", markup=False)
 
@@ -194,7 +194,7 @@ def check_command(
         raise typer.Exit(1) from exc
 
     if technical:
-        console.print(render_terminal(result), end="")
+        console.print(render_terminal(result, agent_display_name="Codex"), end="")
     else:
         _render_safety_result(root, result)
 

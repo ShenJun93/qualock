@@ -31,6 +31,7 @@ class SafetySummary:
     headline: str
     explanation: str
     recommendation: str
+    agent_display_name: str
     baseline_version: str
     candidate_version: str
     workflows: tuple[WorkflowSafety, ...]
@@ -60,21 +61,21 @@ _SUITE_COPY = {
 }
 
 
-def _recommendation(result: QualificationResult) -> str:
+def _recommendation(result: QualificationResult, agent_display_name: str) -> str:
     if result.verdict is Verdict.PASS:
         return (
-            f"Codex {result.candidate_version} looks safe for the workflows you protect. "
+            f"{agent_display_name} {result.candidate_version} looks safe for the workflows you protect. "
             "You can update with the same caution you use for any tool upgrade."
         )
     if result.verdict is Verdict.WARN:
         return (
             "Review the workflows marked REVIEW before updating. "
-            f"Keep Codex {result.baseline_version} available until you are comfortable with the differences."
+            f"Keep {agent_display_name} {result.baseline_version} available until you are comfortable with the differences."
         )
     if result.verdict is Verdict.BLOCK:
         return (
-            f"Keep using Codex {result.baseline_version} for now. "
-            f"Do not update to Codex {result.candidate_version} until the regression is understood."
+            f"Keep using {agent_display_name} {result.baseline_version} for now. "
+            f"Do not update to {agent_display_name} {result.candidate_version} until the regression is understood."
         )
     return (
         "Run the check again after fixing the invalid or missing evidence. "
@@ -85,6 +86,8 @@ def _recommendation(result: QualificationResult) -> str:
 def build_safety_summary(
     result: QualificationResult,
     display_names: Mapping[str, str],
+    *,
+    agent_display_name: str,
 ) -> SafetySummary:
     status, headline, explanation = _SUITE_COPY[result.verdict]
     workflows = tuple(
@@ -103,7 +106,8 @@ def build_safety_summary(
         status=status,
         headline=headline,
         explanation=explanation,
-        recommendation=_recommendation(result),
+        recommendation=_recommendation(result, agent_display_name),
+        agent_display_name=agent_display_name,
         baseline_version=result.baseline_version,
         candidate_version=result.candidate_version,
         workflows=workflows,

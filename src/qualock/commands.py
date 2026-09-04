@@ -183,5 +183,7 @@ def execute_check(
         canaries,
         qualification_id=qid,
     )
-    write_qualification_artifacts(project_dir(root) / "results", result)
+    write_qualification_artifacts(
+        project_dir(root) / "results", result, agent_display_name="Codex"
+    )
     return result

@@ -22,11 +22,13 @@ def render_json(result: QualificationResult) -> dict[str, Any]:
     return cast(dict[str, Any], _encode(asdict(result)))
 
 
-def render_markdown(result: QualificationResult) -> str:
+def render_markdown(
+    result: QualificationResult, *, agent_display_name: str
+) -> str:
     lines = [
         "# Qualock qualification",
         "",
-        f"**Codex:** `{result.baseline_version}` → `{result.candidate_version}`",
+        f"**{agent_display_name}:** `{result.baseline_version}` → `{result.candidate_version}`",
         "",
         "| Canary | Baseline | Candidate | Verdict |",
         "| --- | ---: | ---: | --- |",
@@ -47,10 +49,12 @@ def render_markdown(result: QualificationResult) -> str:
     return "\n".join(lines)
 
 
-def render_terminal(result: QualificationResult) -> str:
+def render_terminal(
+    result: QualificationResult, *, agent_display_name: str
+) -> str:
     console = Console(record=True, force_terminal=False, color_system=None, width=100)
     console.print(
-        f"Qualock qualification: Codex {result.baseline_version} -> {result.candidate_version}"
+        f"Qualock qualification: {agent_display_name} {result.baseline_version} -> {result.candidate_version}"
     )
     table = Table(show_header=True)
     table.add_column("Canary")
@@ -85,7 +89,7 @@ def render_safety_terminal(summary: SafetySummary, evidence_path: str) -> str:
         "",
         summary.explanation,
         "",
-        f"Codex {summary.baseline_version} -> {summary.candidate_version}",
+        f"{summary.agent_display_name} {summary.baseline_version} -> {summary.candidate_version}",
         "",
         "Protected workflows",
     ]

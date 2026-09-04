@@ -37,7 +37,9 @@ def write_baseline_artifacts(
     return root
 
 
-def write_qualification_artifacts(base_dir: Path, result: QualificationResult) -> Path:
+def write_qualification_artifacts(
+    base_dir: Path, result: QualificationResult, *, agent_display_name: str
+) -> Path:
     root = base_dir / result.qualification_id
     try:
         root.mkdir(parents=True, exist_ok=False)
@@ -45,7 +47,9 @@ def write_qualification_artifacts(base_dir: Path, result: QualificationResult) -
         raise ArtifactExistsError(f"qualification already exists: {root}") from exc
 
     payload = render_json(result)
-    (root / "report.md").write_text(render_markdown(result), encoding="utf-8")
+    (root / "report.md").write_text(
+        render_markdown(result, agent_display_name=agent_display_name), encoding="utf-8"
+    )
     (root / "report.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
