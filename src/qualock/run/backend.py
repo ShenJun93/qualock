@@ -98,6 +98,7 @@ class DockerQualificationBackend:
                 extra_mounts=mounts,
                 tmpfs_mounts=invocation.tmpfs_mounts,
                 bootstrap_copy=invocation.bootstrap_copy,
+                stdin_secret_env=invocation.stdin_secret_env,
                 agent_container_path=invocation.container_binary_path,
                 frozen_tag=frozen_tag,
                 timeout_seconds=canary.agent.timeout_seconds,

@@ -6,31 +6,70 @@ from qualock.agents.claude_resolver import ClaudeResolveError, ClaudeResolver
 from qualock.run.process import ProcessResult
 
 
-def make_fake_npm(path: Path, *, create_binary: bool = True) -> Path:
-    path.write_text(
-        """#!/usr/bin/env python3
-import pathlib
-import sys
-
-args = sys.argv[1:]
-if args[:3] == ['view', '@anthropic-ai/claude-code', 'version']:
-    print('2.1.260')
-    raise SystemExit(0)
-if args and args[0] == 'install':
-    prefix = pathlib.Path(args[args.index('--prefix') + 1])
-    spec = next(x for x in args if x.startswith('@anthropic-ai/claude-code-linux-'))
-    package, version = spec.rsplit('@', 1)
-    package_name = package.removeprefix('@anthropic-ai/')
-    if CREATE_BINARY:
-        binary = prefix / 'node_modules' / '@anthropic-ai' / package_name / 'claude'
-        binary.parent.mkdir(parents=True, exist_ok=True)
-        binary.write_bytes(('native-claude-' + version).encode())
-        binary.chmod(0o755)
-    raise SystemExit(0)
-raise SystemExit(2)
-""".replace("CREATE_BINARY", "True" if create_binary else "False"),
-        encoding="utf-8",
+def make_fake_npm(
+    path: Path,
+    *,
+    create_binary: bool = True,
+    missing_flag: str | None = None,
+    reported_version: str | None = None,
+) -> Path:
+    flags = [
+        "--safe-mode",
+        "--restricted",
+        "--no-session-persistence",
+        "--output-format",
+        "--verbose",
+        "--permission-mode",
+        "--permission-prompts",
+        "--model",
+        "--effort",
+        "--tools",
+        "--allowed-tools",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "--settings",
+    ]
+    if missing_flag is not None:
+        flags.remove(missing_flag)
+    help_text = " ".join(flags)
+    binary_template = (
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if '--version' in args:\n"
+        "    print(REPORTED + ' (Claude Code)')\n"
+        "    raise SystemExit(0)\n"
+        "if '--help' in args:\n"
+        "    print(HELP_TEXT)\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(0)\n"
     )
+    binary_template = binary_template.replace("REPORTED", repr(reported_version or "__VERSION__"))
+    binary_template = binary_template.replace("HELP_TEXT", repr(help_text))
+    npm_script = (
+        "#!/usr/bin/env python3\n"
+        "import pathlib\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:3] == ['view', '@anthropic-ai/claude-code', 'version']:\n"
+        "    print('2.1.260')\n"
+        "    raise SystemExit(0)\n"
+        "if args and args[0] == 'install':\n"
+        "    prefix = pathlib.Path(args[args.index('--prefix') + 1])\n"
+        "    spec = next(x for x in args if x.startswith('@anthropic-ai/claude-code-linux-'))\n"
+        "    package, version = spec.rsplit('@', 1)\n"
+        "    package_name = package.removeprefix('@anthropic-ai/')\n"
+        f"    if {create_binary!r}:\n"
+        "        binary = prefix / 'node_modules' / '@anthropic-ai' / package_name / 'claude'\n"
+        "        binary.parent.mkdir(parents=True, exist_ok=True)\n"
+        f"        template = {binary_template!r}\n"
+        "        template = template.replace('__VERSION__', version)\n"
+        "        binary.write_text(template)\n"
+        "        binary.chmod(0o755)\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(2)\n"
+    )
+    path.write_text(npm_script, encoding="utf-8")
     path.chmod(0o755)
     return path
 
@@ -88,6 +127,35 @@ def test_cached_binary_is_reused_without_npm(tmp_path: Path) -> None:
     second = resolver.resolve("2.1.260")
 
     assert second == first
+
+
+def test_versions_before_validated_contract_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ClaudeResolveError, match="requires Claude Code >= 2.1.260"):
+        ClaudeResolver(tmp_path / "cache", machine="x86_64").resolve("2.1.259")
+
+
+def test_resolved_binary_must_report_requested_version(tmp_path: Path) -> None:
+    npm = make_fake_npm(tmp_path / "npm", reported_version="2.1.261")
+    resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+
+    with pytest.raises(ClaudeResolveError, match="reported version"):
+        resolver.resolve("2.1.260")
+
+
+def test_resolved_binary_requires_verbose_for_stream_json_contract(tmp_path: Path) -> None:
+    npm = make_fake_npm(tmp_path / "npm", missing_flag="--verbose")
+    resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+
+    with pytest.raises(ClaudeResolveError, match="missing required CLI flag --verbose"):
+        resolver.resolve("2.1.260")
+
+
+def test_resolved_binary_must_expose_required_cli_contract(tmp_path: Path) -> None:
+    npm = make_fake_npm(tmp_path / "npm", missing_flag="--restricted")
+    resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+
+    with pytest.raises(ClaudeResolveError, match="missing required CLI flag --restricted"):
+        resolver.resolve("2.1.260")
 
 
 def test_unsupported_architecture_fails_closed(tmp_path: Path) -> None:

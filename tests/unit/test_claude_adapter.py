@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from qualock.agents.base import AgentBinary, AgentRuntimeDependency
-from qualock.agents.claude import ClaudeAdapter
+from qualock.agents.claude import ClaudeAdapter, select_claude_automation_credential
 from qualock.evidence.models import AgentEvidence
 
 
@@ -30,14 +30,16 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
         assert argv[0] == str(tmp_path / "claude")
         assert "-p" in argv
         assert "--safe-mode" in argv
+        assert "--restricted" in argv
         assert "--no-session-persistence" in argv
         assert argv[argv.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in argv
         assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
         assert argv[argv.index("--permission-prompts") + 1] == "none"
         assert argv[argv.index("--model") + 1] == "sonnet"
         assert argv[argv.index("--effort") + 1] == "high"
-        assert argv[argv.index("--tools") + 1] == "Bash,Read,Edit,Write,Glob,Grep"
-        assert argv[argv.index("--allowed-tools") + 1] == "Bash,Read,Edit,Write,Glob,Grep"
+        assert argv[argv.index("--tools") + 1] == "Bash,Read,Edit,Write"
+        assert argv[argv.index("--allowed-tools") + 1] == "Bash,Read,Edit,Write"
         assert "--strict-mcp-config" in argv
         assert argv[argv.index("--mcp-config") + 1] == '{"mcpServers":{}}'
         assert argv[argv.index("--settings") + 1] == "/opt/qualock/claude-settings.json"
@@ -50,12 +52,6 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
         assert settings_mount.mode == "ro"
         payload = json.loads(settings_mount.host_path.read_text(encoding="utf-8"))
         assert payload == {
-            "permissions": {
-                "deny": [
-                    "Read(//opt/qualock/claude-credentials-seed.json)",
-                    "Read(//opt/qualock/claude-home/.credentials.json)",
-                ]
-            },
             "sandbox": {
                 "enabled": True,
                 "failIfUnavailable": True,
@@ -64,15 +60,10 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
                 "enableWeakerNestedSandbox": True,
                 "network": {"deniedDomains": ["*"], "strictAllowlist": True},
                 "credentials": {
-                    "files": [
-                        {
-                            "path": "/opt/qualock/claude-credentials-seed.json",
-                            "mode": "deny",
-                        },
-                        {
-                            "path": "/opt/qualock/claude-home/.credentials.json",
-                            "mode": "deny",
-                        },
+                    "envVars": [
+                        {"name": "ANTHROPIC_AUTH_TOKEN", "mode": "deny"},
+                        {"name": "ANTHROPIC_API_KEY", "mode": "deny"},
+                        {"name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny"},
                     ]
                 },
             },
@@ -82,37 +73,21 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
     assert not settings_host.exists()
 
 
-def test_credentials_are_copied_to_temporary_read_only_seed(tmp_path: Path) -> None:
-    auth_home = tmp_path / "claude-home"
-    auth_home.mkdir()
-    source = auth_home / ".credentials.json"
-    source.write_text('{"token":"test-only"}', encoding="utf-8")
-    adapter = ClaudeAdapter(auth_home=auth_home)
+def test_automation_credential_uses_stdin_secret_environment_without_metadata(tmp_path: Path) -> None:
+    adapter = ClaudeAdapter(automation_credential=("CLAUDE_CODE_OAUTH_TOKEN", "test-only"))
 
     with adapter.invocation(
         binary(tmp_path), model="sonnet", reasoning_effort="high", prompt="Fix it"
     ) as invocation:
-        seed = next(
-            mount for mount in invocation.mounts
-            if mount.container_path == "/opt/qualock/claude-credentials-seed.json"
-        )
-        assert seed.host_path != source
-        assert seed.host_path.read_text(encoding="utf-8") == '{"token":"test-only"}'
-        assert seed.mode == "ro"
-        assert invocation.bootstrap_copy == (
-            "/opt/qualock/claude-credentials-seed.json",
-            "/opt/qualock/claude-home/.credentials.json",
-        )
-        assert not any(str(source) == str(mount.host_path) for mount in invocation.mounts)
-        seed_host = seed.host_path
-
-    assert not seed_host.exists()
+        assert invocation.stdin_secret_env == ("CLAUDE_CODE_OAUTH_TOKEN", "test-only")
+        assert invocation.bootstrap_copy is None
+        assert "test-only" not in " ".join(invocation.argv)
+        assert "test-only" not in dict(invocation.environment).values()
+        assert all("credential" not in mount.container_path for mount in invocation.mounts)
 
 
-def test_missing_credentials_keeps_isolated_config_without_secret_mount(tmp_path: Path) -> None:
-    auth_home = tmp_path / "claude-home"
-    auth_home.mkdir()
-    adapter = ClaudeAdapter(auth_home=auth_home)
+def test_missing_automation_credential_keeps_isolated_config_without_secret_transport(tmp_path: Path) -> None:
+    adapter = ClaudeAdapter()
 
     with adapter.invocation(
         binary(tmp_path), model="sonnet", reasoning_effort="medium", prompt="Fix it"
@@ -123,6 +98,7 @@ def test_missing_credentials_keeps_isolated_config_without_secret_mount(tmp_path
         )
         assert invocation.tmpfs_mounts == ("/opt/qualock/claude-home",)
         assert invocation.bootstrap_copy is None
+        assert invocation.stdin_secret_env is None
         assert all(
             mount.container_path != "/opt/qualock/claude-credentials-seed.json"
             for mount in invocation.mounts
@@ -135,7 +111,7 @@ def test_missing_credentials_keeps_isolated_config_without_secret_mount(tmp_path
 
 def test_parse_evidence_delegates_to_claude_stream_parser() -> None:
     evidence = ClaudeAdapter().parse_evidence(
-        '{"type":"result","subtype":"success","usage":{"input_tokens":4,"output_tokens":1}}\n',
+        '{"type":"result","subtype":"success","usage":{"input_tokens":4,"cache_read_input_tokens":0,"output_tokens":1}}\n',
         "ignored stderr",
     )
 
@@ -157,3 +133,20 @@ def test_claude_adapter_requires_socat_runtime_dependency() -> None:
     assert ClaudeAdapter().runtime_dependencies == (
         AgentRuntimeDependency(command="socat", apt_package="socat"),
     )
+
+
+def test_select_claude_automation_credential_follows_documented_precedence() -> None:
+    env = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "oauth",
+        "ANTHROPIC_API_KEY": "api",
+        "ANTHROPIC_AUTH_TOKEN": "bearer",
+    }
+    assert select_claude_automation_credential(env) == ("ANTHROPIC_AUTH_TOKEN", "bearer")
+    del env["ANTHROPIC_AUTH_TOKEN"]
+    assert select_claude_automation_credential(env) == ("ANTHROPIC_API_KEY", "api")
+    del env["ANTHROPIC_API_KEY"]
+    assert select_claude_automation_credential(env) == ("CLAUDE_CODE_OAUTH_TOKEN", "oauth")
+
+
+def test_select_claude_automation_credential_ignores_empty_values() -> None:
+    assert select_claude_automation_credential({"CLAUDE_CODE_OAUTH_TOKEN": ""}) is None

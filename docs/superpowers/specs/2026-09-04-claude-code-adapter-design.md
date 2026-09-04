@@ -51,13 +51,15 @@ The adapter owns all Claude-specific runtime details. It builds a non-interactiv
 
 - `-p`
 - `--safe-mode`
+- `--restricted`
 - `--no-session-persistence`
 - `--output-format stream-json`
+- `--verbose` (required by Claude Code 2.1.260 for `-p` + `stream-json`)
 - `--permission-mode dontAsk`
 - `--permission-prompts none`
 - `--model <configured model>`
 - `--effort <configured reasoning effort>`
-- a minimal tool surface: `Bash,Read,Edit,Write,Glob,Grep`
+- a minimal tool surface: `Bash,Read,Edit,Write`
 - matching `--allowed-tools`
 - `--strict-mcp-config`
 - `--mcp-config {"mcpServers":{}}`
@@ -92,15 +94,23 @@ Claude Code's Linux sandbox requires both `bubblewrap` and `socat`. Batch #31 ex
 
 Because Claude's bubblewrap sandbox runs inside QuaLock's outer Docker container, the explicit Claude settings enable `sandbox.enableWeakerNestedSandbox=true`; this permits the inner sandbox to bind-mount the container's existing `/proc` while the outer Docker container remains the primary process isolation boundary. `failIfUnavailable=true` and `allowUnsandboxedCommands=false` remain mandatory.
 
-## Claude credential isolation
+## Claude automation credential isolation
 
-The default host credential source is `~/.claude/.credentials.json` when present.
+Batch #31 does not reuse or copy interactive `/login` state from `~/.claude/.credentials.json`. Real Docker acceptance showed that a credential file which is valid for the host interactive login is not a reliable non-interactive container credential. QuaLock therefore follows Claude Code's documented automation authentication path.
 
-The source credential file is never mounted directly. The adapter copies it into a temporary host file, mounts that copy read-only at `/opt/qualock/claude-credentials-seed.json`, mounts `/opt/qualock/claude-home` as tmpfs, and requests bootstrap copy to `/opt/qualock/claude-home/.credentials.json` with the existing restrictive bootstrap mechanism. Explicit settings deny built-in `Read` access to both credential paths and add both paths to `sandbox.credentials.files` with `mode: deny`, preventing sandboxed Bash subprocesses from reading them.
+The default Claude backend selects the first non-empty explicit automation credential in documented direct-auth precedence:
 
-`CLAUDE_CONFIG_DIR=/opt/qualock/claude-home` and `DISABLE_AUTOUPDATER=1` are non-secret and may be passed as environment variables. Disabling the Claude auto-updater is required so an exact resolved binary cannot mutate its runtime version. The temporary credential seed and settings file must remain alive until Docker start/attach completes and must be deleted when the invocation context exits.
+1. `ANTHROPIC_AUTH_TOKEN`
+2. `ANTHROPIC_API_KEY`
+3. `CLAUDE_CODE_OAUTH_TOKEN`
 
-If no host credential file exists, the adapter still creates the isolated config tmpfs and settings but does not mount a credential seed. Claude then fails authentication normally; QuaLock does not smuggle host API keys into container environment metadata in this batch.
+For subscription users, `CLAUDE_CODE_OAUTH_TOKEN` is obtained with `claude setup-token`. If none of these variables is present, local Claude baseline/check fails before Docker execution with a `CommandError` explaining how to configure automation authentication. QuaLock never extracts a token from interactive Claude credential files.
+
+The selected secret value is not placed in Docker `--env KEY=value` metadata, image configuration, command arguments, files, or bind mounts. The invocation carries `(credential_name, credential_value)` as generic in-memory `stdin_secret_env` data. `DockerRunner` creates the container with only the credential variable **name** in its bootstrap argv, starts the container interactively, streams the secret over stdin, exports it into the Claude process environment, clears the bootstrap shell variable, and immediately `exec`s Claude. Docker image/container configuration therefore never receives the secret value.
+
+Explicit Claude settings list all three supported credential variables under `sandbox.credentials.envVars` with `mode: deny`, so sandboxed Bash/tool subprocesses do not inherit the parent Claude process credential. `CLAUDE_CONFIG_DIR=/opt/qualock/claude-home` remains an isolated tmpfs and `DISABLE_AUTOUPDATER=1` prevents the pinned Claude binary from updating itself.
+
+Real contract validation is two-layered. `ClaudeResolver` rejects versions below `2.1.260`, verifies the resolved binary reports the exact requested version, and requires every CLI flag used by the adapter from the binary's actual `--help`. Separately, a real `claude doctor` smoke against the exact adapter-generated settings must report no `Invalid settings`; an intentionally malformed settings file is required to be detected by the same doctor path.
 
 ## Claude stream-json evidence
 
@@ -131,7 +141,7 @@ Add small agent-routing helpers in `commands.py` (or a focused routing module if
 - adapter/backend factory by agent name
 - display-name mapping
 
-Codex continues to use `CodexResolver` and `CodexAdapter`. Claude uses `ClaudeResolver` and `ClaudeAdapter(auth_home=~/.claude if it exists else None)`.
+Codex continues to use `CodexResolver` and `CodexAdapter`. Claude uses `ClaudeResolver`; the default backend selects an explicit automation credential from the host environment and constructs `ClaudeAdapter(automation_credential=...)`.
 
 `execute_baseline` writes the actual agent name into `AgentPin`. `execute_check` resolves both baseline and candidate with the baseline/candidate agent. Report artifact writing receives the matching display name.
 
@@ -150,43 +160,45 @@ Existing reasoning effort values `low|medium|high|xhigh` are accepted by the cur
 
 ## Error handling
 
-- Invalid/unsupported Claude versions or architectures raise `ClaudeResolveError`.
+- Invalid/unsupported Claude versions, architectures, version mismatches, or missing required CLI flags raise `ClaudeResolveError`.
 - Malformed stream-json or a stream that ends without a final `result` event raises `ClaudeEvidenceError`.
 - Agent/config/baseline name mismatches raise `CommandError` before execution.
-- Claude auth/model/runtime failures surface through the existing agent exit/evidence invalidation paths.
+- Missing Claude automation credentials raise `CommandError` before Docker execution; runtime auth/model failures still surface through existing exit/evidence invalidation paths.
 - No credential source path or credential contents appear in report artifacts.
 
 ## Security invariants
 
-- No original Claude credential file is mounted directly.
-- Credential destination is tmpfs and copied under restrictive bootstrap permissions.
-- Settings and seed mounts are read-only.
+- Interactive Claude credential files are never read, copied, or mounted for qualification.
+- Automation credential values travel only through Docker stdin into the Claude process environment; secret values never appear in Docker argv, `--env`, bind mounts, or image metadata.
+- `sandbox.credentials.envVars` denies `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_OAUTH_TOKEN` to sandboxed commands.
+- The settings mount is read-only and `CLAUDE_CONFIG_DIR` is isolated tmpfs.
 - No user MCP/plugin/hook/rules config is inherited.
 - Claude auto-update is disabled with `DISABLE_AUTOUPDATER=1`.
 - Web tools are excluded from the available tool surface.
 - Sandboxed Bash network is deny-all via `network.deniedDomains: ["*"]` plus `strictAllowlist: true`.
-- Claude credential seed/target paths are denied to built-in Read/Edit flows and OS-level sandbox reads.
 - MCP configuration is explicit and empty.
 - Claude sandbox is enabled with `failIfUnavailable=true`, `allowUnsandboxedCommands=false`, and `enableWeakerNestedSandbox=true` for the outer-Docker/inner-bubblewrap layout.
 - Claude prepared runtimes require the distro-provided `socat` package; Codex prepared runtimes do not gain this dependency.
 - Existing QuaLock web/MCP/protected-path checks remain authoritative and unchanged.
 - Docker frozen-state inspection remains the authority for protected path mutation.
-- No secret is placed into Docker `--env KEY=value` metadata.
+- No secret is placed into Docker `--env KEY=value` metadata or container/image command metadata.
 
 ## Tests
 
 Required TDD coverage:
 
-1. Claude resolver exact/latest/cache/architecture/error cases.
-2. Claude adapter argv contains isolation, model, effort, tool, MCP, settings, and container path requirements.
-3. Claude invocation sets `DISABLE_AUTOUPDATER=1`; sandbox settings deny all Bash network and deny tool/Bash reads of credential seed/target paths; the credential seed is a temporary copy, mounted read-only, bootstrapped into tmpfs, and deleted after context exit.
-4. Generic prepare forwards adapter runtime dependencies; Claude requests `socat` while default/Codex prepare stays bubblewrap-only, and prepared-image digest provenance is retained.
-5. Missing credential file yields isolated config/settings without a secret mount.
-6. Claude stream-json parser covers session, Bash, Edit/Write paths, web, MCP, final usage, permission denial, result errors, malformed JSON, and unknown events.
-7. Config accepts `claude` while default remains `codex`.
-8. Baseline/check routing chooses Claude resolver/backend, pins `agent.name="claude"`, rejects mixed agents, and preserves Codex paths.
-9. CLI renders `Claude Code` for Claude local checks and preserves exact existing Codex output.
-10. `release_monitor`, `version_bisect`, scheduler, and GitHub PR modules remain unchanged and Codex-only.
+1. Claude resolver exact/latest/cache/architecture/error cases plus minimum validated version, exact `--version`, and required real CLI-flag contract.
+2. Claude adapter argv contains `--restricted`, required `--verbose`, isolation, model, effort, minimal tools, MCP, settings, and container path requirements.
+3. Claude invocation sets `DISABLE_AUTOUPDATER=1`; sandbox settings deny all Bash network and deny all supported auth env vars to sandboxed commands.
+4. Generic Docker stdin-secret transport proves the secret value is absent from create argv, Docker environment metadata, mounts, and image command metadata while the credential name alone is used by the bootstrap shell.
+5. Default Claude backend follows direct-auth precedence and fails before Docker when no automation credential exists.
+6. Real Claude 2.1.260 contract smoke validates resolved version/flags and `claude doctor` acceptance of the exact generated settings; authenticated model execution is conditional on an explicit automation credential being present.
+7. Generic prepare forwards adapter runtime dependencies; Claude requests `socat` while default/Codex prepare stays bubblewrap-only, and prepared-image digest provenance is retained.
+8. Claude stream-json parser covers session, Bash, Edit/Write paths, `user/tool_result`, tool errors/exit codes, web, MCP, strict final usage, permission denial, malformed JSON, and unknown events.
+9. Config accepts `claude` while default remains `codex`.
+10. Baseline/check routing chooses Claude resolver/backend, pins `agent.name="claude"`, rejects mixed agents, and preserves Codex paths.
+11. CLI renders `Claude Code` for Claude local checks and preserves exact existing Codex output.
+12. `release_monitor`, `version_bisect`, scheduler, and GitHub PR modules remain unchanged and Codex-only.
 
 ## Final gate
 

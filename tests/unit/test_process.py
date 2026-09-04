@@ -3,7 +3,6 @@ from pathlib import Path
 
 from qualock.run.process import run_process
 
-
 FIXTURE = Path("tests/fixtures/bin/process_fixture.py").resolve()
 
 
@@ -31,3 +30,14 @@ def test_process_timeout_is_reported() -> None:
     )
     assert result.timed_out is True
     assert result.exit_code is None
+
+
+def test_process_can_stream_explicit_stdin() -> None:
+    result = run_process(
+        [sys.executable, "-c", "import sys; print(sys.stdin.read())"],
+        input_text="secret-input",
+        timeout_seconds=5,
+    )
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "secret-input"
+    assert result.stderr == ""

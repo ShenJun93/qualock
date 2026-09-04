@@ -9,31 +9,29 @@ class ClaudeEvidenceError(AgentEvidenceError):
     pass
 
 
-def _tool_uses(event: dict[str, Any]) -> Iterable[dict[str, Any]]:
+def _message_content(event: dict[str, Any]) -> list[dict[str, Any]]:
     message = event.get("message")
     if not isinstance(message, dict):
-        return ()
+        return []
     content = message.get("content")
     if not isinstance(content, list):
-        return ()
-    return (
-        item
-        for item in content
-        if isinstance(item, dict) and item.get("type") == "tool_use"
-    )
+        return []
+    return [item for item in content if isinstance(item, dict)]
 
 
-def _record_tool_use(evidence: AgentEvidence, item: dict[str, Any]) -> None:
+def _record_tool_use(evidence: AgentEvidence, item: dict[str, Any]) -> int | None:
     name = item.get("name")
     tool_input = item.get("input")
     if not isinstance(name, str):
-        return
+        return None
     payload = tool_input if isinstance(tool_input, dict) else {}
+    command_index: int | None = None
 
     if name == "Bash":
         command = payload.get("command")
         if isinstance(command, str):
             evidence.commands.append(CommandEvent(command=command))
+            command_index = len(evidence.commands) - 1
     elif name in {"Edit", "Write"}:
         path = payload.get("file_path") or payload.get("path")
         if isinstance(path, str):
@@ -43,25 +41,31 @@ def _record_tool_use(evidence: AgentEvidence, item: dict[str, Any]) -> None:
         evidence.web_searches += 1
     if name.startswith("mcp__"):
         evidence.mcp_calls += 1
+    return command_index
 
 
-def _usage_value(usage: dict[str, Any], key: str) -> int:
+def _required_usage_value(usage: dict[str, Any], key: str) -> int:
     value = usage.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ClaudeEvidenceError(f"Claude result usage {key} must be an integer")
+    return value
 
 
 def _record_result(evidence: AgentEvidence, event: dict[str, Any]) -> None:
-    usage = event.get("usage")
-    if isinstance(usage, dict):
-        evidence.input_tokens = _usage_value(usage, "input_tokens")
-        evidence.cached_input_tokens = _usage_value(usage, "cache_read_input_tokens")
-        evidence.output_tokens = _usage_value(usage, "output_tokens")
-
     subtype = event.get("subtype")
-    is_error = event.get("is_error") is True
-    if isinstance(subtype, str) and subtype != "success":
+    if not isinstance(subtype, str):
+        raise ClaudeEvidenceError("Claude result subtype must be a string")
+
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        raise ClaudeEvidenceError("Claude result usage must be an object")
+    evidence.input_tokens = _required_usage_value(usage, "input_tokens")
+    evidence.cached_input_tokens = _required_usage_value(usage, "cache_read_input_tokens")
+    evidence.output_tokens = _required_usage_value(usage, "output_tokens")
+
+    if subtype != "success":
         evidence.errors.append(f"Claude result: {subtype}")
-    elif is_error:
+    elif event.get("is_error") is True:
         evidence.errors.append("Claude result reported an error")
 
     permission_denials = event.get("permission_denials")
@@ -69,9 +73,30 @@ def _record_result(evidence: AgentEvidence, event: dict[str, Any]) -> None:
         evidence.errors.append("Claude permission denial detected")
 
 
+def _record_tool_result(
+    evidence: AgentEvidence,
+    item: dict[str, Any],
+    command_indexes: dict[str, int],
+) -> None:
+    tool_use_id = item.get("tool_use_id")
+    if isinstance(tool_use_id, str):
+        command_index = command_indexes.get(tool_use_id)
+        if command_index is not None:
+            exit_code = item.get("exit_code", item.get("exitCode"))
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                command = evidence.commands[command_index]
+                evidence.commands[command_index] = CommandEvent(
+                    command=command.command,
+                    exit_code=exit_code,
+                )
+    if item.get("is_error") is True:
+        evidence.errors.append("Claude tool result reported an error")
+
+
 def parse_claude_stream_json(lines: Iterable[str]) -> AgentEvidence:
     evidence = AgentEvidence()
     saw_result = False
+    command_indexes: dict[str, int] = {}
     for line_no, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line:
@@ -89,8 +114,24 @@ def parse_claude_stream_json(lines: Iterable[str]) -> AgentEvidence:
             if isinstance(session_id, str):
                 evidence.thread_id = session_id
         elif event_type == "assistant":
-            for item in _tool_uses(event):
-                _record_tool_use(evidence, item)
+            for item in _message_content(event):
+                if item.get("type") != "tool_use":
+                    continue
+                command_index = _record_tool_use(evidence, item)
+                tool_use_id = item.get("id")
+                if command_index is not None and isinstance(tool_use_id, str):
+                    command_indexes[tool_use_id] = command_index
+        elif event_type == "user":
+            tool_results = [
+                item
+                for item in _message_content(event)
+                if item.get("type") == "tool_result"
+            ]
+            if tool_results:
+                for item in tool_results:
+                    _record_tool_result(evidence, item, command_indexes)
+            else:
+                evidence.unknown_events.append(event)
         elif event_type == "result":
             saw_result = True
             _record_result(evidence, event)

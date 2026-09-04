@@ -1,7 +1,6 @@
 import json
-import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -12,9 +11,18 @@ from .base import AgentBinary, AgentInvocation, AgentMount, AgentRuntimeDependen
 
 _SETTINGS_CONTAINER_PATH = "/opt/qualock/claude-settings.json"
 _CONFIG_DIR = "/opt/qualock/claude-home"
-_CREDENTIAL_SEED = "/opt/qualock/claude-credentials-seed.json"
-_CREDENTIAL_TARGET = f"{_CONFIG_DIR}/.credentials.json"
-_TOOLS = "Bash,Read,Edit,Write,Glob,Grep"
+_TOOLS = "Bash,Read,Edit,Write"
+_AUTH_ENV_NAMES = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
+
+
+def select_claude_automation_credential(
+    environment: Mapping[str, str],
+) -> tuple[str, str] | None:
+    for name in _AUTH_ENV_NAMES:
+        value = environment.get(name)
+        if value:
+            return name, value
+    return None
 
 
 class ClaudeAdapter:
@@ -22,8 +30,8 @@ class ClaudeAdapter:
     def runtime_dependencies(self) -> tuple[AgentRuntimeDependency, ...]:
         return (AgentRuntimeDependency(command="socat", apt_package="socat"),)
 
-    def __init__(self, auth_home: Path | None = None) -> None:
-        self.auth_home = auth_home
+    def __init__(self, automation_credential: tuple[str, str] | None = None) -> None:
+        self.automation_credential = automation_credential
 
     def _build_argv(
         self,
@@ -37,9 +45,11 @@ class ClaudeAdapter:
             str(binary.path),
             "-p",
             "--safe-mode",
+            "--restricted",
             "--no-session-persistence",
             "--output-format",
             "stream-json",
+            "--verbose",
             "--permission-mode",
             "dontAsk",
             "--permission-prompts",
@@ -75,12 +85,6 @@ class ClaudeAdapter:
             settings_file.write_text(
                 json.dumps(
                     {
-                        "permissions": {
-                            "deny": [
-                                "Read(//opt/qualock/claude-credentials-seed.json)",
-                                "Read(//opt/qualock/claude-home/.credentials.json)",
-                            ]
-                        },
                         "sandbox": {
                             "enabled": True,
                             "failIfUnavailable": True,
@@ -92,15 +96,9 @@ class ClaudeAdapter:
                                 "strictAllowlist": True,
                             },
                             "credentials": {
-                                "files": [
-                                    {
-                                        "path": "/opt/qualock/claude-credentials-seed.json",
-                                        "mode": "deny",
-                                    },
-                                    {
-                                        "path": "/opt/qualock/claude-home/.credentials.json",
-                                        "mode": "deny",
-                                    },
+                                "envVars": [
+                                    {"name": name, "mode": "deny"}
+                                    for name in _AUTH_ENV_NAMES
                                 ]
                             },
                         },
@@ -110,15 +108,6 @@ class ClaudeAdapter:
                 encoding="utf-8",
             )
             mounts = [AgentMount(settings_file, _SETTINGS_CONTAINER_PATH, "ro")]
-            bootstrap_copy: tuple[str, str] | None = None
-
-            if self.auth_home is not None:
-                source = self.auth_home / ".credentials.json"
-                if source.is_file():
-                    credential_copy = temp_root / ".credentials.json"
-                    shutil.copy2(source, credential_copy)
-                    mounts.append(AgentMount(credential_copy, _CREDENTIAL_SEED, "ro"))
-                    bootstrap_copy = (_CREDENTIAL_SEED, _CREDENTIAL_TARGET)
 
             yield AgentInvocation(
                 argv=self._build_argv(
@@ -130,7 +119,7 @@ class ClaudeAdapter:
                 environment=(("CLAUDE_CONFIG_DIR", _CONFIG_DIR), ("DISABLE_AUTOUPDATER", "1")),
                 mounts=tuple(mounts),
                 tmpfs_mounts=(_CONFIG_DIR,),
-                bootstrap_copy=bootstrap_copy,
+                stdin_secret_env=self.automation_credential,
                 container_binary_path="/opt/qualock/claude",
             )
 
