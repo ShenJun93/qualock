@@ -272,6 +272,22 @@ def test_check_forwards_attempt_budget_and_writes_incomplete_report(tmp_path: Pa
     assert payload["executions"][0]["prepared_image_digest"] == ""
     assert "max_attempts=5" in payload["executions"][0]["reason"]
 
+    artifact_root = tmp_path / ".qualock/results/check-budget"
+    assert (artifact_root / "report.md").is_file()
+    assert (artifact_root / "report.json").is_file()
+    qualification = json.loads(
+        (artifact_root / "qualification.json").read_text(encoding="utf-8")
+    )
+    assert set(qualification) == {
+        "qualification_id",
+        "baseline_version",
+        "candidate_version",
+        "run_order",
+        "verdict",
+    }
+    assert qualification["run_order"] == []
+    assert qualification["verdict"] == "incomplete"
+
 
 def test_check_rejects_nonpositive_attempt_budget_before_resolution(tmp_path: Path) -> None:
     resolver = FakeResolver()

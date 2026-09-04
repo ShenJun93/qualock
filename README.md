@@ -97,6 +97,14 @@ Then qualify a candidate release:
 qualock check codex@0.151.0
 ```
 
+To cap model calls for a quick, explicitly incomplete check, use an attempt budget:
+
+```bash
+qualock check codex@0.151.0 --max-attempts 6
+```
+
+QuaLock only starts a canary when the remaining budget can run its complete baseline/candidate paired schedule. When the cap prevents any configured canary from running, that canary is reported as `INCOMPLETE`, so the overall result is also `INCOMPLETE`. A budgeted check never turns missing evidence into a cheaper PASS or BLOCK. Omit the flag for the full qualification used by release monitoring and automated workflows.
+
 The default output is written for the person deciding whether to update:
 
 ```text

@@ -10,11 +10,11 @@
 - Publish one reproducible real-world upgrade regression or meaningful behavioral difference.
 - Forward version scan for the first confirmed bad stable coding-agent release.
 - GitHub pull-request qualification reports.
+- Attempt-budgeted local qualification with critical-first canary selection and fail-closed incomplete results.
 
 ## Next, only after v0.1 validation
 
 - Additional coding-agent adapters.
-- Smarter canary selection and cost controls.
 
 ## Commercial layer
 
