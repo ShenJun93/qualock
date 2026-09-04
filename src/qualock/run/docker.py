@@ -10,7 +10,6 @@ from .models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedI
 from .process import ProcessResult, run_process
 
 
-
 def parse_nul_paths(raw: str) -> tuple[str, ...]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -90,7 +89,7 @@ class DockerRunner:
                 "elif command -v apt-get >/dev/null 2>&1; then "
                 "apt-get update && apt-get install -y --no-install-recommends "
                 "bubblewrap=0.8.0-2+deb12u1 && rm -rf /var/lib/apt/lists/*; "
-                "else echo 'Qualock Codex runner requires bubblewrap in the runtime image' >&2; "
+                "else echo 'Qualock agent runner requires bubblewrap in the runtime image' >&2; "
                 "exit 127; fi"
             ),
         ]
@@ -126,6 +125,7 @@ class DockerRunner:
         extra_mounts: Sequence[tuple[Path, str, str]] = (),
         tmpfs_mounts: Sequence[str] = (),
         bootstrap_copy: tuple[str, str] | None = None,
+        agent_container_path: str = "/opt/qualock/agent",
         replace_agent_binary: bool = True,
     ) -> list[str]:
         argv = [
@@ -155,15 +155,17 @@ class DockerRunner:
             argv.extend(["--volume", f"{host_path.resolve()}:{container_path}:{mode}"])
         command = list(agent_argv)
         if replace_agent_binary:
+            if not agent_container_path.startswith("/"):
+                raise ValueError("agent container path must be absolute")
             argv.extend(
                 [
                     "--volume",
-                    f"{agent_binary.resolve()}:/opt/qualock/codex:ro",
+                    f"{agent_binary.resolve()}:{agent_container_path}:ro",
                 ]
             )
             if not command:
                 raise ValueError("agent_argv must not be empty")
-            command[0] = "/opt/qualock/codex"
+            command[0] = agent_container_path
         if bootstrap_copy is not None:
             source, destination = bootstrap_copy
             if not source.startswith("/") or not destination.startswith("/"):
@@ -192,6 +194,7 @@ class DockerRunner:
         extra_mounts: Sequence[tuple[Path, str, str]] = (),
         tmpfs_mounts: Sequence[str] = (),
         bootstrap_copy: tuple[str, str] | None = None,
+        agent_container_path: str = "/opt/qualock/agent",
         frozen_tag: str,
         timeout_seconds: float,
     ) -> FrozenAgentState:
@@ -205,6 +208,7 @@ class DockerRunner:
                 extra_mounts=extra_mounts,
                 tmpfs_mounts=tmpfs_mounts,
                 bootstrap_copy=bootstrap_copy,
+                agent_container_path=agent_container_path,
             ),
             timeout_seconds=30,
         )

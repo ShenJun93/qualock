@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from qualock.run.docker import DockerRunner
 
 
@@ -14,6 +16,7 @@ def test_agent_phase_never_mounts_or_mentions_grader(tmp_path: Path) -> None:
         agent_binary=agent_root / "codex",
         agent_argv=["/host/codex", "exec", "--json", "fix it"],
         environment={"CODEX_HOME": "/auth"},
+        agent_container_path="/opt/qualock/codex",
     )
     rendered = " ".join(argv)
     assert str(grader) not in rendered
@@ -77,6 +80,7 @@ def test_agent_phase_can_seed_tmpfs_before_exec(tmp_path: Path) -> None:
         extra_mounts=[(auth_file, "/opt/qualock/auth-seed.json", "ro")],
         tmpfs_mounts=["/opt/qualock/auth"],
         bootstrap_copy=("/opt/qualock/auth-seed.json", "/opt/qualock/auth/auth.json"),
+        agent_container_path="/opt/qualock/codex",
     )
     tmpfs_index = argv.index("--tmpfs")
     assert argv[tmpfs_index + 1] == "/opt/qualock/auth:rw,nosuid,nodev,noexec,mode=0700"
@@ -171,3 +175,31 @@ def test_agent_container_relaxes_seccomp_only_for_inner_bubblewrap(tmp_path: Pat
         command="pytest -q",
     )
     assert "seccomp=unconfined" not in grader
+
+
+def test_agent_binary_can_use_adapter_selected_container_path(tmp_path: Path) -> None:
+    runner = DockerRunner(docker_executable="docker")
+    binary = tmp_path / "agent"
+    binary.write_text("x", encoding="utf-8")
+    argv = runner.build_agent_create_argv(
+        prepared_image="sha256:prepared",
+        container_name="q1",
+        agent_binary=binary,
+        agent_argv=[str(binary), "run"],
+        environment={},
+        agent_container_path="/opt/qualock/claude",
+    )
+    assert f"{binary.resolve()}:/opt/qualock/claude:ro" in argv
+    assert argv[-2:] == ["/opt/qualock/claude", "run"]
+
+
+def test_agent_container_path_must_be_absolute(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="agent container path must be absolute"):
+        DockerRunner().build_agent_create_argv(
+            prepared_image="p",
+            container_name="q",
+            agent_binary=tmp_path / "a",
+            agent_argv=["a"],
+            environment={},
+            agent_container_path="relative/agent",
+        )
