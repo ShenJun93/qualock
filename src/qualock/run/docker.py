@@ -4,6 +4,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from qualock.agents.base import AgentRuntimeDependency
 from qualock.canary.models import CanarySpec
 
 from .models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedImage
@@ -77,20 +78,33 @@ class DockerRunner:
         canary: CanarySpec,
         *,
         image_tag: str,
+        runtime_dependencies: Sequence[AgentRuntimeDependency] = (),
         timeout_seconds: float = 1200,
     ) -> PreparedImage:
         self._require()
+        dependencies = (
+            AgentRuntimeDependency(
+                command="bwrap", apt_package="bubblewrap=0.8.0-2+deb12u1"
+            ),
+            *runtime_dependencies,
+        )
+        dependency_checks = " && ".join(
+            f"command -v {shlex.quote(item.command)} >/dev/null 2>&1"
+            for item in dependencies
+        )
+        apt_packages = " ".join(shlex.quote(item.apt_package) for item in dependencies)
+        dependency_names = " and ".join(item.command for item in dependencies)
         dockerfile_lines = [
             f"FROM {canary.runtime.image}",
             "WORKDIR /workspace",
             "COPY . /workspace",
             (
-                "RUN if command -v bwrap >/dev/null 2>&1; then :; "
+                f"RUN if {dependency_checks}; then :; "
                 "elif command -v apt-get >/dev/null 2>&1; then "
                 "apt-get update && apt-get install -y --no-install-recommends "
-                "bubblewrap=0.8.0-2+deb12u1 && rm -rf /var/lib/apt/lists/*; "
-                "else echo 'Qualock agent runner requires bubblewrap in the runtime image' >&2; "
-                "exit 127; fi"
+                f"{apt_packages} && rm -rf /var/lib/apt/lists/*; "
+                f"else echo 'Qualock agent runner requires {dependency_names} "
+                "in the runtime image' >&2; exit 127; fi"
             ),
         ]
         dockerfile_lines.extend(f"RUN {command}" for command in canary.setup)

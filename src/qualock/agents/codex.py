@@ -8,7 +8,13 @@ from qualock.evidence.codex_jsonl import parse_codex_jsonl
 from qualock.evidence.models import AgentEvidence
 from qualock.run.process import run_process
 
-from .base import AgentBinary, AgentCapabilities, AgentInvocation, AgentMount
+from .base import (
+    AgentBinary,
+    AgentCapabilities,
+    AgentInvocation,
+    AgentMount,
+    AgentRuntimeDependency,
+)
 
 
 class IncompatibleCodexError(RuntimeError):
@@ -18,6 +24,10 @@ class IncompatibleCodexError(RuntimeError):
 class CodexAdapter:
     def __init__(self, auth_home: Path | None = None) -> None:
         self.auth_home = auth_home
+
+    @property
+    def runtime_dependencies(self) -> tuple[AgentRuntimeDependency, ...]:
+        return ()
 
     def detect_capabilities(self, binary: Path) -> AgentCapabilities:
         result = run_process(

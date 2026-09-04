@@ -10,7 +10,7 @@ Add Claude Code as QuaLock's second local qualification agent while proving the 
 ## Non-goals
 
 - No Claude release monitor, version bisect, scheduler, or GitHub PR qualification.
-- No changes to `run/backend.py`, qualification policy, or normalized evidence semantics unless a genuine contract defect is discovered.
+- No Claude-specific logic in `run/backend.py`; generic backend/Docker contract changes are allowed only for a genuine cross-agent runtime requirement discovered during implementation. Qualification policy and normalized evidence semantics remain unchanged.
 - No automatic migration of existing Codex configs or baselines.
 - No implicit mapping from GPT model names to Claude model names.
 - No secret-bearing environment variables in Docker container metadata.
@@ -76,12 +76,21 @@ The adapter writes a temporary settings JSON and mounts it read-only. It enables
     "enabled": true,
     "failIfUnavailable": true,
     "autoAllowBashIfSandboxed": true,
-    "allowUnsandboxedCommands": false
+    "allowUnsandboxedCommands": false,
+    "enableWeakerNestedSandbox": true
   }
 }
 ```
 
 The adapter does not inherit user CLAUDE.md, hooks, plugins, MCP servers, or settings. `--safe-mode` plus explicit settings/MCP config is the isolation boundary.
+
+### Generic runtime dependencies
+
+Claude Code's Linux sandbox requires both `bubblewrap` and `socat`. QuaLock already bootstraps pinned bubblewrap in prepared Debian-style canary images, so Batch #31 extends the generic agent contract with immutable `AgentRuntimeDependency(command, apt_package)` data. `CodexAdapter.runtime_dependencies` is empty; `ClaudeAdapter.runtime_dependencies` requests `socat=1.7.4.4-2`.
+
+`DockerQualificationBackend.prepare` only forwards this generic dependency tuple. `DockerRunner.prepare` keeps the existing pinned `bubblewrap=0.8.0-2+deb12u1` requirement and installs additional pinned dependencies only for adapters that request them. No Claude name or Claude-specific package appears in the backend or Docker runner. For the default Codex adapter, the generated bootstrap command remains bubblewrap-only.
+
+Because Claude's bubblewrap sandbox runs inside QuaLock's outer Docker container, the explicit Claude settings enable `sandbox.enableWeakerNestedSandbox=true`; this permits the inner sandbox to bind-mount the container's existing `/proc` while the outer Docker container remains the primary process isolation boundary. `failIfUnavailable=true` and `allowUnsandboxedCommands=false` remain mandatory.
 
 ## Claude credential isolation
 
@@ -156,7 +165,8 @@ Existing reasoning effort values `low|medium|high|xhigh` are accepted by the cur
 - Claude auto-update is disabled with `DISABLE_AUTOUPDATER=1`.
 - Web tools are excluded from the available tool surface.
 - MCP configuration is explicit and empty.
-- Claude sandbox is enabled with `failIfUnavailable=true`.
+- Claude sandbox is enabled with `failIfUnavailable=true`, `allowUnsandboxedCommands=false`, and `enableWeakerNestedSandbox=true` for the outer-Docker/inner-bubblewrap layout.
+- Claude prepared runtimes require pinned `socat=1.7.4.4-2`; Codex prepared runtimes do not gain this dependency.
 - Existing QuaLock web/MCP/protected-path checks remain authoritative and unchanged.
 - Docker frozen-state inspection remains the authority for protected path mutation.
 - No secret is placed into Docker `--env KEY=value` metadata.
@@ -168,12 +178,13 @@ Required TDD coverage:
 1. Claude resolver exact/latest/cache/architecture/error cases.
 2. Claude adapter argv contains isolation, model, effort, tool, MCP, settings, and container path requirements.
 3. Claude invocation sets `DISABLE_AUTOUPDATER=1`; the credential seed is a temporary copy, mounted read-only, bootstrapped into tmpfs, and deleted after context exit.
-4. Missing credential file yields isolated config/settings without a secret mount.
-5. Claude stream-json parser covers session, Bash, Edit/Write paths, web, MCP, final usage, permission denial, result errors, malformed JSON, and unknown events.
-6. Config accepts `claude` while default remains `codex`.
-7. Baseline/check routing chooses Claude resolver/backend, pins `agent.name="claude"`, rejects mixed agents, and preserves Codex paths.
-8. CLI renders `Claude Code` for Claude local checks and preserves exact existing Codex output.
-9. `release_monitor`, `version_bisect`, scheduler, and GitHub PR modules remain unchanged and Codex-only.
+4. Generic prepare forwards adapter runtime dependencies; Claude requests pinned socat while default/Codex prepare stays bubblewrap-only.
+5. Missing credential file yields isolated config/settings without a secret mount.
+6. Claude stream-json parser covers session, Bash, Edit/Write paths, web, MCP, final usage, permission denial, result errors, malformed JSON, and unknown events.
+7. Config accepts `claude` while default remains `codex`.
+8. Baseline/check routing chooses Claude resolver/backend, pins `agent.name="claude"`, rejects mixed agents, and preserves Codex paths.
+9. CLI renders `Claude Code` for Claude local checks and preserves exact existing Codex output.
+10. `release_monitor`, `version_bisect`, scheduler, and GitHub PR modules remain unchanged and Codex-only.
 
 ## Final gate
 
@@ -183,7 +194,7 @@ Required TDD coverage:
 - strict mypy on `src/qualock`
 - compileall
 - `git diff --check`
-- scope proof for release-monitor/version-bisect/scheduler/GitHub PR
+- scope proof for qualification policy/release-monitor/version-bisect/scheduler/GitHub PR plus proof that backend/Docker changes remain agent-generic
 - independent whole-branch review
 
 ## Success criterion

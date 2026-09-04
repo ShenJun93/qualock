@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from qualock.agents.base import AgentBinary
+from qualock.agents.base import AgentBinary, AgentRuntimeDependency
 from qualock.agents.claude import ClaudeAdapter
 from qualock.evidence.models import AgentEvidence
 
@@ -55,6 +55,7 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
                 "failIfUnavailable": True,
                 "autoAllowBashIfSandboxed": True,
                 "allowUnsandboxedCommands": False,
+                "enableWeakerNestedSandbox": True,
             }
         }
         settings_host = settings_mount.host_path
@@ -131,3 +132,9 @@ def test_invocation_disables_claude_autoupdater(tmp_path: Path) -> None:
     ) as invocation:
         environment = dict(invocation.environment)
         assert environment["DISABLE_AUTOUPDATER"] == "1"
+
+
+def test_claude_adapter_requires_pinned_socat_runtime_dependency() -> None:
+    assert ClaudeAdapter().runtime_dependencies == (
+        AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2"),
+    )

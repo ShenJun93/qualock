@@ -55,6 +55,7 @@ class DockerQualificationBackend:
             source_dir,
             canary,
             image_tag=f"qualock-prepared-{key}",
+            runtime_dependencies=self.agent_adapter.runtime_dependencies,
         )
 
     def run_attempt(

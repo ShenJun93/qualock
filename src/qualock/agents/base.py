@@ -15,6 +15,12 @@ class AgentSupportBinary:
 
 
 @dataclass(frozen=True)
+class AgentRuntimeDependency:
+    command: str
+    apt_package: str
+
+
+@dataclass(frozen=True)
 class AgentBinary:
     name: str
     version: str
@@ -66,6 +72,9 @@ class AgentInvocation:
 
 
 class AgentAdapter(Protocol):
+    @property
+    def runtime_dependencies(self) -> tuple[AgentRuntimeDependency, ...]: ...
+
     def invocation(
         self,
         binary: AgentBinary,
