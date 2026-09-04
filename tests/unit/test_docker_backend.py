@@ -180,7 +180,7 @@ def backend(
 
 
 def test_prepare_forwards_agent_runtime_dependencies(tmp_path: Path) -> None:
-    dependency = AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2")
+    dependency = AgentRuntimeDependency(command="socat", apt_package="socat")
     docker = FakeDocker()
     service = backend(
         tmp_path,

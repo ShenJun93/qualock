@@ -134,7 +134,7 @@ def test_invocation_disables_claude_autoupdater(tmp_path: Path) -> None:
         assert environment["DISABLE_AUTOUPDATER"] == "1"
 
 
-def test_claude_adapter_requires_pinned_socat_runtime_dependency() -> None:
+def test_claude_adapter_requires_socat_runtime_dependency() -> None:
     assert ClaudeAdapter().runtime_dependencies == (
-        AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2"),
+        AgentRuntimeDependency(command="socat", apt_package="socat"),
     )

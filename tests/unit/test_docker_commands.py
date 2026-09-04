@@ -129,7 +129,7 @@ def test_daemon_ready_requires_successful_docker_info(monkeypatch) -> None:
     assert daemon_ready() is True
 
 
-def test_prepare_bootstraps_pinned_bubblewrap(tmp_path: Path, monkeypatch) -> None:
+def test_prepare_bootstraps_runtime_bubblewrap(tmp_path: Path, monkeypatch) -> None:
     from qualock.canary.models import CanarySpec
     from qualock.run.process import ProcessResult
     source = tmp_path / "source"
@@ -154,7 +154,8 @@ def test_prepare_bootstraps_pinned_bubblewrap(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(runner, "_run", fake_run)
     monkeypatch.setattr(runner, "_inspect_image_id", lambda reference: "sha256:prepared")
     runner.prepare(source, spec, image_tag="prepared")
-    assert "bubblewrap=0.8.0-2+deb12u1" in seen["dockerfile"]
+    assert "apt-get install -y --no-install-recommends bubblewrap" in seen["dockerfile"]
+    assert "bubblewrap=" not in seen["dockerfile"]
     assert "socat" not in seen["dockerfile"]
 
 
@@ -191,13 +192,15 @@ def test_prepare_installs_adapter_runtime_dependencies(tmp_path: Path, monkeypat
         spec,
         image_tag="prepared",
         runtime_dependencies=(
-            AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2"),
+            AgentRuntimeDependency(command="socat", apt_package="socat"),
         ),
     )
 
     assert "command -v bwrap" in seen["dockerfile"]
     assert "command -v socat" in seen["dockerfile"]
-    assert "bubblewrap=0.8.0-2+deb12u1 socat=1.7.4.4-2" in seen["dockerfile"]
+    assert "apt-get install -y --no-install-recommends bubblewrap socat" in seen["dockerfile"]
+    assert "bubblewrap=" not in seen["dockerfile"]
+    assert "socat=" not in seen["dockerfile"]
 
 
 def test_agent_container_relaxes_seccomp_only_for_inner_bubblewrap(tmp_path: Path) -> None:
