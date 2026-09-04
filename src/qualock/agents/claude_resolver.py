@@ -16,7 +16,22 @@ class ClaudeResolveError(RuntimeError):
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 _MIN_VALIDATED_VERSION = (2, 1, 260)
+_HELP_OPTION_RE = re.compile(r"(?<!\S)(--?[A-Za-z][A-Za-z0-9-]*)(?=[,\s]|$)")
+
+
+def _help_options(help_text: str) -> set[str]:
+    options: set[str] = set()
+    for line in help_text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("-"):
+            continue
+        synopsis = re.split(r"\s{2,}", stripped, maxsplit=1)[0]
+        options.update(_HELP_OPTION_RE.findall(synopsis))
+    return options
+
+
 _REQUIRED_CLI_FLAGS = (
+    "-p",
     "--safe-mode",
     "--restricted",
     "--no-session-persistence",
@@ -98,7 +113,10 @@ class ClaudeResolver:
             raise ClaudeResolveError(
                 version_result.stderr.strip() or "failed to inspect Claude Code version"
             )
-        reported = version_result.stdout.strip().split(maxsplit=1)[0]
+        version_output = version_result.stdout.strip()
+        if not version_output:
+            raise ClaudeResolveError("Claude binary returned empty version output")
+        reported = version_output.split(maxsplit=1)[0]
         if reported != version:
             raise ClaudeResolveError(
                 f"Claude binary reported version {reported!r}, expected {version!r}"
@@ -112,8 +130,9 @@ class ClaudeResolver:
                 help_result.stderr.strip() or "failed to inspect Claude Code CLI contract"
             )
         help_text = f"{help_result.stdout}\n{help_result.stderr}"
+        help_options = _help_options(help_text)
         for flag in _REQUIRED_CLI_FLAGS:
-            if flag not in help_text:
+            if flag not in help_options:
                 raise ClaudeResolveError(f"Claude binary missing required CLI flag {flag}")
 
     def resolve(self, requested_version: str) -> AgentBinary:

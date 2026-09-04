@@ -114,10 +114,11 @@ def parse_claude_stream_json(lines: Iterable[str]) -> AgentEvidence:
             raise ClaudeEvidenceError(f"invalid JSONL at line {line_no}: expected object")
 
         event_type = event.get("type")
-        if event_type == "system" and event.get("subtype") == "init":
-            session_id = event.get("session_id")
-            if isinstance(session_id, str):
-                evidence.thread_id = session_id
+        if event_type == "system":
+            if event.get("subtype") == "init":
+                session_id = event.get("session_id")
+                if isinstance(session_id, str):
+                    evidence.thread_id = session_id
         elif event_type == "assistant":
             for item in _message_content(event):
                 if item.get("type") != "tool_use":
@@ -132,11 +133,8 @@ def parse_claude_stream_json(lines: Iterable[str]) -> AgentEvidence:
                 for item in _message_content(event)
                 if item.get("type") == "tool_result"
             ]
-            if tool_results:
-                for item in tool_results:
-                    _record_tool_result(evidence, item, command_indexes)
-            else:
-                evidence.unknown_events.append(event)
+            for item in tool_results:
+                _record_tool_result(evidence, item, command_indexes)
         elif event_type == "result":
             if saw_result:
                 raise ClaudeEvidenceError("duplicate Claude result event")

@@ -98,7 +98,7 @@ console = Console()
 
 
 def _render_safety_result(
-    root: Path, result: QualificationResult, agent_display_name: str
+    root: Path, result: QualificationResult, display_name: str
 ) -> None:
     try:
         _config, canaries = load_project(root)
@@ -106,7 +106,7 @@ def _render_safety_result(
     except (ConfigError, CanaryLoadError, FileNotFoundError):
         display_names = {}
     summary = build_safety_summary(
-        result, display_names, agent_display_name=agent_display_name
+        result, display_names, agent_display_name=display_name
     )
     evidence_path = f".qualock/results/{result.qualification_id}/"
     console.print(render_safety_terminal(summary, evidence_path), end="", markup=False)
@@ -165,6 +165,7 @@ def doctor_command() -> None:
 def baseline_command(agent: str) -> None:
     try:
         lock = execute_baseline(Path.cwd(), agent)
+        display_name = agent_display_name(lock.agent.name)
     except (ConfigError, CanaryLoadError, CommandError, ValueError) as exc:
         console.print(str(exc))
         raise typer.Exit(3) from exc
@@ -174,9 +175,7 @@ def baseline_command(agent: str) -> None:
     except Exception as exc:
         console.print(str(exc))
         raise typer.Exit(1) from exc
-    console.print(
-        f"Baseline pinned: {agent_display_name(lock.agent.name)} {lock.agent.version}"
-    )
+    console.print(f"Baseline pinned: {display_name} {lock.agent.version}")
 
 
 @app.command("check")

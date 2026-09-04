@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -161,6 +162,19 @@ def test_check_claude_technical_output_uses_claude_code_name(tmp_path: Path, mon
 
     assert result.exit_code == 2
     assert "Qualock qualification: Claude Code 0.150.0 -> 0.151.0" in result.stdout
+
+
+def test_baseline_unknown_agent_display_fails_cleanly(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "qualock.cli.execute_baseline",
+        lambda root, agent: SimpleNamespace(
+            agent=SimpleNamespace(name="future-agent"), version="1.0.0"
+        ),
+    )
+    result = runner.invoke(app, ["baseline", "future-agent@1.0.0"])
+    assert result.exit_code == 3
+    assert "unsupported agent" in result.stdout
 
 
 def test_baseline_claude_output_uses_claude_code_name(tmp_path: Path, monkeypatch) -> None:
