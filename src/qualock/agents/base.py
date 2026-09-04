@@ -68,6 +68,7 @@ class AgentInvocation:
     mounts: tuple[AgentMount, ...] = ()
     tmpfs_mounts: tuple[str, ...] = ()
     bootstrap_copy: tuple[str, str] | None = None
+    stdin_secret_env: tuple[str, str] | None = None
     container_binary_path: str = "/opt/qualock/agent"
 
 

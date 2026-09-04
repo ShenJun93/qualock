@@ -10,6 +10,14 @@ def line(payload: object) -> str:
     return json.dumps(payload)
 
 
+def result_usage() -> dict[str, int]:
+    return {
+        "input_tokens": 10,
+        "cache_read_input_tokens": 4,
+        "output_tokens": 3,
+    }
+
+
 def test_parses_session_tools_and_final_usage() -> None:
     evidence = parse_claude_stream_json(
         [
@@ -72,7 +80,7 @@ def test_parses_session_tools_and_final_usage() -> None:
 
 def test_non_success_result_records_error() -> None:
     evidence = parse_claude_stream_json(
-        [line({"type": "result", "subtype": "error_during_execution", "is_error": True})]
+        [line({"type": "result", "subtype": "error_during_execution", "is_error": True, "usage": result_usage()})]
     )
 
     assert any("error_during_execution" in error for error in evidence.errors)
@@ -87,6 +95,7 @@ def test_permission_denial_records_error() -> None:
                     "subtype": "success",
                     "is_error": False,
                     "permission_denials": [{"tool_name": "Bash", "reason": "blocked"}],
+                    "usage": result_usage(),
                 }
             )
         ]
@@ -98,14 +107,14 @@ def test_permission_denial_records_error() -> None:
 def test_unknown_top_level_event_is_retained() -> None:
     payload = {"type": "future.event", "value": 1}
     evidence = parse_claude_stream_json(
-        [line(payload), line({"type": "result", "subtype": "success"})]
+        [line(payload), line({"type": "result", "subtype": "success", "usage": result_usage()})]
     )
 
     assert evidence.unknown_events == [payload]
 
 
 def test_empty_lines_are_ignored() -> None:
-    evidence = parse_claude_stream_json(["", "   ", line({"type": "result", "subtype": "success"})])
+    evidence = parse_claude_stream_json(["", "   ", line({"type": "result", "subtype": "success", "usage": result_usage()})])
 
     assert evidence.errors == []
 
@@ -129,3 +138,63 @@ def test_missing_final_result_fails_closed() -> None:
         parse_claude_stream_json(
             [line({"type": "system", "subtype": "init", "session_id": "s1"})]
         )
+
+
+def test_result_requires_subtype_and_usage() -> None:
+    with pytest.raises(ClaudeEvidenceError, match="result subtype"):
+        parse_claude_stream_json([line({"type": "result", "usage": result_usage()})])
+
+    with pytest.raises(ClaudeEvidenceError, match="result usage"):
+        parse_claude_stream_json([line({"type": "result", "subtype": "success"})])
+
+
+def test_result_usage_requires_integer_fields() -> None:
+    bad = result_usage()
+    bad["output_tokens"] = True
+    with pytest.raises(ClaudeEvidenceError, match="output_tokens"):
+        parse_claude_stream_json(
+            [line({"type": "result", "subtype": "success", "usage": bad})]
+        )
+
+
+def test_user_tool_result_updates_bash_outcome_and_records_error() -> None:
+    evidence = parse_claude_stream_json(
+        [
+            line(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tool-1",
+                                "name": "Bash",
+                                "input": {"command": "false"},
+                            }
+                        ]
+                    },
+                }
+            ),
+            line(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tool-1",
+                                "is_error": True,
+                                "exit_code": 1,
+                                "content": "command failed",
+                            }
+                        ]
+                    },
+                }
+            ),
+            line({"type": "result", "subtype": "success", "usage": result_usage()}),
+        ]
+    )
+
+    assert [(item.command, item.exit_code) for item in evidence.commands] == [("false", 1)]
+    assert any("tool result" in error.lower() for error in evidence.errors)
+    assert evidence.unknown_events == []

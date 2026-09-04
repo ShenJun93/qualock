@@ -4,7 +4,7 @@
 
 **Goal:** Add Claude Code as the second agent for local QuaLock baseline/check without changing the Batch #30 generic Docker qualification backend.
 
-**Architecture:** Add a Claude native-binary resolver, a Claude adapter that owns isolated settings/credentials/invocation, and a stream-json evidence parser. Extend only top-level config/command/CLI routing to select Codex or Claude; release/distribution workflows remain Codex-only.
+**Architecture:** Add a Claude native-binary resolver, a Claude adapter that owns isolated settings/automation-auth invocation, and a stream-json evidence parser. Extend only top-level config/command/CLI routing to select Codex or Claude; release/distribution workflows remain Codex-only.
 
 **Tech Stack:** Python 3.11+, Pydantic, Typer, npm package metadata/install, Docker runner contracts from Batch #30, pytest, Ruff, mypy.
 
@@ -16,7 +16,7 @@
 - Do not add Claude-specific logic to `src/qualock/run/backend.py` or change qualification policy. A generic runtime-dependency forwarder is permitted for the discovered Claude sandbox prerequisite.
 - Default config and all existing Codex behavior remain Codex.
 - Claude support is local `baseline`/`check` only.
-- No original Claude credential file is mounted directly and no secret is passed through Docker environment metadata.
+- Interactive Claude credential files are not reused. Automation secrets travel only through Docker stdin into the Claude process environment and never appear in Docker `--env`, argv, mounts, or image metadata.
 - Exact Claude runs set `DISABLE_AUTOUPDATER=1` so the resolved version cannot self-update.
 - `release_monitor`, `version_bisect`, `scheduler`, and `github_pr` remain unchanged and Codex-only.
 - Use TDD for every production change and commit each task separately.
@@ -156,7 +156,7 @@ git commit -m "feat: parse Claude Code evidence"
 - Create: `tests/unit/test_claude_adapter.py`
 
 **Interfaces:**
-- Produces: `ClaudeAdapter(auth_home: Path | None = None)` implementing `AgentAdapter`.
+- Produces: `ClaudeAdapter(automation_credential: tuple[str, str] | None = None)` implementing `AgentAdapter`.
 - Produces: `ClaudeAdapter.invocation(...) -> ContextManager[AgentInvocation]`.
 - Produces: `ClaudeAdapter.parse_evidence(stdout: str, stderr: str) -> AgentEvidence`.
 
@@ -173,11 +173,9 @@ assert invocation.environment == (
 assert invocation.tmpfs_mounts == ("/opt/qualock/claude-home",)
 ```
 
-Assert argv includes `-p`, `--safe-mode`, `--no-session-persistence`, `--output-format stream-json`, `--permission-mode dontAsk`, `--permission-prompts none`, configured model/effort, minimal tools, empty strict MCP config, explicit settings path, and prompt. Assert settings use `network.deniedDomains=["*"]`, `strictAllowlist=true`, and deny both credential seed/target paths through `permissions.deny` and `sandbox.credentials.files`.
+Assert argv includes `-p`, `--safe-mode`, `--restricted`, `--no-session-persistence`, `--output-format stream-json`, required `--verbose`, `--permission-mode dontAsk`, `--permission-prompts none`, configured model/effort, minimal tools, empty strict MCP config, explicit settings path, and prompt. Assert settings use `network.deniedDomains=["*"]`, `strictAllowlist=true`, and `sandbox.credentials.envVars` deny all three supported automation credential names.
 
-Credential test creates `<auth_home>/.credentials.json`, verifies the mounted seed is a temporary copy rather than the original, mode is `ro`, bootstrap target is `/opt/qualock/claude-home/.credentials.json`, contents match, and temporary files disappear after the context exits.
-
-Missing-credential test verifies settings + tmpfs remain but no credential seed/bootstrap is added.
+Credential tests verify documented direct-auth precedence, generic `(name, value)` stdin-secret transport, no secret value in invocation argv/non-secret environment/mounts, and no interactive credential-file fallback. Missing-credential tests verify isolated settings/tmpfs remain and the default backend fails before Docker execution.
 
 - [ ] **Step 2: Verify RED**
 
@@ -200,7 +198,7 @@ Use one `TemporaryDirectory` per invocation. Always create `settings.json` conta
 }
 ```
 
-Mount settings read-only at `/opt/qualock/claude-settings.json`. If credentials exist, copy them into the same temp directory and mount only the copy. Delegate evidence parsing to `parse_claude_stream_json(stdout.splitlines())`.
+Mount settings read-only at `/opt/qualock/claude-settings.json`. Accept only an explicit automation credential selected from `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN`. Carry the selected secret through generic Docker stdin-secret transport so only the Claude process receives it, and deny all supported auth env vars to sandboxed commands. Delegate evidence parsing to `parse_claude_stream_json(stdout.splitlines())`.
 
 - [ ] **Step 4: Run focused gates**
 
@@ -254,12 +252,16 @@ PYTHONPATH=src /home/pacmap/qualock-exp/.venv/bin/python -m pytest -q tests/unit
 
 Import `ClaudeAdapter` and `ClaudeResolver` only in command routing. Keep `_default_resolver` and `_default_backend` agent-aware. `execute_baseline` pins the parsed name; `execute_check` validates candidate/config/baseline agent equality before resolving binaries and writes artifacts with the selected display name.
 
-Default Claude auth home:
+Default Claude automation auth:
 
 ```python
-auth_home = Path.home() / ".claude"
-ClaudeAdapter(auth_home=auth_home if auth_home.exists() else None)
+credential = select_claude_automation_credential(os.environ)
+if credential is None:
+    raise CommandError("Claude qualification requires an automation credential")
+ClaudeAdapter(automation_credential=credential)
 ```
+
+Selection precedence is `ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → `CLAUDE_CODE_OAUTH_TOKEN`. Subscription users obtain the last form with `claude setup-token`. Do not parse or copy `~/.claude/.credentials.json`.
 
 Do not modify release-monitor/bisect/GitHub PR code.
 
@@ -400,3 +402,15 @@ Run the existing exact-output CLI test and compare `render_json`/qualification a
 - [ ] **Step 6: Independent whole-branch review**
 
 Review exact diff `24211ab...HEAD` against the design spec. Fix all Critical/Important findings and rerun the full gate after any production change.
+
+
+### Reviewer-finding closure: real Claude contract and automation auth
+
+Before final approval, require:
+
+- Claude version `>=2.1.260`; resolved binary `--version` must equal the requested version.
+- Resolved binary `--help` must expose every adapter flag, including `--restricted` and `--verbose`.
+- Real Claude 2.1.260 `doctor` must accept the exact generated settings without `Invalid settings`; an intentionally malformed settings fixture must be detected by doctor.
+- `stream-json` final result is strict and `user/tool_result` outcomes are normalized.
+- Automation credential transport uses stdin only; secret values never enter Docker create metadata.
+- A successful authenticated Docker model smoke is run when an explicit automation credential is available. Absence of such a credential must fail before normal QuaLock Docker qualification rather than falling back to interactive login state.

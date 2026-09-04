@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,7 +10,7 @@ from platformdirs import user_cache_dir
 
 from qualock import __version__
 from qualock.agents.base import AgentAdapter, AgentBinary
-from qualock.agents.claude import ClaudeAdapter
+from qualock.agents.claude import ClaudeAdapter, select_claude_automation_credential
 from qualock.agents.claude_resolver import ClaudeResolver
 from qualock.agents.codex import CodexAdapter
 from qualock.agents.resolver import CodexResolver
@@ -85,8 +86,15 @@ def _default_backend(
         auth_home = Path.home() / ".codex"
         adapter = CodexAdapter(auth_home=auth_home if auth_home.exists() else None)
     elif agent_name == "claude":
-        auth_home = Path.home() / ".claude"
-        adapter = ClaudeAdapter(auth_home=auth_home if auth_home.exists() else None)
+        credential = select_claude_automation_credential(os.environ)
+        if credential is None:
+            raise CommandError(
+                "Claude qualification requires an automation credential: "
+                "set ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY, or "
+                "CLAUDE_CODE_OAUTH_TOKEN (for subscription automation, run "
+                "`claude setup-token` and export CLAUDE_CODE_OAUTH_TOKEN)"
+            )
+        adapter = ClaudeAdapter(automation_credential=credential)
     else:
         raise CommandError(f"unsupported agent: {agent_name}")
 

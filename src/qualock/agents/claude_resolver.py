@@ -13,6 +13,31 @@ class ClaudeResolveError(RuntimeError):
 
 
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+
+_MIN_VALIDATED_VERSION = (2, 1, 260)
+_REQUIRED_CLI_FLAGS = (
+    "--safe-mode",
+    "--restricted",
+    "--no-session-persistence",
+    "--output-format",
+    "--verbose",
+    "--permission-mode",
+    "--permission-prompts",
+    "--model",
+    "--effort",
+    "--tools",
+    "--allowed-tools",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "--settings",
+)
+
+
+def _core_version(version: str) -> tuple[int, int, int]:
+    core = version.split("+", 1)[0].split("-", 1)[0]
+    major, minor, patch = core.split(".")
+    return int(major), int(minor), int(patch)
+
 _PLATFORM_PACKAGES = {
     "x86_64": "@anthropic-ai/claude-code-linux-x64",
     "amd64": "@anthropic-ai/claude-code-linux-x64",
@@ -55,10 +80,41 @@ class ClaudeResolver:
             raise ClaudeResolveError(f"unexpected Claude version from npm: {version!r}")
         return version
 
+    def _validate_binary_contract(self, binary: Path, version: str) -> None:
+        if _core_version(version) < _MIN_VALIDATED_VERSION:
+            raise ClaudeResolveError(
+                "QuaLock requires Claude Code >= 2.1.260 for the validated sandbox contract"
+            )
+
+        version_result = run_process([str(binary), "--version"], timeout_seconds=10)
+        if version_result.timed_out or version_result.exit_code != 0:
+            raise ClaudeResolveError(
+                version_result.stderr.strip() or "failed to inspect Claude Code version"
+            )
+        reported = version_result.stdout.strip().split(maxsplit=1)[0]
+        if reported != version:
+            raise ClaudeResolveError(
+                f"Claude binary reported version {reported!r}, expected {version!r}"
+            )
+
+        help_result = run_process([str(binary), "--help"], timeout_seconds=10)
+        if help_result.timed_out or help_result.exit_code != 0:
+            raise ClaudeResolveError(
+                help_result.stderr.strip() or "failed to inspect Claude Code CLI contract"
+            )
+        help_text = f"{help_result.stdout}\n{help_result.stderr}"
+        for flag in _REQUIRED_CLI_FLAGS:
+            if flag not in help_text:
+                raise ClaudeResolveError(f"Claude binary missing required CLI flag {flag}")
+
     def resolve(self, requested_version: str) -> AgentBinary:
         version = self.latest_version() if requested_version == "latest" else requested_version
         if not _VERSION_RE.fullmatch(version):
             raise ClaudeResolveError(f"invalid Claude version: {version!r}")
+        if _core_version(version) < _MIN_VALIDATED_VERSION:
+            raise ClaudeResolveError(
+                "QuaLock requires Claude Code >= 2.1.260 for the validated sandbox contract"
+            )
 
         package = self._platform_package()
         package_name = package.removeprefix("@anthropic-ai/")
@@ -87,5 +143,6 @@ class ClaudeResolver:
                     f"Claude native binary missing after install: {binary}"
                 )
 
+        self._validate_binary_contract(binary, version)
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         return AgentBinary(name="claude", version=version, path=binary, sha256=digest)

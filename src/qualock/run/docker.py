@@ -1,3 +1,4 @@
+import re
 import shlex
 import shutil
 import tempfile
@@ -49,9 +50,18 @@ class DockerRunner:
         if not self.available():
             raise DockerUnavailableError(f"Docker CLI not found: {self.docker_executable}")
 
-    def _run(self, argv: Sequence[str], *, timeout_seconds: float) -> ProcessResult:
+    def _run(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout_seconds: float,
+        input_text: str | None = None,
+    ) -> ProcessResult:
         self._require()
-        result = run_process(argv, timeout_seconds=timeout_seconds)
+        if input_text is None:
+            result = run_process(argv, timeout_seconds=timeout_seconds)
+        else:
+            result = run_process(argv, timeout_seconds=timeout_seconds, input_text=input_text)
         if result.timed_out:
             return result
         return result
@@ -139,6 +149,7 @@ class DockerRunner:
         extra_mounts: Sequence[tuple[Path, str, str]] = (),
         tmpfs_mounts: Sequence[str] = (),
         bootstrap_copy: tuple[str, str] | None = None,
+        stdin_secret_env_name: str | None = None,
         agent_container_path: str = "/opt/qualock/agent",
         replace_agent_binary: bool = True,
     ) -> list[str]:
@@ -152,6 +163,8 @@ class DockerRunner:
             "--security-opt",
             "seccomp=unconfined",
         ]
+        if stdin_secret_env_name is not None:
+            argv.append("--interactive")
         for key, value in sorted(environment.items()):
             argv.extend(["--env", f"{key}={value}"])
         for container_path in tmpfs_mounts:
@@ -193,6 +206,17 @@ class DockerRunner:
                 destination,
                 *command,
             ]
+        if stdin_secret_env_name is not None:
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stdin_secret_env_name) is None:
+                raise ValueError("stdin secret environment name is invalid")
+            command = [
+                "sh",
+                "-c",
+                'set -eu; secret=$(cat); export "$1=$secret"; unset secret; shift; exec "$@"',
+                "qualock-bootstrap",
+                stdin_secret_env_name,
+                *command,
+            ]
         argv.append(prepared_image)
         argv.extend(command)
         return argv
@@ -208,6 +232,7 @@ class DockerRunner:
         extra_mounts: Sequence[tuple[Path, str, str]] = (),
         tmpfs_mounts: Sequence[str] = (),
         bootstrap_copy: tuple[str, str] | None = None,
+        stdin_secret_env: tuple[str, str] | None = None,
         agent_container_path: str = "/opt/qualock/agent",
         frozen_tag: str,
         timeout_seconds: float,
@@ -222,6 +247,7 @@ class DockerRunner:
                 extra_mounts=extra_mounts,
                 tmpfs_mounts=tmpfs_mounts,
                 bootstrap_copy=bootstrap_copy,
+                stdin_secret_env_name=stdin_secret_env[0] if stdin_secret_env else None,
                 agent_container_path=agent_container_path,
             ),
             timeout_seconds=30,
@@ -229,10 +255,18 @@ class DockerRunner:
         if create.exit_code != 0:
             raise DockerCommandError(create.stderr.strip() or "failed to create agent container")
 
-        started = self._run(
-            [self.docker_executable, "start", "--attach", container_name],
-            timeout_seconds=timeout_seconds,
-        )
+        start_argv = [self.docker_executable, "start", "--attach"]
+        if stdin_secret_env is not None:
+            start_argv.append("--interactive")
+        start_argv.append(container_name)
+        if stdin_secret_env is None:
+            started = self._run(start_argv, timeout_seconds=timeout_seconds)
+        else:
+            started = self._run(
+                start_argv,
+                timeout_seconds=timeout_seconds,
+                input_text=stdin_secret_env[1],
+            )
         committed = self._run(
             [self.docker_executable, "commit", container_name, frozen_tag],
             timeout_seconds=120,

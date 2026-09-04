@@ -9,11 +9,13 @@ from qualock.baseline.io import read_baseline_lock, write_baseline_lock
 from qualock.commands import (
     BaselineUnstableError,
     CommandError,
+    _default_backend,
     execute_baseline,
     execute_check,
     parse_agent_spec,
 )
 from qualock.config.io import write_default_config
+from qualock.project import load_project
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.models import PreparedImage
 from qualock.run.schedule import Side
@@ -97,6 +99,35 @@ critical: true
 def test_parse_agent_spec_accepts_codex_and_claude() -> None:
     assert parse_agent_spec("codex@0.150.0") == ("codex", "0.150.0")
     assert parse_agent_spec("claude@2.1.260") == ("claude", "2.1.260")
+
+
+def test_default_claude_backend_requires_explicit_automation_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path, agent_name="claude", model_id="sonnet")
+    config, _ = load_project(tmp_path)
+    for name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(CommandError, match="Claude qualification requires an automation credential"):
+        _default_backend(tmp_path, config, "claude")
+
+
+def test_default_claude_backend_uses_documented_credential_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path, agent_name="claude", model_id="sonnet")
+    config, _ = load_project(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "api")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "bearer")
+
+    backend = _default_backend(tmp_path, config, "claude")
+
+    assert getattr(backend.agent_adapter, "automation_credential", None) == (
+        "ANTHROPIC_AUTH_TOKEN",
+        "bearer",
+    )
 
 
 def test_baseline_writes_known_good_behavior_lock(tmp_path: Path) -> None:

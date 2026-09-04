@@ -76,6 +76,8 @@ class FakeDocker:
         self.environment: dict[str, str] = {}
         self.tmpfs_mounts: tuple[str, ...] = ()
         self.bootstrap_copy: tuple[str, str] | None = None
+        self.stdin_bootstrap: tuple[str, str] | None = None
+        self.stdin_secret_env: tuple[str, str] | None = None
         self.agent_container_path: str | None = None
         self.removed_containers: list[str] = []
         self.runtime_dependencies: tuple[AgentRuntimeDependency, ...] = ()
@@ -97,6 +99,8 @@ class FakeDocker:
         environment = kwargs.get("environment", {})
         tmpfs_mounts = kwargs.get("tmpfs_mounts", ())
         bootstrap_copy = kwargs.get("bootstrap_copy")
+        stdin_bootstrap = kwargs.get("stdin_bootstrap")
+        stdin_secret_env = kwargs.get("stdin_secret_env")
         agent_container_path = kwargs.get("agent_container_path")
         assert isinstance(mounts, (tuple, list))
         assert isinstance(environment, dict)
@@ -106,6 +110,8 @@ class FakeDocker:
         self.environment = {str(key): str(value) for key, value in environment.items()}
         self.tmpfs_mounts = tuple(str(item) for item in tmpfs_mounts)
         self.bootstrap_copy = bootstrap_copy if isinstance(bootstrap_copy, tuple) else None
+        self.stdin_bootstrap = stdin_bootstrap if isinstance(stdin_bootstrap, tuple) else None
+        self.stdin_secret_env = stdin_secret_env if isinstance(stdin_secret_env, tuple) else None
         self.agent_container_path = agent_container_path
         return FrozenAgentState(
             reference="frozen",
@@ -229,6 +235,7 @@ def test_backend_forwards_generic_invocation_runtime(tmp_path: Path) -> None:
         mounts=(AgentMount(seed, "/opt/fake/seed.json", "ro"),),
         tmpfs_mounts=("/opt/fake/home",),
         bootstrap_copy=("/opt/fake/seed.json", "/opt/fake/home/config.json"),
+        stdin_secret_env=("FAKE_SECRET", "secret"),
         container_binary_path="/opt/qualock/fake",
     )
     docker = FakeDocker()
@@ -238,6 +245,7 @@ def test_backend_forwards_generic_invocation_runtime(tmp_path: Path) -> None:
     assert (seed, "/opt/fake/seed.json", "ro") in docker.mounts
     assert docker.tmpfs_mounts == ("/opt/fake/home",)
     assert docker.bootstrap_copy == ("/opt/fake/seed.json", "/opt/fake/home/config.json")
+    assert docker.stdin_secret_env == ("FAKE_SECRET", "secret")
     assert docker.agent_container_path == "/opt/qualock/fake"
 
 

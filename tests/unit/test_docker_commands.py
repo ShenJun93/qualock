@@ -96,6 +96,59 @@ def test_agent_phase_can_seed_tmpfs_before_exec(tmp_path: Path) -> None:
     assert command[-3:] == ["/opt/qualock/codex", "exec", "task"]
 
 
+def test_agent_phase_can_inject_secret_environment_from_stdin_without_secret_argv(tmp_path: Path) -> None:
+    runner = DockerRunner(docker_executable="docker")
+    argv = runner.build_agent_create_argv(
+        prepared_image="sha256:prepared",
+        container_name="ub-agent-stdin",
+        agent_binary=tmp_path / "agent-package/claude",
+        agent_argv=["/host/claude", "-p", "task"],
+        environment={"CLAUDE_CONFIG_DIR": "/opt/qualock/claude-home"},
+        stdin_secret_env_name="CLAUDE_CODE_OAUTH_TOKEN",
+        agent_container_path="/opt/qualock/claude",
+    )
+    image_index = argv.index("sha256:prepared")
+    assert "--interactive" in argv[:image_index]
+    command = argv[image_index + 1 :]
+    assert command[:2] == ["sh", "-c"]
+    assert 'export "$1=$secret"' in command[2]
+    assert command[4] == "CLAUDE_CODE_OAUTH_TOKEN"
+    assert command[-3:] == ["/opt/qualock/claude", "-p", "task"]
+    assert "secret-value" not in " ".join(argv)
+
+
+def test_run_agent_streams_secret_only_to_docker_start(tmp_path: Path, monkeypatch) -> None:
+    from qualock.run.models import PreparedImage
+    from qualock.run.process import ProcessResult
+
+    calls: list[tuple[list[str], str | None]] = []
+    runner = DockerRunner(docker_executable="docker")
+
+    def fake_run(argv, *, timeout_seconds, input_text=None):
+        calls.append((list(argv), input_text))
+        return ProcessResult(0, "", "", 0.01, False)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_inspect_image_id", lambda reference: "sha256:frozen")
+    runner.run_agent(
+        prepared=PreparedImage("prepared", "sha256:prepared"),
+        container_name="ub-agent-stdin",
+        agent_binary=tmp_path / "claude",
+        agent_argv=[str(tmp_path / "claude"), "-p", "task"],
+        environment={},
+        stdin_secret_env=("CLAUDE_CODE_OAUTH_TOKEN", "secret-value"),
+        agent_container_path="/opt/qualock/claude",
+        frozen_tag="frozen",
+        timeout_seconds=60,
+    )
+    start_call = next((argv, data) for argv, data in calls if "start" in argv)
+    assert "--interactive" in start_call[0]
+    assert start_call[1] == "secret-value"
+    assert all("secret-value" not in " ".join(argv) for argv, _ in calls)
+    create_call = next(argv for argv, _ in calls if "create" in argv)
+    assert not any("CLAUDE_CODE_OAUTH_TOKEN=secret-value" in item for item in create_call)
+
+
 def test_daemon_ready_requires_successful_docker_info(monkeypatch) -> None:
     from qualock.run.process import ProcessResult
 
