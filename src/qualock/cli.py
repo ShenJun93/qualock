@@ -16,6 +16,7 @@ from qualock.commands import (
     CommandError,
     execute_baseline,
     execute_check,
+    parse_agent_spec,
 )
 from qualock.config.io import ConfigError, write_default_config
 from qualock.github_pr.commands import prepare_pr, qualify_prepared_pr
@@ -95,13 +96,25 @@ app.add_typer(github_app, name="github")
 console = Console()
 
 
-def _render_safety_result(root: Path, result: QualificationResult) -> None:
+def _agent_display_name(agent_name: str) -> str:
+    if agent_name == "codex":
+        return "Codex"
+    if agent_name == "claude":
+        return "Claude Code"
+    return agent_name
+
+
+def _render_safety_result(
+    root: Path, result: QualificationResult, agent_display_name: str
+) -> None:
     try:
         _config, canaries = load_project(root)
         display_names = {canary.id: canary.name for canary in canaries}
     except (ConfigError, CanaryLoadError, FileNotFoundError):
         display_names = {}
-    summary = build_safety_summary(result, display_names, agent_display_name="Codex")
+    summary = build_safety_summary(
+        result, display_names, agent_display_name=agent_display_name
+    )
     evidence_path = f".qualock/results/{result.qualification_id}/"
     console.print(render_safety_terminal(summary, evidence_path), end="", markup=False)
 
@@ -168,7 +181,9 @@ def baseline_command(agent: str) -> None:
     except Exception as exc:
         console.print(str(exc))
         raise typer.Exit(1) from exc
-    console.print(f"Baseline pinned: Codex {lock.agent.version}")
+    console.print(
+        f"Baseline pinned: {_agent_display_name(lock.agent.name)} {lock.agent.version}"
+    )
 
 
 @app.command("check")
@@ -182,6 +197,7 @@ def check_command(
 ) -> None:
     root = Path.cwd()
     try:
+        agent_name, _version = parse_agent_spec(candidate)
         result = execute_check(root, candidate)
     except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:
         console.print(str(exc))
@@ -193,10 +209,13 @@ def check_command(
         console.print(str(exc))
         raise typer.Exit(1) from exc
 
+    agent_display_name = _agent_display_name(agent_name)
     if technical:
-        console.print(render_terminal(result, agent_display_name="Codex"), end="")
+        console.print(
+            render_terminal(result, agent_display_name=agent_display_name), end=""
+        )
     else:
-        _render_safety_result(root, result)
+        _render_safety_result(root, result, agent_display_name)
 
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)
@@ -271,7 +290,7 @@ def monitor_command(
     if result is None:
         console.print("Release monitor check result is missing.", markup=False)
         raise typer.Exit(1)
-    _render_safety_result(root, result)
+    _render_safety_result(root, result, "Codex")
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)
     if result.verdict is Verdict.INCOMPLETE:
