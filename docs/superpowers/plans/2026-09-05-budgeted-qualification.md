@@ -1223,4 +1223,3 @@ git rev-list --count e60b5d113e0a56fc88e850c6d54234d6cd96c3b3..HEAD
 ```
 
 Expected: clean worktree on `feat/budgeted-qualification`, with no push/PR/tag/release action performed.
-
