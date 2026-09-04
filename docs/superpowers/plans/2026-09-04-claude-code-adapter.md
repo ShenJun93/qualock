@@ -334,7 +334,7 @@ git commit -m "feat: render Claude qualification output"
 
 - [ ] **Step 0: Lock discovered Claude sandbox runtime prerequisites**
 
-TDD coverage must prove `ClaudeAdapter` requests `AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2")`, Claude settings include `enableWeakerNestedSandbox=true`, backend prepare forwards dependencies generically, Docker prepare installs pinned socat only when requested, and the default/Codex bootstrap remains bubblewrap-only.
+TDD coverage must prove `ClaudeAdapter` requests `AgentRuntimeDependency(command="socat", apt_package="socat")`, Claude settings include `enableWeakerNestedSandbox=true`, backend prepare forwards dependencies generically, Docker prepare installs distro-resolved socat only when requested, and the default/Codex bootstrap remains bubblewrap-only.
 
 Run:
 

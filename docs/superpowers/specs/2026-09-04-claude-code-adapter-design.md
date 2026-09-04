@@ -86,9 +86,9 @@ The adapter does not inherit user CLAUDE.md, hooks, plugins, MCP servers, or set
 
 ### Generic runtime dependencies
 
-Claude Code's Linux sandbox requires both `bubblewrap` and `socat`. QuaLock already bootstraps pinned bubblewrap in prepared Debian-style canary images, so Batch #31 extends the generic agent contract with immutable `AgentRuntimeDependency(command, apt_package)` data. `CodexAdapter.runtime_dependencies` is empty; `ClaudeAdapter.runtime_dependencies` requests `socat=1.7.4.4-2`.
+Claude Code's Linux sandbox requires both `bubblewrap` and `socat`. Batch #31 extends the generic agent contract with immutable `AgentRuntimeDependency(command, apt_package)` data. `CodexAdapter.runtime_dependencies` is empty; `ClaudeAdapter.runtime_dependencies` requests the `socat` package.
 
-`DockerQualificationBackend.prepare` only forwards this generic dependency tuple. `DockerRunner.prepare` keeps the existing pinned `bubblewrap=0.8.0-2+deb12u1` requirement and installs additional pinned dependencies only for adapters that request them. No Claude name or Claude-specific package appears in the backend or Docker runner. For the default Codex adapter, the generated bootstrap command remains bubblewrap-only.
+`DockerQualificationBackend.prepare` only forwards this generic dependency tuple. `DockerRunner.prepare` requires `bubblewrap` plus any adapter-requested package names and lets the runtime distro resolve its current package candidate. This avoids coupling a floating canary image such as `python:3.12-slim` to Debian-12-only version pins. The resulting prepared-image digest remains part of qualification evidence, so the exact runtime image used for baseline/candidate comparison is preserved in provenance. No Claude name or Claude-specific package appears in the backend or Docker runner. For the default Codex adapter, the generated bootstrap command remains bubblewrap-only.
 
 Because Claude's bubblewrap sandbox runs inside QuaLock's outer Docker container, the explicit Claude settings enable `sandbox.enableWeakerNestedSandbox=true`; this permits the inner sandbox to bind-mount the container's existing `/proc` while the outer Docker container remains the primary process isolation boundary. `failIfUnavailable=true` and `allowUnsandboxedCommands=false` remain mandatory.
 
@@ -166,7 +166,7 @@ Existing reasoning effort values `low|medium|high|xhigh` are accepted by the cur
 - Web tools are excluded from the available tool surface.
 - MCP configuration is explicit and empty.
 - Claude sandbox is enabled with `failIfUnavailable=true`, `allowUnsandboxedCommands=false`, and `enableWeakerNestedSandbox=true` for the outer-Docker/inner-bubblewrap layout.
-- Claude prepared runtimes require pinned `socat=1.7.4.4-2`; Codex prepared runtimes do not gain this dependency.
+- Claude prepared runtimes require the distro-provided `socat` package; Codex prepared runtimes do not gain this dependency.
 - Existing QuaLock web/MCP/protected-path checks remain authoritative and unchanged.
 - Docker frozen-state inspection remains the authority for protected path mutation.
 - No secret is placed into Docker `--env KEY=value` metadata.
@@ -178,7 +178,7 @@ Required TDD coverage:
 1. Claude resolver exact/latest/cache/architecture/error cases.
 2. Claude adapter argv contains isolation, model, effort, tool, MCP, settings, and container path requirements.
 3. Claude invocation sets `DISABLE_AUTOUPDATER=1`; the credential seed is a temporary copy, mounted read-only, bootstrapped into tmpfs, and deleted after context exit.
-4. Generic prepare forwards adapter runtime dependencies; Claude requests pinned socat while default/Codex prepare stays bubblewrap-only.
+4. Generic prepare forwards adapter runtime dependencies; Claude requests `socat` while default/Codex prepare stays bubblewrap-only, and prepared-image digest provenance is retained.
 5. Missing credential file yields isolated config/settings without a secret mount.
 6. Claude stream-json parser covers session, Bash, Edit/Write paths, web, MCP, final usage, permission denial, result errors, malformed JSON, and unknown events.
 7. Config accepts `claude` while default remains `codex`.

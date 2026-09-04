@@ -20,7 +20,7 @@ _TOOLS = "Bash,Read,Edit,Write,Glob,Grep"
 class ClaudeAdapter:
     @property
     def runtime_dependencies(self) -> tuple[AgentRuntimeDependency, ...]:
-        return (AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2"),)
+        return (AgentRuntimeDependency(command="socat", apt_package="socat"),)
 
     def __init__(self, auth_home: Path | None = None) -> None:
         self.auth_home = auth_home

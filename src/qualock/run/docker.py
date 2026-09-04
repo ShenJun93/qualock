@@ -84,7 +84,7 @@ class DockerRunner:
         self._require()
         dependencies = (
             AgentRuntimeDependency(
-                command="bwrap", apt_package="bubblewrap=0.8.0-2+deb12u1"
+                command="bwrap", apt_package="bubblewrap"
             ),
             *runtime_dependencies,
         )
