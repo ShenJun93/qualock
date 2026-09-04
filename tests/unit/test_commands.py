@@ -1,12 +1,17 @@
-from pathlib import Path
 import json
+from pathlib import Path
 
 import pytest
 
 from qualock.agents.base import AgentBinary
+from qualock.commands import (
+    BaselineUnstableError,
+    execute_baseline,
+    execute_check,
+    parse_agent_spec,
+)
 from qualock.config.io import write_default_config
 from qualock.qualification.models import AttemptResult, Usage, Verdict
-from qualock.commands import BaselineUnstableError, execute_baseline, execute_check, parse_agent_spec
 from qualock.run.models import PreparedImage
 from qualock.run.schedule import Side
 
