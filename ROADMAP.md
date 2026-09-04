@@ -15,6 +15,7 @@
 ## Next, only after v0.1 validation
 
 - Additional coding-agent adapters.
+- Token-denominated budgets, historical canary effectiveness ranking, and provider-specific cost estimates on top of the delivered attempt-count budget.
 
 ## Commercial layer
 

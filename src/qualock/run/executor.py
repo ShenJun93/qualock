@@ -158,11 +158,6 @@ def _budget_skipped_canary(
     max_attempts: int,
     attempts_per_canary: int,
 ) -> tuple[CanaryComparison, CanaryExecution]:
-    aggregate = CanaryAggregate(
-        valid_runs=0,
-        successes=0,
-        expected_runs=repetitions,
-    )
     reason = (
         "INCOMPLETE: skipped by attempt budget "
         f"(max_attempts={max_attempts}, "
@@ -170,8 +165,8 @@ def _budget_skipped_canary(
     )
     comparison = CanaryComparison(
         canary_id=canary.id,
-        baseline=aggregate,
-        candidate=aggregate,
+        baseline=CanaryAggregate(valid_runs=0, successes=0, expected_runs=repetitions),
+        candidate=CanaryAggregate(valid_runs=0, successes=0, expected_runs=repetitions),
         critical=canary.critical,
         verdict=Verdict.INCOMPLETE,
         reason=reason,

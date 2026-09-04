@@ -242,3 +242,24 @@ def test_constrained_priority_is_stable_with_multiple_critical_canaries(tmp_path
     assert result.executions[0].verdict is Verdict.INCOMPLETE
     assert result.executions[2].verdict is Verdict.INCOMPLETE
     assert result.verdict is Verdict.INCOMPLETE
+
+
+@pytest.mark.parametrize("bad_max_attempts", [0, -1])
+def test_run_rejects_nonpositive_max_attempts_for_direct_callers(
+    tmp_path: Path, bad_max_attempts: int
+) -> None:
+    suite = [make_canary(tmp_path, "critical", critical=True)]
+    backend = RecordingBackend()
+    baseline, candidate = binaries()
+
+    with pytest.raises(ValueError, match="max_attempts must be greater than zero"):
+        QualificationExecutor(backend=backend, repetitions=3).run(
+            baseline,
+            candidate,
+            suite,
+            qualification_id="q-invalid-budget",
+            max_attempts=bad_max_attempts,
+        )
+
+    assert backend.prepared == []
+    assert backend.calls == []
