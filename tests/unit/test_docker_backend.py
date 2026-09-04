@@ -10,6 +10,7 @@ from qualock.agents.base import (
     AgentSupportBinary,
 )
 from qualock.canary.models import CanarySpec
+from qualock.evidence.claude_stream_json import parse_claude_stream_json
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
 from qualock.run.models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedImage
@@ -223,6 +224,19 @@ def test_normalized_agent_evidence_is_graded_and_usage_is_recorded(tmp_path: Pat
     assert result.duration_ms == 123
     assert result.usage.input_tokens == 12
     assert result.usage.output_tokens == 3
+    assert docker.grader_calls == 1
+
+
+def test_real_claude_tool_failure_does_not_invalidate_successful_attempt(tmp_path: Path) -> None:
+    fixture = Path("tests/fixtures/claude/stream_json_bash_failure_success_2_1_260.jsonl")
+    evidence = parse_claude_stream_json(fixture.read_text(encoding="utf-8").splitlines())
+    docker = FakeDocker()
+    result = run_once(tmp_path, backend(tmp_path, docker, adapter=FakeAdapter(evidence=evidence)))
+
+    assert [(item.command, item.exit_code) for item in evidence.commands] == [("false", 1)]
+    assert evidence.errors == []
+    assert result.valid is True
+    assert result.success is True
     assert docker.grader_calls == 1
 
 

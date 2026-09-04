@@ -111,7 +111,8 @@ def test_agent_phase_can_inject_secret_environment_from_stdin_without_secret_arg
     assert "--interactive" in argv[:image_index]
     command = argv[image_index + 1 :]
     assert command[:2] == ["sh", "-c"]
-    assert 'export "$1=$secret"' in command[2]
+    assert 'export "$1=$(cat)"' in command[2]
+    assert "secret=$(cat)" not in command[2]
     assert command[4] == "CLAUDE_CODE_OAUTH_TOKEN"
     assert command[-3:] == ["/opt/qualock/claude", "-p", "task"]
     assert "secret-value" not in " ".join(argv)

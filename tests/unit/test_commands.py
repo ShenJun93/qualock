@@ -10,6 +10,7 @@ from qualock.commands import (
     BaselineUnstableError,
     CommandError,
     _default_backend,
+    agent_display_name,
     execute_baseline,
     execute_check,
     parse_agent_spec,
@@ -94,6 +95,13 @@ critical: true
 """,
         encoding="utf-8",
     )
+
+
+def test_agent_display_name_is_shared_and_fail_closed() -> None:
+    assert agent_display_name("codex") == "Codex"
+    assert agent_display_name("claude") == "Claude Code"
+    with pytest.raises(CommandError, match="unsupported agent"):
+        agent_display_name("future-agent")
 
 
 def test_parse_agent_spec_accepts_codex_and_claude() -> None:

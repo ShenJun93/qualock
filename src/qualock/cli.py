@@ -14,6 +14,7 @@ from qualock.canary.loader import CanaryLoadError
 from qualock.commands import (
     BaselineUnstableError,
     CommandError,
+    agent_display_name,
     execute_baseline,
     execute_check,
     parse_agent_spec,
@@ -96,14 +97,6 @@ app.add_typer(github_app, name="github")
 console = Console()
 
 
-def _agent_display_name(agent_name: str) -> str:
-    if agent_name == "codex":
-        return "Codex"
-    if agent_name == "claude":
-        return "Claude Code"
-    return agent_name
-
-
 def _render_safety_result(
     root: Path, result: QualificationResult, agent_display_name: str
 ) -> None:
@@ -182,7 +175,7 @@ def baseline_command(agent: str) -> None:
         console.print(str(exc))
         raise typer.Exit(1) from exc
     console.print(
-        f"Baseline pinned: {_agent_display_name(lock.agent.name)} {lock.agent.version}"
+        f"Baseline pinned: {agent_display_name(lock.agent.name)} {lock.agent.version}"
     )
 
 
@@ -209,13 +202,13 @@ def check_command(
         console.print(str(exc))
         raise typer.Exit(1) from exc
 
-    agent_display_name = _agent_display_name(agent_name)
+    display_name = agent_display_name(agent_name)
     if technical:
         console.print(
-            render_terminal(result, agent_display_name=agent_display_name), end=""
+            render_terminal(result, agent_display_name=display_name), end=""
         )
     else:
-        _render_safety_result(root, result, agent_display_name)
+        _render_safety_result(root, result, display_name)
 
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)

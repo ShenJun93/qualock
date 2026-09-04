@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -157,7 +158,42 @@ def test_result_usage_requires_integer_fields() -> None:
         )
 
 
-def test_user_tool_result_updates_bash_outcome_and_records_error() -> None:
+def test_permission_denials_must_be_a_list_when_present() -> None:
+    with pytest.raises(ClaudeEvidenceError, match="permission_denials"):
+        parse_claude_stream_json(
+            [
+                line(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "usage": result_usage(),
+                        "permission_denials": "unexpected",
+                    }
+                )
+            ]
+        )
+
+
+def test_duplicate_result_events_fail_closed() -> None:
+    result = line({"type": "result", "subtype": "success", "usage": result_usage()})
+    with pytest.raises(ClaudeEvidenceError, match="duplicate Claude result event"):
+        parse_claude_stream_json([result, result])
+
+
+def test_real_2_1_260_golden_transcript_parses_tool_failure_without_session_error() -> None:
+    fixture = Path("tests/fixtures/claude/stream_json_bash_failure_success_2_1_260.jsonl")
+    evidence = parse_claude_stream_json(fixture.read_text(encoding="utf-8").splitlines())
+
+    assert evidence.thread_id == "session-sanitized"
+    assert [(item.command, item.exit_code) for item in evidence.commands] == [("false", 1)]
+    assert evidence.input_tokens == 4
+    assert evidence.cached_input_tokens == 9035
+    assert evidence.output_tokens == 74
+    assert evidence.errors == []
+    assert [event.get("type") for event in evidence.unknown_events] == ["rate_limit_event"]
+
+
+def test_user_tool_result_updates_bash_outcome_without_invalidating_session() -> None:
     evidence = parse_claude_stream_json(
         [
             line(
@@ -184,8 +220,7 @@ def test_user_tool_result_updates_bash_outcome_and_records_error() -> None:
                                 "type": "tool_result",
                                 "tool_use_id": "tool-1",
                                 "is_error": True,
-                                "exit_code": 1,
-                                "content": "command failed",
+                                "content": "Exit code 1",
                             }
                         ]
                     },
@@ -196,5 +231,5 @@ def test_user_tool_result_updates_bash_outcome_and_records_error() -> None:
     )
 
     assert [(item.command, item.exit_code) for item in evidence.commands] == [("false", 1)]
-    assert any("tool result" in error.lower() for error in evidence.errors)
+    assert evidence.errors == []
     assert evidence.unknown_events == []

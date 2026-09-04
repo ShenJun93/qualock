@@ -80,6 +80,7 @@ def test_automation_credential_uses_stdin_secret_environment_without_metadata(tm
         binary(tmp_path), model="sonnet", reasoning_effort="high", prompt="Fix it"
     ) as invocation:
         assert invocation.stdin_secret_env == ("CLAUDE_CODE_OAUTH_TOKEN", "test-only")
+        assert "test-only" not in repr(invocation)
         assert invocation.bootstrap_copy is None
         assert "test-only" not in " ".join(invocation.argv)
         assert "test-only" not in dict(invocation.environment).values()

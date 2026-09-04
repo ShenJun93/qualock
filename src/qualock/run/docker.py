@@ -212,7 +212,7 @@ class DockerRunner:
             command = [
                 "sh",
                 "-c",
-                'set -eu; secret=$(cat); export "$1=$secret"; unset secret; shift; exec "$@"',
+                'set -eu; export "$1=$(cat)"; shift; exec "$@"',
                 "qualock-bootstrap",
                 stdin_secret_env_name,
                 *command,
