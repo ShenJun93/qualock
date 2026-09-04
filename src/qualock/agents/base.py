@@ -1,6 +1,9 @@
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
+
+from qualock.evidence.models import AgentEvidence
 
 
 @dataclass(frozen=True)
@@ -45,5 +48,31 @@ class AgentCapabilities:
         )
 
 
+@dataclass(frozen=True)
+class AgentMount:
+    host_path: Path
+    container_path: str
+    mode: Literal["ro", "rw"]
+
+
+@dataclass(frozen=True)
+class AgentInvocation:
+    argv: tuple[str, ...]
+    environment: tuple[tuple[str, str], ...] = ()
+    mounts: tuple[AgentMount, ...] = ()
+    tmpfs_mounts: tuple[str, ...] = ()
+    bootstrap_copy: tuple[str, str] | None = None
+    container_binary_path: str = "/opt/qualock/agent"
+
+
 class AgentAdapter(Protocol):
-    def detect_capabilities(self, binary: Path) -> AgentCapabilities: ...
+    def invocation(
+        self,
+        binary: AgentBinary,
+        *,
+        model: str,
+        reasoning_effort: str,
+        prompt: str,
+    ) -> AbstractContextManager[AgentInvocation]: ...
+
+    def parse_evidence(self, stdout: str, stderr: str) -> AgentEvidence: ...
