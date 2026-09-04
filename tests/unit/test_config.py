@@ -1,10 +1,9 @@
 from pathlib import Path
 
 import pytest
-
-from qualock.config.io import ConfigError, load_config, write_default_config
 from pydantic import ValidationError
 
+from qualock.config.io import ConfigError, load_config, write_default_config
 from qualock.config.models import QualockConfig
 
 
@@ -17,6 +16,14 @@ def test_default_config_round_trip(tmp_path: Path) -> None:
     assert config.model.id == "gpt-5.6-terra"
     assert config.qualification.repetitions == 3
     assert config.integrity.reject_web_search is True
+
+
+def test_config_accepts_claude_agent() -> None:
+    config = QualockConfig.model_validate(
+        {"agent": {"name": "claude"}, "model": {"id": "sonnet"}}
+    )
+    assert config.agent.name == "claude"
+    assert config.model.effective_model == "sonnet"
 
 
 def test_invalid_config_is_wrapped(tmp_path: Path) -> None:
