@@ -1,13 +1,10 @@
 import hashlib
-import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
-from qualock.agents.base import AgentBinary, AgentCapabilities
+from qualock.agents.base import AgentAdapter, AgentBinary
 from qualock.canary.models import CanarySpec
-from qualock.evidence.codex_jsonl import CodexEvidenceError, parse_codex_jsonl
+from qualock.evidence.models import AgentEvidenceError
 from qualock.qualification.models import AttemptResult, Usage
 from qualock.source.git import GitSourceManager
 
@@ -15,20 +12,6 @@ from .docker import DockerRunner
 from .integrity import IntegrityPathError, protected_path_violations
 from .models import PreparedImage
 from .schedule import Side
-
-
-class CodexLikeAdapter(Protocol):
-    def detect_capabilities(self, binary: Path) -> AgentCapabilities: ...
-
-    def build_exec_argv(
-        self,
-        binary: AgentBinary,
-        capabilities: AgentCapabilities,
-        *,
-        model: str,
-        reasoning_effort: str,
-        prompt: str,
-    ) -> list[str]: ...
 
 
 @dataclass(frozen=True)
@@ -44,20 +27,18 @@ class DockerQualificationBackend:
         *,
         source_manager: GitSourceManager,
         docker_runner: DockerRunner,
-        codex_adapter: CodexLikeAdapter,
+        agent_adapter: AgentAdapter,
         model: str,
         reasoning_effort: str,
         work_root: Path,
-        auth_home: Path | None,
         integrity_policy: IntegrityPolicy,
     ) -> None:
         self.source_manager = source_manager
         self.docker_runner = docker_runner
-        self.codex_adapter = codex_adapter
+        self.agent_adapter = agent_adapter
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.work_root = work_root
-        self.auth_home = auth_home
         self.integrity_policy = integrity_policy
 
     def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedImage:
@@ -68,7 +49,7 @@ class DockerQualificationBackend:
             source_dir,
         )
         key = hashlib.sha256(
-            f"{qualification_id}:{canary.id}:{canary.repository.base_sha}".encode("utf-8")
+            f"{qualification_id}:{canary.id}:{canary.repository.base_sha}".encode()
         ).hexdigest()[:16]
         return self.docker_runner.prepare(
             source_dir,
@@ -85,67 +66,48 @@ class DockerQualificationBackend:
         side: Side,
         repetition: int,
     ) -> AttemptResult:
-        capabilities = self.codex_adapter.detect_capabilities(binary.path)
-        agent_argv = self.codex_adapter.build_exec_argv(
+        safe_canary = "".join(ch if ch.isalnum() else "-" for ch in canary.id)[:32]
+        container_name = (
+            f"ub-{safe_canary}-{side.value[:1]}-{repetition}-"
+            f"{binary.version.replace('.', '-')}"
+        )
+        frozen_tag = (
+            f"qualock-frozen-{hashlib.sha256(container_name.encode()).hexdigest()[:16]}"
+        )
+        with self.agent_adapter.invocation(
             binary,
-            capabilities,
             model=self.model,
             reasoning_effort=self.reasoning_effort,
             prompt=canary.task,
-        )
-        safe_canary = "".join(ch if ch.isalnum() else "-" for ch in canary.id)[:32]
-        container_name = f"ub-{safe_canary}-{side.value[:1]}-{repetition}-{binary.version.replace('.', '-')}"
-        frozen_tag = f"qualock-frozen-{hashlib.sha256(container_name.encode()).hexdigest()[:16]}"
-        environment: dict[str, str] = {}
-        mounts: list[tuple[Path, str, str]] = [
-            (support.path, support.container_path, "ro")
-            for support in binary.support_binaries
-        ]
-        tmpfs_mounts: list[str] = []
-        bootstrap_copy: tuple[str, str] | None = None
-
-        if self.auth_home is not None:
-            with tempfile.TemporaryDirectory(prefix="qualock-codex-auth-") as temp:
-                auth_file = self.auth_home / "auth.json"
-                temp_auth = Path(temp) / "auth.json"
-                if auth_file.is_file():
-                    shutil.copy2(auth_file, temp_auth)
-                    seed_path = "/opt/qualock/auth-seed.json"
-                    target_path = "/opt/qualock/auth/auth.json"
-                    mounts.append((temp_auth, seed_path, "ro"))
-                    bootstrap_copy = (seed_path, target_path)
-                environment["CODEX_HOME"] = "/opt/qualock/auth"
-                tmpfs_mounts.append("/opt/qualock/auth")
-                state = self.docker_runner.run_agent(
-                    prepared=prepared,
-                    container_name=container_name,
-                    agent_binary=binary.path,
-                    agent_argv=agent_argv,
-                    environment=environment,
-                    extra_mounts=mounts,
-                    tmpfs_mounts=tmpfs_mounts,
-                    bootstrap_copy=bootstrap_copy,
-                    frozen_tag=frozen_tag,
-                    timeout_seconds=canary.agent.timeout_seconds,
-                )
-        else:
+        ) as invocation:
+            mounts: list[tuple[Path, str, str]] = [
+                (mount.host_path, mount.container_path, mount.mode)
+                for mount in invocation.mounts
+            ]
+            mounts.extend(
+                (support.path, support.container_path, "ro")
+                for support in binary.support_binaries
+            )
             state = self.docker_runner.run_agent(
                 prepared=prepared,
                 container_name=container_name,
                 agent_binary=binary.path,
-                agent_argv=agent_argv,
-                environment=environment,
+                agent_argv=invocation.argv,
+                environment=dict(invocation.environment),
                 extra_mounts=mounts,
-                tmpfs_mounts=tmpfs_mounts,
-                bootstrap_copy=bootstrap_copy,
+                tmpfs_mounts=invocation.tmpfs_mounts,
+                bootstrap_copy=invocation.bootstrap_copy,
+                agent_container_path=invocation.container_binary_path,
                 frozen_tag=frozen_tag,
                 timeout_seconds=canary.agent.timeout_seconds,
             )
         try:
             try:
-                evidence = parse_codex_jsonl(state.stdout.splitlines())
-            except CodexEvidenceError as exc:
-                return self._invalid_attempt(side, repetition, state.elapsed_ms, str(exc), state.stdout)
+                evidence = self.agent_adapter.parse_evidence(state.stdout, state.stderr)
+            except AgentEvidenceError as exc:
+                return self._invalid_attempt(
+                    side, repetition, state.elapsed_ms, str(exc), state.stdout
+                )
 
             agent_state = self.docker_runner.inspect_agent_state(state)
             try:
@@ -156,7 +118,9 @@ class DockerQualificationBackend:
                     )
                 )
             except IntegrityPathError as exc:
-                return self._invalid_attempt(side, repetition, state.elapsed_ms, str(exc), state.stdout)
+                return self._invalid_attempt(
+                    side, repetition, state.elapsed_ms, str(exc), state.stdout
+                )
 
             reasons: list[str] = []
             if state.exit_code is None:

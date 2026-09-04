@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
-import uuid
 
 from platformdirs import user_cache_dir
 
@@ -11,9 +11,13 @@ from qualock import __version__
 from qualock.agents.base import AgentBinary
 from qualock.agents.codex import CodexAdapter
 from qualock.agents.resolver import CodexResolver
-from qualock.baseline.io import BaselineStaleError, assert_suite_fresh, read_baseline_lock, write_baseline_lock
+from qualock.baseline.io import (
+    BaselineStaleError,
+    assert_suite_fresh,
+    read_baseline_lock,
+    write_baseline_lock,
+)
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
-from qualock.canary.models import CanarySpec
 from qualock.config.models import QualockConfig
 from qualock.evidence.storage import write_baseline_artifacts, write_qualification_artifacts
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
@@ -47,7 +51,7 @@ def parse_agent_spec(spec: str) -> tuple[str, str]:
 
 
 def _qualification_id(prefix: str) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"{prefix}-{stamp}-{uuid.uuid4().hex[:8]}"
 
 
@@ -61,11 +65,10 @@ def _default_backend(root: Path, config: QualockConfig) -> DockerQualificationBa
     return DockerQualificationBackend(
         source_manager=GitSourceManager(cache),
         docker_runner=DockerRunner(),
-        codex_adapter=CodexAdapter(),
+        agent_adapter=CodexAdapter(auth_home=auth_home if auth_home.exists() else None),
         model=config.model.effective_model,
         reasoning_effort=config.model.reasoning_effort,
         work_root=project_dir(root) / "work",
-        auth_home=auth_home if auth_home.exists() else None,
         integrity_policy=IntegrityPolicy(
             reject_web_search=config.integrity.reject_web_search,
             reject_mcp_calls=config.integrity.reject_mcp_calls,
@@ -132,7 +135,7 @@ def execute_baseline(
     )
     lock = BaselineLock(
         schema_version=1,
-        created_at=created_at or datetime.now(timezone.utc).isoformat(),
+        created_at=created_at or datetime.now(UTC).isoformat(),
         agent=AgentPin(name="codex", version=binary.version, binary_sha256=binary.sha256),
         model=ModelPin(
             id=config.model.id,
