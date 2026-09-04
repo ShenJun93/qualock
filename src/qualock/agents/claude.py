@@ -8,7 +8,7 @@ from pathlib import Path
 from qualock.evidence.claude_stream_json import parse_claude_stream_json
 from qualock.evidence.models import AgentEvidence
 
-from .base import AgentBinary, AgentInvocation, AgentMount
+from .base import AgentBinary, AgentInvocation, AgentMount, AgentRuntimeDependency
 
 _SETTINGS_CONTAINER_PATH = "/opt/qualock/claude-settings.json"
 _CONFIG_DIR = "/opt/qualock/claude-home"
@@ -18,6 +18,10 @@ _TOOLS = "Bash,Read,Edit,Write,Glob,Grep"
 
 
 class ClaudeAdapter:
+    @property
+    def runtime_dependencies(self) -> tuple[AgentRuntimeDependency, ...]:
+        return (AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2"),)
+
     def __init__(self, auth_home: Path | None = None) -> None:
         self.auth_home = auth_home
 
@@ -76,6 +80,7 @@ class ClaudeAdapter:
                             "failIfUnavailable": True,
                             "autoAllowBashIfSandboxed": True,
                             "allowUnsandboxedCommands": False,
+                            "enableWeakerNestedSandbox": True,
                         }
                     },
                     sort_keys=True,

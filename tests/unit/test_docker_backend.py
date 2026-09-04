@@ -2,7 +2,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from qualock.agents.base import AgentBinary, AgentInvocation, AgentMount, AgentSupportBinary
+from qualock.agents.base import (
+    AgentBinary,
+    AgentInvocation,
+    AgentMount,
+    AgentRuntimeDependency,
+    AgentSupportBinary,
+)
 from qualock.canary.models import CanarySpec
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
@@ -23,10 +29,12 @@ class FakeAdapter:
         evidence: AgentEvidence | None = None,
         parse_error: str | None = None,
         invocation: AgentInvocation | None = None,
+        runtime_dependencies: tuple[AgentRuntimeDependency, ...] = (),
     ) -> None:
         self.evidence = evidence or AgentEvidence(input_tokens=12, output_tokens=3)
         self.parse_error = parse_error
         self._invocation = invocation
+        self.runtime_dependencies = runtime_dependencies
 
     @contextmanager
     def invocation(
@@ -70,6 +78,7 @@ class FakeDocker:
         self.bootstrap_copy: tuple[str, str] | None = None
         self.agent_container_path: str | None = None
         self.removed_containers: list[str] = []
+        self.runtime_dependencies: tuple[AgentRuntimeDependency, ...] = ()
 
     def prepare(
         self,
@@ -77,8 +86,10 @@ class FakeDocker:
         canary: CanarySpec,
         *,
         image_tag: str,
+        runtime_dependencies: tuple[AgentRuntimeDependency, ...] = (),
         timeout_seconds: float = 1200,
     ) -> PreparedImage:
+        self.runtime_dependencies = runtime_dependencies
         return PreparedImage(reference=image_tag, digest="sha256:prepared")
 
     def run_agent(self, **kwargs: object) -> FrozenAgentState:
@@ -166,6 +177,20 @@ def backend(
             reject_protected_path_changes=True,
         ),
     )
+
+
+def test_prepare_forwards_agent_runtime_dependencies(tmp_path: Path) -> None:
+    dependency = AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2")
+    docker = FakeDocker()
+    service = backend(
+        tmp_path,
+        docker,
+        adapter=FakeAdapter(runtime_dependencies=(dependency,)),
+    )
+
+    service.prepare(canary(tmp_path), "q1")
+
+    assert docker.runtime_dependencies == (dependency,)
 
 
 def run_once(tmp_path: Path, service: DockerQualificationBackend, *, side: Side = Side.BASELINE):

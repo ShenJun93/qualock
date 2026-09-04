@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Batch #31 is stacked on Batch #30 exact head `24211ab499ed431aa8f9d13752957c2355586a37`.
-- Do not modify `src/qualock/run/backend.py` or qualification policy.
+- Do not add Claude-specific logic to `src/qualock/run/backend.py` or change qualification policy. A generic runtime-dependency forwarder is permitted for the discovered Claude sandbox prerequisite.
 - Default config and all existing Codex behavior remain Codex.
 - Claude support is local `baseline`/`check` only.
 - No original Claude credential file is mounted directly and no secret is passed through Docker environment metadata.
@@ -328,8 +328,22 @@ git commit -m "feat: render Claude qualification output"
 ### Task 6: Final regression, compatibility, and scope gate
 
 **Files:**
-- No production expansion.
-- Add tests only if a discovered invariant lacks coverage.
+- Production changes are limited to fixes for invariants discovered during the final gate.
+- The discovered Claude Linux sandbox prerequisite requires a generic runtime-dependency contract in `agents/base.py`, forwarding in `run/backend.py`, and dependency-aware bootstrap in `run/docker.py`.
+- Add regression tests for every discovered invariant.
+
+- [ ] **Step 0: Lock discovered Claude sandbox runtime prerequisites**
+
+TDD coverage must prove `ClaudeAdapter` requests `AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2")`, Claude settings include `enableWeakerNestedSandbox=true`, backend prepare forwards dependencies generically, Docker prepare installs pinned socat only when requested, and the default/Codex bootstrap remains bubblewrap-only.
+
+Run:
+
+```bash
+PYTHONPATH=src /home/pacmap/qualock-exp/.venv/bin/python -m pytest -q \
+  tests/unit/test_claude_adapter.py \
+  tests/unit/test_docker_backend.py \
+  tests/unit/test_docker_commands.py
+```
 
 - [ ] **Step 1: Full pytest**
 
@@ -350,6 +364,7 @@ PYTHONPATH=src /home/pacmap/qualock-exp/.venv/bin/python -m pytest -q \
   tests/unit/test_commands.py \
   tests/unit/test_cli.py \
   tests/unit/test_docker_backend.py \
+  tests/unit/test_docker_commands.py \
   tests/unit/test_report.py \
   tests/unit/test_safety_report.py \
   tests/unit/test_storage.py
@@ -368,15 +383,15 @@ git diff --check 24211ab499ed431aa8f9d13752957c2355586a37...HEAD
 
 ```bash
 git diff --exit-code 24211ab499ed431aa8f9d13752957c2355586a37...HEAD -- \
-  src/qualock/run/backend.py \
   src/qualock/qualification \
   src/qualock/release_monitor \
   src/qualock/version_bisect \
   src/qualock/scheduler \
   src/qualock/github_pr
+! grep -nE 'Claude|claude|socat' src/qualock/run/backend.py
 ```
 
-Confirm Codex-only guards still exist in release monitor, version bisect, and GitHub PR code.
+Review the `run/backend.py` diff and require that its only semantic change is forwarding `agent_adapter.runtime_dependencies` to generic Docker preparation. Confirm the default Docker bootstrap contains no socat and Codex-only guards still exist in release monitor, version bisect, and GitHub PR code.
 
 - [ ] **Step 5: Verify Codex compatibility**
 

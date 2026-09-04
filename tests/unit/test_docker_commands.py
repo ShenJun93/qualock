@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from qualock.agents.base import AgentRuntimeDependency
 from qualock.run.docker import DockerRunner
 
 
@@ -154,6 +155,49 @@ def test_prepare_bootstraps_pinned_bubblewrap(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setattr(runner, "_inspect_image_id", lambda reference: "sha256:prepared")
     runner.prepare(source, spec, image_tag="prepared")
     assert "bubblewrap=0.8.0-2+deb12u1" in seen["dockerfile"]
+    assert "socat" not in seen["dockerfile"]
+
+
+
+def test_prepare_installs_adapter_runtime_dependencies(tmp_path: Path, monkeypatch) -> None:
+    from qualock.canary.models import CanarySpec
+    from qualock.run.process import ProcessResult
+
+    source = tmp_path / "source"
+    source.mkdir()
+    grader = tmp_path / "grader.patch"
+    grader.write_text("patch", encoding="utf-8")
+    spec = CanarySpec.model_validate({
+        "schema_version": 1, "id": "sample", "name": "Sample",
+        "repository": {"url": "https://example.invalid/repo.git", "base_sha": "a" * 40},
+        "runtime": {"image": "python:3.12-slim"}, "task": "Fix it", "setup": [],
+        "agent": {"timeout_seconds": 60},
+        "grader": {"patch": str(grader), "command": ["pytest -q"]},
+        "constraints": {"protected_paths": []}, "critical": True,
+    })
+    seen: dict[str, str] = {}
+    runner = DockerRunner()
+
+    def fake_run(argv, *, timeout_seconds):
+        if "build" in argv:
+            path = Path(argv[argv.index("--file") + 1])
+            seen["dockerfile"] = path.read_text(encoding="utf-8")
+        return ProcessResult(0, "", "", 0.01, False)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_inspect_image_id", lambda reference: "sha256:prepared")
+    runner.prepare(
+        source,
+        spec,
+        image_tag="prepared",
+        runtime_dependencies=(
+            AgentRuntimeDependency(command="socat", apt_package="socat=1.7.4.4-2"),
+        ),
+    )
+
+    assert "command -v bwrap" in seen["dockerfile"]
+    assert "command -v socat" in seen["dockerfile"]
+    assert "bubblewrap=0.8.0-2+deb12u1 socat=1.7.4.4-2" in seen["dockerfile"]
 
 
 def test_agent_container_relaxes_seccomp_only_for_inner_bubblewrap(tmp_path: Path) -> None:
