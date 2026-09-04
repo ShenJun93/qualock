@@ -120,7 +120,7 @@ Use inline JSONL fixtures covering:
 {"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"cache_read_input_tokens":4,"output_tokens":3},"permission_denials":[]}
 ```
 
-Also test non-success result, permission denial, malformed JSON, non-object JSON, and unknown top-level event retention.
+Also test non-success result, permission denial, malformed JSON, non-object JSON, missing final `result`, and unknown top-level event retention.
 
 - [ ] **Step 2: Verify RED**
 

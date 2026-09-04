@@ -97,7 +97,9 @@ def test_permission_denial_records_error() -> None:
 
 def test_unknown_top_level_event_is_retained() -> None:
     payload = {"type": "future.event", "value": 1}
-    evidence = parse_claude_stream_json([line(payload)])
+    evidence = parse_claude_stream_json(
+        [line(payload), line({"type": "result", "subtype": "success"})]
+    )
 
     assert evidence.unknown_events == [payload]
 
@@ -120,3 +122,10 @@ def test_non_object_json_fails_closed() -> None:
 
 def test_claude_error_is_generic_agent_evidence_error() -> None:
     assert issubclass(ClaudeEvidenceError, AgentEvidenceError)
+
+
+def test_missing_final_result_fails_closed() -> None:
+    with pytest.raises(ClaudeEvidenceError, match="missing Claude result event"):
+        parse_claude_stream_json(
+            [line({"type": "system", "subtype": "init", "session_id": "s1"})]
+        )

@@ -71,6 +71,7 @@ def _record_result(evidence: AgentEvidence, event: dict[str, Any]) -> None:
 
 def parse_claude_stream_json(lines: Iterable[str]) -> AgentEvidence:
     evidence = AgentEvidence()
+    saw_result = False
     for line_no, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line:
@@ -91,8 +92,11 @@ def parse_claude_stream_json(lines: Iterable[str]) -> AgentEvidence:
             for item in _tool_uses(event):
                 _record_tool_use(evidence, item)
         elif event_type == "result":
+            saw_result = True
             _record_result(evidence, event)
         else:
             evidence.unknown_events.append(event)
 
+    if not saw_result:
+        raise ClaudeEvidenceError("missing Claude result event")
     return evidence

@@ -151,7 +151,7 @@ Existing reasoning effort values `low|medium|high|xhigh` are accepted by the cur
 ## Error handling
 
 - Invalid/unsupported Claude versions or architectures raise `ClaudeResolveError`.
-- Malformed stream-json raises `ClaudeEvidenceError`.
+- Malformed stream-json or a stream that ends without a final `result` event raises `ClaudeEvidenceError`.
 - Agent/config/baseline name mismatches raise `CommandError` before execution.
 - Claude auth/model/runtime failures surface through the existing agent exit/evidence invalidation paths.
 - No credential source path or credential contents appear in report artifacts.
