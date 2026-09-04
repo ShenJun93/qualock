@@ -53,7 +53,7 @@ def parse_agent_spec(spec: str) -> tuple[str, str]:
     return name, version
 
 
-def _agent_display_name(agent_name: str) -> str:
+def agent_display_name(agent_name: str) -> str:
     if agent_name == "codex":
         return "Codex"
     if agent_name == "claude":
@@ -234,6 +234,6 @@ def execute_check(
     write_qualification_artifacts(
         project_dir(root) / "results",
         result,
-        agent_display_name=_agent_display_name(agent_name),
+        agent_display_name=agent_display_name(agent_name),
     )
     return result

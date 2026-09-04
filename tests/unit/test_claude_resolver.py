@@ -158,6 +158,59 @@ def test_resolved_binary_must_expose_required_cli_contract(tmp_path: Path) -> No
         resolver.resolve("2.1.260")
 
 
+def test_binary_mutation_during_contract_validation_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = tmp_path / "cache"
+    binary_path = (
+        cache
+        / "agents/claude/2.1.260/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
+    )
+    binary_path.parent.mkdir(parents=True)
+    binary_path.write_bytes(b"original-binary")
+    resolver = ClaudeResolver(cache, machine="x86_64")
+
+    def mutate_after_fingerprint(binary: Path, version: str) -> None:
+        assert version == "2.1.260"
+        binary.write_bytes(b"mutated-after-contract-start")
+
+    monkeypatch.setattr(resolver, "_validate_binary_contract", mutate_after_fingerprint)
+    with pytest.raises(ClaudeResolveError, match="changed during contract validation"):
+        resolver.resolve("2.1.260")
+
+
+def test_binary_contract_probes_use_scrubbed_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = tmp_path / "claude"
+    binary.write_text("fake", encoding="utf-8")
+    calls: list[dict[str, str] | None] = []
+    flags = (
+        "--safe-mode --restricted --no-session-persistence --output-format --verbose "
+        "--permission-mode --permission-prompts --model --effort --tools "
+        "--allowed-tools --strict-mcp-config --mcp-config --settings"
+    )
+
+    def fake_run(argv, *, timeout_seconds, env=None):
+        del timeout_seconds
+        calls.append(env)
+        if "--version" in argv:
+            return ProcessResult(0, "2.1.260 (Claude Code)\n", "", 0.01, False)
+        return ProcessResult(0, flags, "", 0.01, False)
+
+    monkeypatch.setattr("qualock.agents.claude_resolver.run_process", fake_run)
+    ClaudeResolver(tmp_path / "cache", machine="x86_64")._validate_binary_contract(
+        binary, "2.1.260"
+    )
+
+    assert len(calls) == 2
+    for env in calls:
+        assert env is not None
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+
+
 def test_unsupported_architecture_fails_closed(tmp_path: Path) -> None:
     with pytest.raises(ClaudeResolveError, match="unsupported architecture"):
         ClaudeResolver(tmp_path / "cache", machine="riscv64").resolve("2.1.260")

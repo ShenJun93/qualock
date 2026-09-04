@@ -1,4 +1,5 @@
 import hashlib
+import os
 import platform
 import re
 from pathlib import Path
@@ -86,7 +87,13 @@ class ClaudeResolver:
                 "QuaLock requires Claude Code >= 2.1.260 for the validated sandbox contract"
             )
 
-        version_result = run_process([str(binary), "--version"], timeout_seconds=10)
+        probe_env = {
+            "HOME": "/nonexistent",
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        }
+        version_result = run_process(
+            [str(binary), "--version"], timeout_seconds=10, env=probe_env
+        )
         if version_result.timed_out or version_result.exit_code != 0:
             raise ClaudeResolveError(
                 version_result.stderr.strip() or "failed to inspect Claude Code version"
@@ -97,7 +104,9 @@ class ClaudeResolver:
                 f"Claude binary reported version {reported!r}, expected {version!r}"
             )
 
-        help_result = run_process([str(binary), "--help"], timeout_seconds=10)
+        help_result = run_process(
+            [str(binary), "--help"], timeout_seconds=10, env=probe_env
+        )
         if help_result.timed_out or help_result.exit_code != 0:
             raise ClaudeResolveError(
                 help_result.stderr.strip() or "failed to inspect Claude Code CLI contract"
@@ -143,6 +152,8 @@ class ClaudeResolver:
                     f"Claude native binary missing after install: {binary}"
                 )
 
-        self._validate_binary_contract(binary, version)
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        self._validate_binary_contract(binary, version)
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ClaudeResolveError("Claude binary changed during contract validation")
         return AgentBinary(name="claude", version=version, path=binary, sha256=digest)

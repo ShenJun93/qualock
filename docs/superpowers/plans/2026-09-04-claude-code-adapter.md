@@ -414,3 +414,11 @@ Before final approval, require:
 - `stream-json` final result is strict and `user/tool_result` outcomes are normalized.
 - Automation credential transport uses stdin only; secret values never enter Docker create metadata.
 - A successful authenticated Docker model smoke is run when an explicit automation credential is available. Absence of such a credential must fail before normal QuaLock Docker qualification rather than falling back to interactive login state.
+## Reviewer hardening addendum
+
+- Fingerprint a resolved Claude native binary before any execution; run `--version` and `--help` with a scrubbed environment that excludes host Anthropic credentials; re-hash afterward and fail if bytes changed.
+- Keep stdin credentials out of dataclass `repr`, Docker argv/env/mount/image metadata, and avoid shell bootstrap variable-name collisions.
+- Validate parser behavior with sanitized real Claude Code 2.1.260 JSONL at `tests/fixtures/claude/stream_json_bash_failure_success_2_1_260.jsonl`. The observed failing Bash result is `user -> tool_result(content="Exit code 1", is_error=true)` followed by final `result(subtype="success", is_error=false)`; tool-level failure must not populate session-level `AgentEvidence.errors`.
+- Reject malformed `permission_denials` and duplicate final result events. Retain additive `rate_limit_event` as unknown evidence.
+- The distro-resolved bubblewrap provisioning is deliberate: real `python:3.12-slim` moved from Debian 12 to Debian 13 and the Batch #30 exact Debian-12 pin now fails fresh apt preparation. Reproducibility for a qualification comes from the prepared-image digest; cross-run OS reproducibility requires an immutable canary runtime image digest.
+- Real Claude 2.1.260 `--help` confirms QuaLock efforts `low|medium|high|xhigh` are supported.

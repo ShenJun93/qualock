@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -7,6 +8,9 @@ from .models import AgentEvidence, AgentEvidenceError, CommandEvent
 
 class ClaudeEvidenceError(AgentEvidenceError):
     pass
+
+
+_EXIT_CODE_RE = re.compile(r"(?:^|\n)Exit code (\d+)(?:\n|$)")
 
 
 def _message_content(event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -69,7 +73,9 @@ def _record_result(evidence: AgentEvidence, event: dict[str, Any]) -> None:
         evidence.errors.append("Claude result reported an error")
 
     permission_denials = event.get("permission_denials")
-    if isinstance(permission_denials, list) and permission_denials:
+    if permission_denials is not None and not isinstance(permission_denials, list):
+        raise ClaudeEvidenceError("Claude result permission_denials must be a list")
+    if permission_denials:
         evidence.errors.append("Claude permission denial detected")
 
 
@@ -82,15 +88,14 @@ def _record_tool_result(
     if isinstance(tool_use_id, str):
         command_index = command_indexes.get(tool_use_id)
         if command_index is not None:
-            exit_code = item.get("exit_code", item.get("exitCode"))
-            if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+            content = item.get("content")
+            match = _EXIT_CODE_RE.search(content) if isinstance(content, str) else None
+            if match is not None:
                 command = evidence.commands[command_index]
                 evidence.commands[command_index] = CommandEvent(
                     command=command.command,
-                    exit_code=exit_code,
+                    exit_code=int(match.group(1)),
                 )
-    if item.get("is_error") is True:
-        evidence.errors.append("Claude tool result reported an error")
 
 
 def parse_claude_stream_json(lines: Iterable[str]) -> AgentEvidence:
@@ -133,6 +138,8 @@ def parse_claude_stream_json(lines: Iterable[str]) -> AgentEvidence:
             else:
                 evidence.unknown_events.append(event)
         elif event_type == "result":
+            if saw_result:
+                raise ClaudeEvidenceError("duplicate Claude result event")
             saw_result = True
             _record_result(evidence, event)
         else:
