@@ -82,7 +82,7 @@ The adapter writes a temporary settings JSON and mounts it read-only. It enables
 }
 ```
 
-The adapter does not inherit user CLAUDE.md, hooks, plugins, MCP servers, or settings. `--safe-mode` plus explicit settings/MCP config is the isolation boundary.
+The adapter does not inherit user CLAUDE.md, hooks, plugins, MCP servers, or settings. `--safe-mode` plus explicit settings/MCP config is the isolation boundary. Sandbox network policy sets `network.deniedDomains: ["*"]` and `strictAllowlist: true`, so Bash and child processes cannot make outbound network connections; this does not block the Claude process itself from reaching the model service.
 
 ### Generic runtime dependencies
 
@@ -96,7 +96,7 @@ Because Claude's bubblewrap sandbox runs inside QuaLock's outer Docker container
 
 The default host credential source is `~/.claude/.credentials.json` when present.
 
-The source credential file is never mounted directly. The adapter copies it into a temporary host file, mounts that copy read-only at `/opt/qualock/claude-credentials-seed.json`, mounts `/opt/qualock/claude-home` as tmpfs, and requests bootstrap copy to `/opt/qualock/claude-home/.credentials.json` with the existing restrictive bootstrap mechanism.
+The source credential file is never mounted directly. The adapter copies it into a temporary host file, mounts that copy read-only at `/opt/qualock/claude-credentials-seed.json`, mounts `/opt/qualock/claude-home` as tmpfs, and requests bootstrap copy to `/opt/qualock/claude-home/.credentials.json` with the existing restrictive bootstrap mechanism. Explicit settings deny built-in `Read` access to both credential paths and add both paths to `sandbox.credentials.files` with `mode: deny`, preventing sandboxed Bash subprocesses from reading them.
 
 `CLAUDE_CONFIG_DIR=/opt/qualock/claude-home` and `DISABLE_AUTOUPDATER=1` are non-secret and may be passed as environment variables. Disabling the Claude auto-updater is required so an exact resolved binary cannot mutate its runtime version. The temporary credential seed and settings file must remain alive until Docker start/attach completes and must be deleted when the invocation context exits.
 
@@ -164,6 +164,8 @@ Existing reasoning effort values `low|medium|high|xhigh` are accepted by the cur
 - No user MCP/plugin/hook/rules config is inherited.
 - Claude auto-update is disabled with `DISABLE_AUTOUPDATER=1`.
 - Web tools are excluded from the available tool surface.
+- Sandboxed Bash network is deny-all via `network.deniedDomains: ["*"]` plus `strictAllowlist: true`.
+- Claude credential seed/target paths are denied to built-in Read/Edit flows and OS-level sandbox reads.
 - MCP configuration is explicit and empty.
 - Claude sandbox is enabled with `failIfUnavailable=true`, `allowUnsandboxedCommands=false`, and `enableWeakerNestedSandbox=true` for the outer-Docker/inner-bubblewrap layout.
 - Claude prepared runtimes require the distro-provided `socat` package; Codex prepared runtimes do not gain this dependency.
@@ -177,7 +179,7 @@ Required TDD coverage:
 
 1. Claude resolver exact/latest/cache/architecture/error cases.
 2. Claude adapter argv contains isolation, model, effort, tool, MCP, settings, and container path requirements.
-3. Claude invocation sets `DISABLE_AUTOUPDATER=1`; the credential seed is a temporary copy, mounted read-only, bootstrapped into tmpfs, and deleted after context exit.
+3. Claude invocation sets `DISABLE_AUTOUPDATER=1`; sandbox settings deny all Bash network and deny tool/Bash reads of credential seed/target paths; the credential seed is a temporary copy, mounted read-only, bootstrapped into tmpfs, and deleted after context exit.
 4. Generic prepare forwards adapter runtime dependencies; Claude requests `socat` while default/Codex prepare stays bubblewrap-only, and prepared-image digest provenance is retained.
 5. Missing credential file yields isolated config/settings without a secret mount.
 6. Claude stream-json parser covers session, Bash, Edit/Write paths, web, MCP, final usage, permission denial, result errors, malformed JSON, and unknown events.

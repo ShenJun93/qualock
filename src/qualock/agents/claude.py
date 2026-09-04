@@ -75,13 +75,35 @@ class ClaudeAdapter:
             settings_file.write_text(
                 json.dumps(
                     {
+                        "permissions": {
+                            "deny": [
+                                "Read(//opt/qualock/claude-credentials-seed.json)",
+                                "Read(//opt/qualock/claude-home/.credentials.json)",
+                            ]
+                        },
                         "sandbox": {
                             "enabled": True,
                             "failIfUnavailable": True,
                             "autoAllowBashIfSandboxed": True,
                             "allowUnsandboxedCommands": False,
                             "enableWeakerNestedSandbox": True,
-                        }
+                            "network": {
+                                "deniedDomains": ["*"],
+                                "strictAllowlist": True,
+                            },
+                            "credentials": {
+                                "files": [
+                                    {
+                                        "path": "/opt/qualock/claude-credentials-seed.json",
+                                        "mode": "deny",
+                                    },
+                                    {
+                                        "path": "/opt/qualock/claude-home/.credentials.json",
+                                        "mode": "deny",
+                                    },
+                                ]
+                            },
+                        },
                     },
                     sort_keys=True,
                 ),

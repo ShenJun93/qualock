@@ -50,13 +50,32 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
         assert settings_mount.mode == "ro"
         payload = json.loads(settings_mount.host_path.read_text(encoding="utf-8"))
         assert payload == {
+            "permissions": {
+                "deny": [
+                    "Read(//opt/qualock/claude-credentials-seed.json)",
+                    "Read(//opt/qualock/claude-home/.credentials.json)",
+                ]
+            },
             "sandbox": {
                 "enabled": True,
                 "failIfUnavailable": True,
                 "autoAllowBashIfSandboxed": True,
                 "allowUnsandboxedCommands": False,
                 "enableWeakerNestedSandbox": True,
-            }
+                "network": {"deniedDomains": ["*"], "strictAllowlist": True},
+                "credentials": {
+                    "files": [
+                        {
+                            "path": "/opt/qualock/claude-credentials-seed.json",
+                            "mode": "deny",
+                        },
+                        {
+                            "path": "/opt/qualock/claude-home/.credentials.json",
+                            "mode": "deny",
+                        },
+                    ]
+                },
+            },
         }
         settings_host = settings_mount.host_path
 

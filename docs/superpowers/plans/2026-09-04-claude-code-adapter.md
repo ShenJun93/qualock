@@ -173,7 +173,7 @@ assert invocation.environment == (
 assert invocation.tmpfs_mounts == ("/opt/qualock/claude-home",)
 ```
 
-Assert argv includes `-p`, `--safe-mode`, `--no-session-persistence`, `--output-format stream-json`, `--permission-mode dontAsk`, `--permission-prompts none`, configured model/effort, minimal tools, empty strict MCP config, explicit settings path, and prompt.
+Assert argv includes `-p`, `--safe-mode`, `--no-session-persistence`, `--output-format stream-json`, `--permission-mode dontAsk`, `--permission-prompts none`, configured model/effort, minimal tools, empty strict MCP config, explicit settings path, and prompt. Assert settings use `network.deniedDomains=["*"]`, `strictAllowlist=true`, and deny both credential seed/target paths through `permissions.deny` and `sandbox.credentials.files`.
 
 Credential test creates `<auth_home>/.credentials.json`, verifies the mounted seed is a temporary copy rather than the original, mode is `ro`, bootstrap target is `/opt/qualock/claude-home/.credentials.json`, contents match, and temporary files disappear after the context exits.
 
