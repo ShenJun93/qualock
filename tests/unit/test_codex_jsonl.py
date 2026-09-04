@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from qualock.evidence.codex_jsonl import CodexEvidenceError, parse_codex_jsonl
+from qualock.evidence.models import AgentEvidence, AgentEvidenceError
 
 
 def test_parses_usage_commands_file_changes_and_integrity_signals() -> None:
@@ -40,3 +41,14 @@ def test_item_error_is_recorded_as_agent_error() -> None:
         '{"type":"item.completed","item":{"type":"error","message":"missing code-mode host"}}'
     ])
     assert evidence.errors == ["missing code-mode host"]
+
+
+def test_codex_parser_returns_normalized_agent_evidence() -> None:
+    evidence = parse_codex_jsonl(['{"type":"turn.completed","usage":{"input_tokens":2}}'])
+    assert isinstance(evidence, AgentEvidence)
+    assert evidence.input_tokens == 2
+
+
+def test_codex_parse_error_is_generic_agent_evidence_error() -> None:
+    with pytest.raises(AgentEvidenceError):
+        parse_codex_jsonl(["not-json"])
