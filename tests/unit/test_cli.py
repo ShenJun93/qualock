@@ -139,3 +139,42 @@ def test_check_easy_renders_workflow_name_literally(tmp_path: Path, monkeypatch)
 
     assert result.exit_code == 2
     assert "Django [async]" in result.stdout
+
+
+def test_check_claude_easy_output_uses_claude_code_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qualock.cli.execute_check", lambda root, candidate: sample_result())
+
+    result = runner.invoke(app, ["check", "claude@2.1.260"])
+
+    assert result.exit_code == 2
+    assert "Claude Code 0.150.0 -> 0.151.0" in result.stdout
+    assert "Keep using Claude Code 0.150.0" in result.stdout
+    assert "Do not update to Claude Code 0.151.0" in result.stdout
+
+
+def test_check_claude_technical_output_uses_claude_code_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qualock.cli.execute_check", lambda root, candidate: sample_result())
+
+    result = runner.invoke(app, ["check", "claude@2.1.260", "--technical"])
+
+    assert result.exit_code == 2
+    assert "Qualock qualification: Claude Code 0.150.0 -> 0.151.0" in result.stdout
+
+
+def test_baseline_claude_output_uses_claude_code_name(tmp_path: Path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "qualock.cli.execute_baseline",
+        lambda root, agent: SimpleNamespace(
+            agent=SimpleNamespace(name="claude", version="2.1.260")
+        ),
+    )
+
+    result = runner.invoke(app, ["baseline", "claude@2.1.260"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "Baseline pinned: Claude Code 2.1.260\n"
