@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from qualock.cli import app
@@ -192,3 +193,90 @@ def test_baseline_claude_output_uses_claude_code_name(tmp_path: Path, monkeypatc
 
     assert result.exit_code == 0
     assert result.stdout == "Baseline pinned: Claude Code 2.1.260\n"
+
+
+def test_check_max_attempts_is_forwarded(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, int] = {}
+
+    def fake_execute_check(root: Path, candidate: str, *, max_attempts: int):
+        captured["max_attempts"] = max_attempts
+        return sample_result()
+
+    monkeypatch.setattr("qualock.cli.execute_check", fake_execute_check)
+
+    result = runner.invoke(
+        app,
+        ["check", "codex@0.151.0", "--max-attempts", "6"],
+    )
+
+    assert captured == {"max_attempts": 6}
+    assert result.exit_code == 2
+
+
+def test_check_without_budget_preserves_two_argument_execute_check_call(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    called: list[tuple[Path, str]] = []
+
+    def fake_execute_check(root: Path, candidate: str):
+        called.append((root, candidate))
+        return sample_result()
+
+    monkeypatch.setattr("qualock.cli.execute_check", fake_execute_check)
+
+    result = runner.invoke(app, ["check", "codex@0.151.0"])
+
+    assert result.exit_code == 2
+    assert called == [(tmp_path, "codex@0.151.0")]
+
+
+@pytest.mark.parametrize("bad", ["0", "-1"])
+def test_check_rejects_nonpositive_max_attempts_before_execution(
+    tmp_path: Path, monkeypatch, bad: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    called = False
+
+    def fake_execute_check(*args, **kwargs):
+        nonlocal called
+        called = True
+        return sample_result()
+
+    monkeypatch.setattr("qualock.cli.execute_check", fake_execute_check)
+
+    result = runner.invoke(
+        app,
+        ["check", "codex@0.151.0", "--max-attempts", bad],
+    )
+
+    assert result.exit_code == 3
+    assert "max attempts must be greater than zero" in result.stdout
+    assert called is False
+
+
+def test_budget_limited_incomplete_keeps_exit_4(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = sample_result()
+    incomplete = source.__class__(
+        qualification_id=source.qualification_id,
+        baseline_version=source.baseline_version,
+        candidate_version=source.candidate_version,
+        verdict=Verdict.INCOMPLETE,
+        executions=source.executions,
+        reasons=("budget skipped a configured canary",),
+        run_order=source.run_order,
+    )
+    monkeypatch.setattr(
+        "qualock.cli.execute_check",
+        lambda root, candidate, *, max_attempts: incomplete,
+    )
+
+    result = runner.invoke(
+        app,
+        ["check", "codex@0.151.0", "--max-attempts", "6"],
+    )
+
+    assert result.exit_code == 4
+    assert "CHECK COULD NOT FINISH" in result.stdout

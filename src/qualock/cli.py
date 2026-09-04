@@ -186,11 +186,24 @@ def check_command(
         "--technical",
         help="Show the technical qualification report instead of the safety summary.",
     ),
+    max_attempts: int | None = typer.Option(
+        None,
+        "--max-attempts",
+        help=(
+            "Cap model attempts for this local check. Skipped canaries make the "
+            "result incomplete."
+        ),
+    ),
 ) -> None:
     root = Path.cwd()
     try:
+        if max_attempts is not None and max_attempts <= 0:
+            raise CommandError("max attempts must be greater than zero")
         agent_name, _version = parse_agent_spec(candidate)
-        result = execute_check(root, candidate)
+        if max_attempts is None:
+            result = execute_check(root, candidate)
+        else:
+            result = execute_check(root, candidate, max_attempts=max_attempts)
     except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:
         console.print(str(exc))
         raise typer.Exit(3) from exc
