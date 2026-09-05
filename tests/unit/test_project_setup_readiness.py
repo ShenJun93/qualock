@@ -12,6 +12,8 @@ from qualock.project_setup.readiness import (
 )
 from qualock.run.process import ProcessResult
 
+from ._platform_helpers import venv_python_path, venv_python_relative
+
 
 def protection(identifier: str, command: list[str]) -> ProjectProtectionConfig:
     return ProjectProtectionConfig(
@@ -98,8 +100,7 @@ def test_uv_missing_environment_recommends_sync_without_running_uv(tmp_path: Pat
 
 
 def test_uv_environment_override_and_probe_use_no_sync(tmp_path: Path, monkeypatch) -> None:
-    env_dir = tmp_path / "custom-env"
-    python = env_dir / "bin/python"
+    python = venv_python_path(tmp_path, "custom-env")
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     capabilities = ProjectCapabilities(
@@ -137,7 +138,7 @@ def test_uv_environment_override_and_probe_use_no_sync(tmp_path: Path, monkeypat
 
 
 def test_uv_failing_probe_needs_setup(tmp_path: Path, monkeypatch) -> None:
-    python = tmp_path / ".venv/bin/python"
+    python = venv_python_path(tmp_path)
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     capabilities = ProjectCapabilities(
@@ -261,7 +262,7 @@ def test_poetry_missing_environment_recommends_install(tmp_path: Path, monkeypat
 
 
 def test_local_venv_probe_uses_only_fixed_python_code(tmp_path: Path, monkeypatch) -> None:
-    python = tmp_path / ".venv/bin/python"
+    python = venv_python_path(tmp_path)
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     capabilities = ProjectCapabilities(
@@ -269,7 +270,7 @@ def test_local_venv_probe_uses_only_fixed_python_code(tmp_path: Path, monkeypatc
         pytest=True,
         python_runner=PythonRunner.VENV,
         python_environment=".venv",
-        python_executable=".venv/bin/python",
+        python_executable=venv_python_relative(),
     )
     calls: list[list[str]] = []
     monkeypatch.setattr(
@@ -280,11 +281,11 @@ def test_local_venv_probe_uses_only_fixed_python_code(tmp_path: Path, monkeypatc
     readiness = check_environment_readiness(
         tmp_path,
         capabilities,
-        [protection("pytest", [".venv/bin/python", "-m", "pytest"])],
+        [protection("pytest", [venv_python_relative(), "-m", "pytest"])],
     )
 
     assert readiness.status is ReadinessStatus.READY
-    assert calls == [[".venv/bin/python", "-c", PYTHON_PROBE_CODE]]
+    assert calls == [[venv_python_relative(), "-c", PYTHON_PROBE_CODE]]
 
 
 def test_npm_protection_requires_tools_and_node_modules(tmp_path: Path, monkeypatch) -> None:

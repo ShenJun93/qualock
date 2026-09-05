@@ -42,7 +42,7 @@ def assert_watch_control(
 ) -> None:
     try:
         raw = _read_raw_lock(root)
-    except (FileNotFoundError, NotADirectoryError, IsADirectoryError) as exc:
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError, PermissionError) as exc:
         raise WatchControlChangedError(
             "project protection lock disappeared during this watch session; "
             "restart qualock watch after intentionally re-protecting the project"

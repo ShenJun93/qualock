@@ -17,6 +17,8 @@ from qualock.project_setup.models import (
 )
 from qualock.run.process import ProcessResult
 
+from ._platform_helpers import venv_python_path
+
 runner = CliRunner()
 
 
@@ -60,8 +62,9 @@ def test_setup_previews_python_recommendations_and_cancel_has_zero_mutation(
     (tmp_path / "src").mkdir()
     (tmp_path / "tests").mkdir()
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\ndependencies=['pytest>=8']\n", encoding="utf-8")
-    (tmp_path / ".venv/bin").mkdir(parents=True)
-    (tmp_path / ".venv/bin/python").write_text("", encoding="utf-8")
+    python = venv_python_path(tmp_path)
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
     (tmp_path / ".venv/pyvenv.cfg").write_text("home = test" + chr(10), encoding="utf-8")
     patch_ready_process(monkeypatch)
     monkeypatch.chdir(tmp_path)

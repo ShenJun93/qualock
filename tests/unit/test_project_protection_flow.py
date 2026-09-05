@@ -12,6 +12,8 @@ from qualock.project_protection.commands import execute_protect, execute_verify
 from qualock.project_protection.models import ProtectionStatus
 from qualock.project_protection.signing import ProjectLockIntegrityError
 
+from ._platform_helpers import write_python_launcher
+
 runner = CliRunner()
 
 
@@ -138,9 +140,9 @@ def test_cli_protect_refuses_failing_baseline_with_exit_4(tmp_path: Path, monkey
 
 def test_cli_verify_incomplete_when_locked_executable_disappears(tmp_path: Path, monkeypatch) -> None:
     init_git_repo(tmp_path)
-    executable = tmp_path / "health-check"
-    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    executable.chmod(0o755)
+    executable = write_python_launcher(
+        tmp_path / "health-check", "raise SystemExit(0)\n"
+    )
     write_config(tmp_path, [str(executable)], name="Executable health check")
     patch_default_signing_key(tmp_path, monkeypatch)
     monkeypatch.chdir(tmp_path)
