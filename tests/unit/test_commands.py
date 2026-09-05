@@ -18,7 +18,7 @@ from qualock.commands import (
 from qualock.config.io import write_default_config
 from qualock.project import load_project
 from qualock.qualification.models import AttemptResult, Usage, Verdict
-from qualock.run.models import PreparedImage
+from qualock.run.models import PreparedTarget
 from qualock.run.schedule import Side
 
 
@@ -44,9 +44,9 @@ class FakeBackend:
         self.prepared: list[str] = []
         self.calls: list[tuple[str, str, int]] = []
 
-    def prepare(self, canary, qualification_id: str) -> PreparedImage:
+    def prepare(self, canary, qualification_id: str) -> PreparedTarget:
         self.prepared.append(canary.id)
-        return PreparedImage(reference="prepared", digest=f"sha256:{canary.id}")
+        return PreparedTarget(reference="prepared", digest=f"sha256:{canary.id}")
 
     def run_attempt(self, *, canary, prepared, binary, side: Side, repetition: int) -> AttemptResult:
         self.calls.append((canary.id, side.value, repetition))

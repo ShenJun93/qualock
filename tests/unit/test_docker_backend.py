@@ -2,6 +2,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 from qualock.agents.base import (
     AgentBinary,
     AgentInvocation,
@@ -9,11 +11,11 @@ from qualock.agents.base import (
     AgentRuntimeDependency,
     AgentSupportBinary,
 )
-from qualock.canary.models import CanarySpec
+from qualock.canary.models import CanarySpec, RuntimeSpec
 from qualock.evidence.claude_stream_json import parse_claude_stream_json
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
-from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
-from qualock.run.models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedImage
+from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy, UnsupportedRuntimeError
+from qualock.run.models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedTarget
 from qualock.run.schedule import Side
 
 
@@ -91,9 +93,9 @@ class FakeDocker:
         image_tag: str,
         runtime_dependencies: tuple[AgentRuntimeDependency, ...] = (),
         timeout_seconds: float = 1200,
-    ) -> PreparedImage:
+    ) -> PreparedTarget:
         self.runtime_dependencies = runtime_dependencies
-        return PreparedImage(reference=image_tag, digest="sha256:prepared")
+        return PreparedTarget(reference=image_tag, digest="sha256:prepared")
 
     def run_agent(self, **kwargs: object) -> FrozenAgentState:
         mounts = kwargs.get("extra_mounts", ())
@@ -186,6 +188,21 @@ def backend(
     )
 
 
+def test_prepared_target_is_backend_neutral() -> None:
+    assert PreparedTarget("ref", "sha256:x").digest == "sha256:x"
+
+
+def test_prepare_rejects_non_container_runtime(tmp_path: Path) -> None:
+    docker = FakeDocker()
+    service = backend(tmp_path, docker)
+    spec = canary(tmp_path).model_copy(
+        update={"runtime": RuntimeSpec(execution="linux-host")}
+    )
+
+    with pytest.raises(UnsupportedRuntimeError):
+        service.prepare(spec, "q1")
+
+
 def test_prepare_forwards_agent_runtime_dependencies(tmp_path: Path) -> None:
     dependency = AgentRuntimeDependency(command="socat", apt_package="socat")
     docker = FakeDocker()
@@ -204,7 +221,7 @@ def run_once(tmp_path: Path, service: DockerQualificationBackend, *, side: Side 
     spec = canary(tmp_path)
     return service.run_attempt(
         canary=spec,
-        prepared=PreparedImage("p", "sha256:p"),
+        prepared=PreparedTarget("p", "sha256:p"),
         binary=binary(tmp_path),
         side=side,
         repetition=1,
@@ -355,7 +372,7 @@ def test_agent_support_binary_is_mounted_read_only(tmp_path: Path) -> None:
     spec = canary(tmp_path)
     result = service.run_attempt(
         canary=spec,
-        prepared=PreparedImage("p", "sha256:p"),
+        prepared=PreparedTarget("p", "sha256:p"),
         binary=binary_with_host,
         side=Side.BASELINE,
         repetition=1,

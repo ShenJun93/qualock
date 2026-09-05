@@ -13,18 +13,18 @@ from qualock.qualification.models import (
 )
 from qualock.qualification.policy import qualify_canary, qualify_suite
 
-from .models import PreparedImage
+from .models import PreparedTarget
 from .schedule import Side, paired_schedule
 
 
 class QualificationBackend(Protocol):
-    def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedImage: ...
+    def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedTarget: ...
 
     def run_attempt(
         self,
         *,
         canary: CanarySpec,
-        prepared: PreparedImage,
+        prepared: PreparedTarget,
         binary: AgentBinary,
         side: Side,
         repetition: int,

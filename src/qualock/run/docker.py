@@ -8,7 +8,7 @@ from pathlib import Path
 from qualock.agents.base import AgentRuntimeDependency
 from qualock.canary.models import CanarySpec
 
-from .models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedImage
+from .models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedTarget
 from .process import ProcessResult, run_process
 
 
@@ -90,7 +90,7 @@ class DockerRunner:
         image_tag: str,
         runtime_dependencies: Sequence[AgentRuntimeDependency] = (),
         timeout_seconds: float = 1200,
-    ) -> PreparedImage:
+    ) -> PreparedTarget:
         self._require()
         dependencies = (
             AgentRuntimeDependency(
@@ -138,7 +138,7 @@ class DockerRunner:
             )
         if result.timed_out or result.exit_code != 0:
             raise DockerCommandError(result.stderr.strip() or "failed to prepare canary image")
-        return PreparedImage(reference=image_tag, digest=self._inspect_image_id(image_tag))
+        return PreparedTarget(reference=image_tag, digest=self._inspect_image_id(image_tag))
 
     def build_agent_create_argv(
         self,
@@ -226,7 +226,7 @@ class DockerRunner:
     def run_agent(
         self,
         *,
-        prepared: PreparedImage,
+        prepared: PreparedTarget,
         container_name: str,
         agent_binary: Path,
         agent_argv: Sequence[str],

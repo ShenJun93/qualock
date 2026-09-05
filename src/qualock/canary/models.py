@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class RepositorySpec(BaseModel):
@@ -10,7 +10,16 @@ class RepositorySpec(BaseModel):
 
 
 class RuntimeSpec(BaseModel):
-    image: str = Field(min_length=1)
+    execution: Literal["container", "linux-host"] = "container"
+    image: str | None = None
+
+    @model_validator(mode="after")
+    def validate_runtime(self) -> "RuntimeSpec":
+        if self.execution == "container" and not self.image:
+            raise ValueError("container runtime requires image")
+        if self.execution == "linux-host" and self.image is not None:
+            raise ValueError("linux-host runtime must not set image")
+        return self
 
 
 class AgentLimits(BaseModel):

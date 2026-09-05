@@ -6,7 +6,7 @@ from qualock.agents.base import AgentBinary
 from qualock.canary.models import CanarySpec
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.executor import QualificationExecutor
-from qualock.run.models import PreparedImage
+from qualock.run.models import PreparedTarget
 from qualock.run.schedule import Side, paired_schedule
 
 
@@ -16,15 +16,15 @@ class RecordingBackend:
         self.prepared: list[str] = []
         self.calls: list[tuple[str, str, int]] = []
 
-    def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedImage:
+    def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedTarget:
         self.prepared.append(canary.id)
-        return PreparedImage(reference="prepared", digest=f"sha256:{canary.id}")
+        return PreparedTarget(reference="prepared", digest=f"sha256:{canary.id}")
 
     def run_attempt(
         self,
         *,
         canary: CanarySpec,
-        prepared: PreparedImage,
+        prepared: PreparedTarget,
         binary: AgentBinary,
         side: Side,
         repetition: int,
