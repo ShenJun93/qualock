@@ -63,7 +63,15 @@ def install_contract_probe(
             return ProcessResult(0, f"{reported_version} (Claude Code)\n", "", 0.01, False)
         if executable.name == "claude" and argv[1:] == ["--help"]:
             visible = [flag for flag in flags if flag != missing_flag]
-            help_text = "\n".join(f"  {flag} <value>  Test option" for flag in visible)
+            lines = []
+            for flag in visible:
+                if flag == "-p":
+                    lines.append("  -p, --print                           Print response and exit")
+                elif flag == "--allowed-tools":
+                    lines.append("  --allowedTools, --allowed-tools <tools...>  Allow tools")
+                else:
+                    lines.append(f"  {flag} <value>  Test option")
+            help_text = "\n".join(lines)
             return ProcessResult(0, help_text, "", 0.01, False)
         return real_run(argv, timeout_seconds=timeout_seconds, env=env)
 
