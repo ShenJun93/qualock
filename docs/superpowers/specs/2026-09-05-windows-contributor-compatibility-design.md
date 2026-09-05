@@ -3,7 +3,7 @@
 **Batch:** #33
 **Branch:** `feat/windows-contributor-compatibility`
 **Base:** `9f0d9ff1ae8c6cb256ee6d3e4a66000e8ef8699e`
-**Status:** Design approved in chat; written spec awaiting final user review.
+**Status:** Written spec approved by the user on 2026-09-05.
 
 ## Problem
 
