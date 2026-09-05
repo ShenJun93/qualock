@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -78,6 +80,9 @@ def test_build_agent_argv_has_exact_private_mount_contract(tmp_path: Path) -> No
         "--ro-bind",
         str(invocation.oauth_token_path),
         str(app_data_target / "antigravity-oauth-token"),
+        "--ro-bind",
+        str((workspace / ".git").resolve()),
+        "/tmp/qualock-workspace/.git",
         "--dev",
         "/dev",
         "--chdir",
@@ -168,7 +173,9 @@ def test_run_setup_fails_closed(
 def test_inspect_agent_state_uses_exact_qualock_owned_git_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    (tmp_path / ".git").mkdir()
     calls: list[tuple[list[str], Path | None, float]] = []
+    environments: list[dict[str, str] | None] = []
     results = iter(
         [
             _result(stdout="src/a.py\0tests/a.py\0"),
@@ -178,9 +185,14 @@ def test_inspect_agent_state_uses_exact_qualock_owned_git_commands(
     )
 
     def fake_run_process_tree(
-        argv: list[str], *, cwd: Path | None = None, timeout_seconds: float
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        timeout_seconds: float,
     ) -> ProcessResult:
         calls.append((argv, cwd, timeout_seconds))
+        environments.append(env)
         return next(results)
 
     monkeypatch.setattr("qualock.run.host.run_process_tree", fake_run_process_tree)
@@ -198,6 +210,62 @@ def test_inspect_agent_state_uses_exact_qualock_owned_git_commands(
     ]
     assert evidence.changed_paths == ("src/a.py", "tests/a.py", "new.txt")
     assert evidence.patch == "binary patch"
+    safe_environment = {
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_PAGER": "cat",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LC_ALL": "C",
+        "PATH": os.defpath,
+    }
+    assert len(environments) == 3
+    assert all(environment is not None for environment in environments)
+    first_environment = environments[0]
+    assert first_environment is not None
+    assert first_environment["GIT_WORK_TREE"] == str(tmp_path.resolve())
+    assert Path(first_environment["GIT_DIR"]).name == "git"
+    assert not Path(first_environment["GIT_DIR"]).exists()
+    assert {
+        key: value
+        for key, value in first_environment.items()
+        if key not in {"GIT_DIR", "GIT_WORK_TREE"}
+    } == safe_environment
+    assert environments == [first_environment, first_environment, first_environment]
+
+
+def test_inspect_agent_state_does_not_execute_local_diff_configuration(tmp_path: Path) -> None:
+    workspace = tmp_path / "attempt"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(["git", "config", "user.name", "QuaLock Test"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "qualock@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    tracked = workspace / "tracked.txt"
+    tracked.write_text("original\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=workspace, check=True)
+
+    sentinel = tmp_path / "external-diff-executed"
+    payload = tmp_path / "external-diff"
+    payload.write_text(f"#!/bin/sh\nprintf executed > {sentinel}\n", encoding="utf-8")
+    payload.chmod(0o700)
+    subprocess.run(
+        ["git", "config", "diff.external", str(payload)],
+        cwd=workspace,
+        check=True,
+    )
+    tracked.write_text("changed\n", encoding="utf-8")
+
+    evidence = LinuxHostRunner().inspect_agent_state(workspace)
+
+    assert not sentinel.exists()
+    assert evidence.changed_paths == ("tracked.txt",)
+    assert "diff --git a/tracked.txt b/tracked.txt" in evidence.patch
 
 
 def test_run_grader_uses_copy_applies_patch_and_scrubs_account_environment(
@@ -240,6 +308,94 @@ def test_run_grader_uses_copy_applies_patch_and_scrubs_account_environment(
     assert "qualock-grader-" in result.stdout
     assert (workspace / "agent.txt").read_text(encoding="utf-8") == "agent\n"
     assert not (workspace / "hidden.txt").exists()
+
+
+def test_run_grader_constructs_a_minimal_allowlisted_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "attempt"
+    workspace.mkdir()
+    grader_patch = tmp_path / "hidden.patch"
+    grader_patch.write_text(
+        "diff --git a/hidden.txt b/hidden.txt\nnew file mode 100644\nindex 0000000..e69de29\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PATH", "/qualock/test/bin")
+    monkeypatch.setenv("LANG", "C.UTF-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "github-secret")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    monkeypatch.setenv("LD_PRELOAD", "/tmp/inject.so")
+    monkeypatch.setenv("PYTHONPATH", "/tmp/inject-python")
+    captured: dict[str, str] = {}
+
+    def fake_run_process_tree(
+        argv: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        timeout_seconds: float,
+    ) -> ProcessResult:
+        del argv, cwd, timeout_seconds
+        captured.update(env)
+        return _result()
+
+    monkeypatch.setattr("qualock.run.host.run_process_tree", fake_run_process_tree)
+
+    LinuxHostRunner().run_grader(
+        workspace=workspace,
+        grader_patch=grader_patch,
+        commands=["true"],
+        timeout_seconds=10,
+    )
+
+    assert captured["PATH"] == "/qualock/test/bin"
+    assert captured["LANG"] == "C.UTF-8"
+    assert set(captured) <= {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "TMPDIR",
+        "TZ",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+    }
+    assert "GITHUB_TOKEN" not in captured
+    assert "AWS_SECRET_ACCESS_KEY" not in captured
+    assert "OPENAI_API_KEY" not in captured
+    assert "ANTHROPIC_API_KEY" not in captured
+    assert "SSH_AUTH_SOCK" not in captured
+    assert "LD_PRELOAD" not in captured
+    assert "PYTHONPATH" not in captured
+
+
+def test_run_grader_rejects_symlink_that_escapes_grader_copy(tmp_path: Path) -> None:
+    workspace = tmp_path / "attempt"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    (workspace / "grade-target").symlink_to(outside)
+    grader_patch = tmp_path / "hidden.patch"
+    grader_patch.write_text(
+        "diff --git a/hidden.txt b/hidden.txt\nnew file mode 100644\nindex 0000000..e69de29\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HostCommandError, match="symlink.*outside grader workspace"):
+        LinuxHostRunner().run_grader(
+            workspace=workspace,
+            grader_patch=grader_patch,
+            commands=["printf mutated > grade-target"],
+            timeout_seconds=10,
+        )
+
+    assert outside.read_text(encoding="utf-8") == "outside\n"
 
 
 def test_run_grader_reports_timeout(tmp_path: Path) -> None:
