@@ -66,7 +66,10 @@ def _is_mcp_tool(tool_name: str) -> bool:
 
 def _is_web_or_subagent_tool(tool_name: str) -> bool:
     normalized = tool_name.lower()
-    return normalized in _WEB_TOOLS or normalized.startswith(("browser_", "web_", "subagent_"))
+    family_names = set(normalized.split("_"))
+    return normalized in _WEB_TOOLS or bool(
+        family_names & {"browser", "subagent", "url", "web"}
+    )
 
 
 def _file_change_path(parameters: dict[str, Any], tool_name: str) -> str:
@@ -81,10 +84,9 @@ def _file_change_path(parameters: dict[str, Any], tool_name: str) -> str:
 
 def _record_tool_invocation(
     evidence: AgentEvidence,
-    event: dict[str, Any],
     tool_name: str,
     parameters: dict[str, Any],
-) -> None:
+) -> str | None:
     normalized = tool_name.lower()
     if normalized in _COMMAND_TOOLS:
         command = parameters.get("CommandLine")
@@ -94,13 +96,14 @@ def _record_tool_invocation(
             )
         evidence.commands.append(CommandEvent(command=command))
     elif normalized in _FILE_CHANGE_TOOLS:
-        evidence.file_changes.append(_file_change_path(parameters, tool_name))
+        return _file_change_path(parameters, tool_name)
     elif _is_mcp_tool(normalized):
         evidence.mcp_calls += 1
     elif _is_web_or_subagent_tool(normalized):
         evidence.web_searches += 1
     elif normalized not in _KNOWN_READ_TOOLS:
-        evidence.unknown_events.append(event)
+        raise AntigravityEvidenceError(f"unsupported Antigravity tool {tool_name!r}")
+    return None
 
 
 def _record_tool_error(evidence: AgentEvidence, tool_name: str, tool_info: dict[str, Any]) -> None:
@@ -112,7 +115,7 @@ def _record_tool_error(evidence: AgentEvidence, tool_name: str, tool_info: dict[
 def _record_step_update(
     evidence: AgentEvidence,
     event: dict[str, Any],
-    active_steps: dict[int, str],
+    active_steps: dict[int, tuple[str, str | None]],
 ) -> None:
     update = _required_object(event, "step_update", context="step_update payload")
     step_type = update.get("step_type")
@@ -139,38 +142,31 @@ def _record_step_update(
 
     if state == "ACTIVE":
         if step_index not in active_steps:
-            active_steps[step_index] = tool_name
-            _record_tool_invocation(evidence, event, tool_name, parameters)
+            pending_file_path = _record_tool_invocation(evidence, tool_name, parameters)
+            active_steps[step_index] = (tool_name, pending_file_path)
         return
 
-    active_tool_name = active_steps.get(step_index)
-    if active_tool_name is None:
-        raise AntigravityEvidenceError(
-            f"Antigravity tool step {step_index} reached {state} without ACTIVE"
-        )
+    active_step = active_steps.pop(step_index, None)
+    if active_step is None:
+        if state == "ERROR":
+            _record_tool_error(evidence, tool_name, tool_info)
+        return
+    active_tool_name, pending_file_path = active_step
     if active_tool_name != tool_name:
         raise AntigravityEvidenceError(
             f"Antigravity tool step {step_index} changed tool name"
         )
     if state == "ERROR":
         _record_tool_error(evidence, tool_name, tool_info)
+    elif pending_file_path is not None:
+        evidence.file_changes.append(pending_file_path)
 
 
 def _record_result(
     evidence: AgentEvidence,
     event: dict[str, Any],
-    *,
-    init_conversation_id: str,
 ) -> None:
     result = _required_object(event, "result", context="result payload")
-    conversation_id = _required_non_empty_string(
-        result, "conversation_id", context="result conversation_id"
-    )
-    if conversation_id != init_conversation_id:
-        raise AntigravityEvidenceError(
-            "Antigravity result conversation_id does not match init conversation_id"
-        )
-
     status = _required_non_empty_string(result, "status", context="result status")
     if status != "SUCCESS":
         raise AntigravityEvidenceError(f"Antigravity terminal status {status}")
@@ -186,14 +182,15 @@ def _record_result(
     evidence.output_tokens = _required_usage_value(usage, "output_tokens")
     evidence.reasoning_output_tokens = _required_usage_value(usage, "thinking_tokens")
     evidence.cached_input_tokens = _required_usage_value(usage, "cache_read_tokens")
-    _required_usage_value(usage, "total_tokens")
+    if "total_tokens" in usage:
+        _required_usage_value(usage, "total_tokens")
 
 
 def parse_antigravity_stream_json(lines: Iterable[str]) -> AgentEvidence:
     evidence = AgentEvidence()
     init_conversation_id: str | None = None
     saw_result = False
-    active_steps: dict[int, str] = {}
+    active_steps: dict[int, tuple[str, str | None]] = {}
 
     for line_no, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
@@ -232,11 +229,7 @@ def parse_antigravity_stream_json(lines: Iterable[str]) -> AgentEvidence:
             if init_conversation_id is None:
                 raise AntigravityEvidenceError("missing Antigravity init event before result")
             saw_result = True
-            _record_result(
-                evidence,
-                event,
-                init_conversation_id=init_conversation_id,
-            )
+            _record_result(evidence, event)
         else:
             evidence.unknown_events.append(event)
 
