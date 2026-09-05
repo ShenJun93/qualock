@@ -32,8 +32,8 @@ def registration_payload(tmp_path: Path) -> dict[str, object]:
         "native_id": native_id_for(SchedulerBackendKind.SYSTEMD_USER, key),
         "hour": 9,
         "minute": 0,
-        "python_executable": Path("/opt/qualock/python"),
-        "runner_working_directory": Path("/home/tester"),
+        "python_executable": tmp_path / "runtime" / "qualock-python",
+        "runner_working_directory": tmp_path / "runner-home",
         "path_env": "/usr/bin",
         "enabled_at": datetime(2026, 9, 2, tzinfo=UTC),
     }
@@ -90,18 +90,20 @@ def test_schedule_identity_requires_existing_root(tmp_path: Path) -> None:
 
 
 def test_registration_accepts_absolute_paths_that_disappear_after_enable(
-    registration: ScheduleRegistration,
+    registration: ScheduleRegistration, tmp_path: Path
 ) -> None:
+    stale_python = tmp_path / "gone" / "qualock-python"
+    stale_working_directory = tmp_path / "gone" / "runner-home"
     payload = registration.model_dump()
     payload.update(
         {
-            "python_executable": Path("/missing/qualock-python"),
-            "runner_working_directory": Path("/missing/runner-home"),
+            "python_executable": stale_python,
+            "runner_working_directory": stale_working_directory,
         }
     )
     stale = ScheduleRegistration.model_validate(payload)
-    assert stale.python_executable == Path("/missing/qualock-python")
-    assert stale.runner_working_directory == Path("/missing/runner-home")
+    assert stale.python_executable == stale_python
+    assert stale.runner_working_directory == stale_working_directory
 
 
 def test_enabled_at_must_be_utc(registration_payload: dict[str, object]) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import plistlib
 import stat
 from collections.abc import Sequence
@@ -158,6 +159,7 @@ def test_process_calls_use_exact_cwd_env_and_timeout(
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="launchd plist mode is a POSIX permission contract")
 def test_install_writes_mode_0600_plist(
     registration: ScheduleRegistration, tmp_path: Path
 ) -> None:

@@ -23,8 +23,8 @@ def registration(tmp_path: Path) -> ScheduleRegistration:
         native_id=native_id_for(SchedulerBackendKind.SYSTEMD_USER, key),
         hour=9,
         minute=0,
-        python_executable=Path("/missing/qualock-python"),
-        runner_working_directory=Path("/missing/runner-home"),
+        python_executable=root / "missing" / "qualock-python",
+        runner_working_directory=root / "missing" / "runner-home",
         path_env="/usr/bin",
         enabled_at=datetime(2026, 9, 2, tzinfo=UTC),
     )

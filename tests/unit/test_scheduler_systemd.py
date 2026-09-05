@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,6 +80,7 @@ def successful_run(argv: Sequence[str], **kwargs: object) -> ProcessResult:
     return result()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="systemd unit rendering uses POSIX path semantics")
 def test_systemd_rendering_is_shell_free_persistent_and_local(
     registration: ScheduleRegistration,
 ) -> None:
