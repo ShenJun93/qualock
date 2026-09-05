@@ -37,7 +37,7 @@ def sample_registration(
         native_id=native_id_for(SchedulerBackendKind.SYSTEMD_USER, key),
         hour=hour,
         minute=minute,
-        python_executable=Path("/opt/qualock/python"),
+        python_executable=canonical / "runtime" / "qualock-python",
         runner_working_directory=canonical,
         path_env="/usr/bin",
         enabled_at=datetime(2026, 9, 2, tzinfo=UTC),
@@ -132,7 +132,7 @@ def test_schedule_status_output_with_registration_is_exact(
         f"Project: {root}\n"
         "Daily time: 09:00 local time\n"
         "Backend: systemd user timer\n"
-        "Python: /opt/qualock/python\n"
+        f"Python: {outcome.registration.python_executable}\n"
         f"Logs: {outcome.log_path}\n"
     )
 
