@@ -13,8 +13,7 @@ from .process import ProcessResult, run_process_tree
 
 _WORKSPACE_MOUNT = "/tmp/qualock-workspace"
 _OAUTH_TOKEN_NAME = "antigravity-oauth-token"
-_ACCOUNT_ENV_PREFIXES = ("AGY_", "ANTIGRAVITY_", "CLOUDSDK_", "GEMINI_", "GOOGLE_")
-_AGENT_ENV_NAMES = {"QUALOCK_WORKSPACE"}
+_GRADER_ENV_ALLOWLIST = ("LANG", "LC_ALL", "LC_CTYPE", "PATH", "TZ")
 _FORBIDDEN_AGENT_ARGS = {
     "--dangerously-skip-permissions",
     "--share-net",
@@ -95,6 +94,9 @@ class LinuxHostRunner:
             "--ro-bind",
             str(invocation.oauth_token_path),
             str(app_data_target / _OAUTH_TOKEN_NAME),
+            "--ro-bind",
+            str((workspace / ".git").resolve()),
+            f"{_WORKSPACE_MOUNT}/.git",
             "--dev",
             "/dev",
             "--chdir",
@@ -144,11 +146,30 @@ class LinuxHostRunner:
             ["git", "ls-files", "--others", "--exclude-standard", "-z"],
             ["git", "diff", "--binary", "HEAD"],
         )
-        results: list[ProcessResult] = []
-        for command in commands:
-            result = run_process_tree(command, cwd=workspace, timeout_seconds=60)
-            _require_success(result, "host Git inspection")
-            results.append(result)
+        git_dir = workspace / ".git"
+        if not git_dir.is_dir() or git_dir.is_symlink():
+            raise HostCommandError("host Git inspection requires an isolated .git directory")
+
+        with tempfile.TemporaryDirectory(prefix="qualock-git-inspection-") as temporary:
+            authority = Path(temporary) / "git"
+            shutil.copytree(
+                git_dir,
+                authority,
+                symlinks=True,
+                ignore=shutil.ignore_patterns("config", "config.worktree", "hooks"),
+            )
+            (authority / "config").write_text("[core]\n\tbare = false\n", encoding="utf-8")
+            environment = self._inspection_environment(authority, workspace)
+            results: list[ProcessResult] = []
+            for command in commands:
+                result = run_process_tree(
+                    command,
+                    cwd=workspace,
+                    env=environment,
+                    timeout_seconds=60,
+                )
+                _require_success(result, "host Git inspection")
+                results.append(result)
         return AgentStateEvidence(
             changed_paths=_parse_nul_paths(results[0].stdout + results[1].stdout),
             patch=results[2].stdout,
@@ -166,9 +187,12 @@ class LinuxHostRunner:
             grader_root = Path(temporary)
             grader_workspace = grader_root / "workspace"
             grader_home = grader_root / "home"
+            grader_tmp = grader_root / "tmp"
             shutil.copytree(workspace, grader_workspace, symlinks=True)
             grader_home.mkdir()
-            environment = self._grader_environment(grader_home)
+            grader_tmp.mkdir()
+            self._require_contained_symlinks(grader_workspace)
+            environment = self._grader_environment(grader_home, grader_tmp)
             command = " && ".join(
                 [f"git apply {shlex.quote(str(grader_patch.absolute()))}", *commands]
             )
@@ -186,15 +210,28 @@ class LinuxHostRunner:
             )
 
     @staticmethod
-    def _grader_environment(grader_home: Path) -> Mapping[str, str]:
-        environment = {
-            key: value
-            for key, value in os.environ.items()
-            if key not in _AGENT_ENV_NAMES and not key.startswith(_ACCOUNT_ENV_PREFIXES)
+    def _inspection_environment(authority: Path, workspace: Path) -> dict[str, str]:
+        return {
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_DIR": str(authority),
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PAGER": "cat",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_WORK_TREE": str(workspace.resolve()),
+            "LC_ALL": "C",
+            "PATH": os.defpath,
         }
+
+    @staticmethod
+    def _grader_environment(grader_home: Path, grader_tmp: Path) -> Mapping[str, str]:
+        environment = {key: os.environ[key] for key in _GRADER_ENV_ALLOWLIST if key in os.environ}
+        environment.setdefault("PATH", os.defpath)
         environment.update(
             {
                 "HOME": str(grader_home),
+                "TMPDIR": str(grader_tmp),
                 "XDG_CACHE_HOME": str(grader_home / ".cache"),
                 "XDG_CONFIG_HOME": str(grader_home / ".config"),
                 "XDG_DATA_HOME": str(grader_home / ".local" / "share"),
@@ -202,3 +239,19 @@ class LinuxHostRunner:
             }
         )
         return environment
+
+    @staticmethod
+    def _require_contained_symlinks(workspace: Path) -> None:
+        workspace_root = workspace.resolve()
+        for directory, directory_names, file_names in os.walk(workspace, followlinks=False):
+            for name in [*directory_names, *file_names]:
+                path = Path(directory) / name
+                if not path.is_symlink():
+                    continue
+                try:
+                    path.resolve(strict=False).relative_to(workspace_root)
+                except (OSError, RuntimeError, ValueError) as error:
+                    relative = path.relative_to(workspace)
+                    raise HostCommandError(
+                        f"grader symlink resolves outside grader workspace: {relative}"
+                    ) from error
