@@ -8,6 +8,8 @@ from qualock.evidence.antigravity_stream_json import (
 )
 from qualock.evidence.models import AgentEvidenceError, CommandEvent
 
+_MISSING = object()
+
 
 def line(payload: object) -> str:
     return json.dumps(payload)
@@ -31,7 +33,6 @@ def result(
     usage: object = None,
 ) -> str:
     payload: dict[str, object] = {
-        "conversation_id": conversation_id,
         "status": status,
         "usage": usage
         if usage is not None
@@ -43,6 +44,8 @@ def result(
             "total_tokens": 12,
         },
     }
+    if conversation_id is not _MISSING:
+        payload["conversation_id"] = conversation_id
     if denied_actions is not None:
         payload["denied_actions"] = denied_actions
     return line({"event": "result", "result": payload})
@@ -196,9 +199,12 @@ def test_denied_actions_must_be_a_list_when_present() -> None:
     [
         ("search_web", 1, 0),
         ("read_url_content", 1, 0),
+        ("url_fetch", 1, 0),
+        ("browser_open", 1, 0),
         ("browser_subagent", 1, 0),
         ("invoke_subagent", 1, 0),
         ("mcp_server_tool", 0, 1),
+        ("mcp_browser_tool", 0, 1),
     ],
 )
 def test_counts_network_capable_tool_families(
@@ -217,6 +223,17 @@ def test_counts_network_capable_tool_families(
 
     assert evidence.web_searches == expected_web_searches
     assert evidence.mcp_calls == expected_mcp_calls
+
+
+def test_unsupported_tool_invocation_fails_closed() -> None:
+    with pytest.raises(AntigravityEvidenceError, match="unsupported Antigravity tool"):
+        parse_antigravity_stream_json(
+            [
+                init(),
+                tool_update(1, "ACTIVE", "future_network_tool", {}),
+                result(),
+            ]
+        )
 
 
 def test_records_successful_file_change_paths_once() -> None:
@@ -240,6 +257,22 @@ def test_records_successful_file_change_paths_once() -> None:
     assert evidence.file_changes == ["src/new.py", "src/existing.py", "README.md"]
 
 
+def test_does_not_record_failed_file_change() -> None:
+    parameters = {"TargetFile": "src/failed.py"}
+
+    evidence = parse_antigravity_stream_json(
+        [
+            init(),
+            tool_update(1, "ACTIVE", "write_to_file", parameters),
+            tool_update(1, "ERROR", "write_to_file", parameters, error="write failed"),
+            result(),
+        ]
+    )
+
+    assert evidence.file_changes == []
+    assert evidence.errors == ["Antigravity tool write_to_file: write failed"]
+
+
 def test_first_active_event_for_step_index_wins() -> None:
     evidence = parse_antigravity_stream_json(
         [
@@ -254,12 +287,68 @@ def test_first_active_event_for_step_index_wins() -> None:
     assert evidence.commands == [CommandEvent(command="first", exit_code=None)]
 
 
-def test_init_and_result_require_valid_matching_conversation_ids() -> None:
+def test_init_requires_valid_conversation_id() -> None:
     with pytest.raises(AntigravityEvidenceError, match="conversation_id"):
         parse_antigravity_stream_json([init(conversation_id=None), result()])
 
-    with pytest.raises(AntigravityEvidenceError, match="conversation_id"):
-        parse_antigravity_stream_json([init(), result(conversation_id="other")])
+
+@pytest.mark.parametrize("conversation_id", [_MISSING, None, "", "other"])
+def test_result_conversation_id_is_optional_and_does_not_replace_thread_id(
+    conversation_id: object,
+) -> None:
+    evidence = parse_antigravity_stream_json(
+        [init(conversation_id="init-id"), result(conversation_id=conversation_id)]
+    )
+
+    assert evidence.thread_id == "init-id"
+
+
+def test_result_total_tokens_is_optional() -> None:
+    evidence = parse_antigravity_stream_json(
+        [
+            init(),
+            result(
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "thinking_tokens": 1,
+                    "cache_read_tokens": 3,
+                }
+            ),
+        ]
+    )
+
+    assert evidence.input_tokens == 10
+    assert evidence.output_tokens == 2
+    assert evidence.reasoning_output_tokens == 1
+    assert evidence.cached_input_tokens == 3
+
+
+def test_outcome_without_active_is_metadata_not_invocation() -> None:
+    evidence = parse_antigravity_stream_json(
+        [
+            init(),
+            tool_update(
+                1,
+                "DONE",
+                "run_command",
+                {"CommandLine": "not recorded"},
+                output="done",
+            ),
+            tool_update(
+                2,
+                "ERROR",
+                "search_web",
+                {"query": "not recorded"},
+                error="blocked",
+            ),
+            result(),
+        ]
+    )
+
+    assert evidence.commands == []
+    assert evidence.web_searches == 0
+    assert evidence.errors == ["Antigravity tool search_web: blocked"]
 
 
 @pytest.mark.parametrize(
