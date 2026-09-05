@@ -28,8 +28,10 @@ if args and args[0] == 'install':
     binary = prefix / 'node_modules' / '@openai' / '{package}' / 'vendor' / '{target}' / 'bin' / 'codex'
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_bytes(('native-codex-' + version).encode())
+    binary.chmod(0o755)
     host = binary.with_name('codex-code-mode-host')
     host.write_bytes(('code-mode-host-' + version).encode())
+    host.chmod(0o755)
     raise SystemExit(0)
 raise SystemExit(2)
 """

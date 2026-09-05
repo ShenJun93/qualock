@@ -5,9 +5,14 @@ from pathlib import Path
 
 def write_python_launcher(path: Path, source: str) -> Path:
     if os.name == "nt":
+        # with_suffix replaces any existing suffix, so callers must pass a
+        # stem-only path (no ".sh"/".py" of its own) or it will collide.
         script = path.with_suffix(".py")
         script.write_text(source, encoding="utf-8")
         launcher = path.with_suffix(".cmd")
+        # %* forwards argv through cmd.exe, which reinterprets cmd
+        # metacharacters (&, ^, >); fine for the plain package specs and
+        # paths current fixtures pass, not a general argv passthrough.
         launcher.write_text(
             f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
             encoding="utf-8",

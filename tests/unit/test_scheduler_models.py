@@ -32,8 +32,8 @@ def registration_payload(tmp_path: Path) -> dict[str, object]:
         "native_id": native_id_for(SchedulerBackendKind.SYSTEMD_USER, key),
         "hour": 9,
         "minute": 0,
-        "python_executable": tmp_path / "runtime" / "qualock-python",
-        "runner_working_directory": tmp_path / "runner-home",
+        "python_executable": root / "runtime" / "qualock-python",
+        "runner_working_directory": root / "runner-home",
         "path_env": "/usr/bin",
         "enabled_at": datetime(2026, 9, 2, tzinfo=UTC),
     }
