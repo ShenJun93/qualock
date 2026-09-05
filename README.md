@@ -503,6 +503,8 @@ mypy src
 
 Tests use fake Codex/process/backends so the normal suite does not require OpenAI credentials. Docker-specific integration tests are skipped only when Docker is unavailable.
 
+The contributor unit suite is exercised on Linux and Windows. Native scheduler backend checks remain platform-scoped: systemd semantics are Linux-native and launchd permission semantics are macOS/POSIX-native. This does not claim full runtime parity across operating systems.
+
 ## Current status
 
 The local qualification pipeline, behavior-lock semantics, paired scheduling, JSONL evidence parsing, hidden-grader isolation, Codex Linux sandbox support, and CLI are implemented. The first real `Codex 0.150.0 -> 0.151.0` OSS pilot has been executed and published. It passed all three canaries after a documented behavioral-grader correction; this is evidence for that small suite only, not a broad equivalence claim.
