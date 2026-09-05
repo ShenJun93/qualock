@@ -130,11 +130,19 @@ run_attempt(*, canary, prepared, binary, side, repetition) -> AttemptResult
 ```
 
 Each attempt receives its own isolated working copy under `.qualock/work` or the existing project
-work root. The backend never executes an agent directly in the user's source checkout.
+work root. The backend never executes an agent directly in the user's source checkout. Each attempt
+also receives fresh private Antigravity config/app-data trees and a private outer `/tmp`; profile state
+is never reused between repetitions.
 
 Preparation materializes the requested repository/base SHA and runs the same canary setup contract
 used by Docker preparation. Host-specific setup differences must fail explicitly rather than be
 silently skipped.
+
+### 3a. Canary runtime profile is explicit
+
+Batch #35 extends `RuntimeSpec` with `execution: Literal["container", "linux-host"] = "container"` and makes `image` optional only for `linux-host`. Existing canaries remain container-backed without edits. `DockerQualificationBackend` rejects non-container canaries; `LinuxHostQualificationBackend` rejects non-`linux-host` canaries. This prevents the host backend from silently ignoring a Docker runtime image.
+
+For a `linux-host` canary, setup and grader commands execute in the disposable WSL attempt workspace under QuaLock-owned process control. The canary author is therefore explicitly opting into the host runtime rather than claiming Docker-image equivalence.
 
 ### 4. Host execution is Linux-only and fail-closed
 
@@ -372,6 +380,7 @@ Verified runtime results:
 - `search_web` and `invoke_subagent` were hard-denied by the same hook before execution;
 - a process-private Bubblewrap mount of generated `~/.gemini/config` loaded the hook while leaving the user's real `import_manifest.json` unchanged (`imports: null`);
 - a process-private app-data mount with generated `settings.json` plus a read-only bind of the existing OAuth token preserved silent authentication, reported `permission_mode=proceed-in-sandbox`, and executed a sandboxed shell command successfully;
+- with a fresh config/app-data profile, outer private `/tmp`, and workspace rebound at `/tmp/qualock-workspace`, the inner shell ran from the expected cwd while both a HOME sentinel and a host `/tmp` sentinel were invisible and outbound TCP remained blocked;
 - Antigravity terminal sandbox with `proceed-in-sandbox` read workspace/system runtime files, could not read a HOME sentinel (`FileNotFoundError`), and blocked direct outbound TCP (`OSError`);
 - `stream-json` exposed init/tool/result/usage/error evidence sufficient for a fail-closed parser;
 - no `--dangerously-skip-permissions`, Windows fallback, API-key substitution, copied credentials, or unsandboxed retry was used.
