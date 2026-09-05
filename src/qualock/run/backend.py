@@ -10,7 +10,7 @@ from qualock.source.git import GitSourceManager
 
 from .docker import DockerRunner
 from .integrity import IntegrityPathError, protected_path_violations
-from .models import PreparedImage
+from .models import PreparedTarget
 from .schedule import Side
 
 
@@ -19,6 +19,10 @@ class IntegrityPolicy:
     reject_web_search: bool = True
     reject_mcp_calls: bool = True
     reject_protected_path_changes: bool = True
+
+
+class UnsupportedRuntimeError(ValueError):
+    pass
 
 
 class DockerQualificationBackend:
@@ -41,7 +45,12 @@ class DockerQualificationBackend:
         self.work_root = work_root
         self.integrity_policy = integrity_policy
 
-    def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedImage:
+    def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedTarget:
+        if canary.runtime.execution != "container":
+            raise UnsupportedRuntimeError(
+                f"DockerQualificationBackend requires execution=container, "
+                f"got {canary.runtime.execution!r}"
+            )
         source_dir = self.work_root / qualification_id / canary.id / "source"
         self.source_manager.materialize(
             canary.repository.url,
@@ -62,7 +71,7 @@ class DockerQualificationBackend:
         self,
         *,
         canary: CanarySpec,
-        prepared: PreparedImage,
+        prepared: PreparedTarget,
         binary: AgentBinary,
         side: Side,
         repetition: int,

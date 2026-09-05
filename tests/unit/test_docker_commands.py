@@ -119,7 +119,7 @@ def test_agent_phase_can_inject_secret_environment_from_stdin_without_secret_arg
 
 
 def test_run_agent_streams_secret_only_to_docker_start(tmp_path: Path, monkeypatch) -> None:
-    from qualock.run.models import PreparedImage
+    from qualock.run.models import PreparedTarget
     from qualock.run.process import ProcessResult
 
     calls: list[tuple[list[str], str | None]] = []
@@ -132,7 +132,7 @@ def test_run_agent_streams_secret_only_to_docker_start(tmp_path: Path, monkeypat
     monkeypatch.setattr(runner, "_run", fake_run)
     monkeypatch.setattr(runner, "_inspect_image_id", lambda reference: "sha256:frozen")
     runner.run_agent(
-        prepared=PreparedImage("prepared", "sha256:prepared"),
+        prepared=PreparedTarget("prepared", "sha256:prepared"),
         container_name="ub-agent-stdin",
         agent_binary=tmp_path / "claude",
         agent_argv=[str(tmp_path / "claude"), "-p", "task"],

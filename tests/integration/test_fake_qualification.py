@@ -4,7 +4,7 @@ from qualock.agents.base import AgentBinary
 from qualock.canary.models import CanarySpec
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.executor import QualificationExecutor
-from qualock.run.models import PreparedImage
+from qualock.run.models import PreparedTarget
 from qualock.run.schedule import Side
 
 
@@ -12,10 +12,10 @@ class FakeBackend:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, int, str]] = []
 
-    def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedImage:
-        return PreparedImage(reference="prepared", digest=f"sha256:{canary.id}")
+    def prepare(self, canary: CanarySpec, qualification_id: str) -> PreparedTarget:
+        return PreparedTarget(reference="prepared", digest=f"sha256:{canary.id}")
 
-    def run_attempt(self, *, canary: CanarySpec, prepared: PreparedImage, binary: AgentBinary, side: Side, repetition: int) -> AttemptResult:
+    def run_attempt(self, *, canary: CanarySpec, prepared: PreparedTarget, binary: AgentBinary, side: Side, repetition: int) -> AttemptResult:
         self.calls.append((canary.id, side.value, repetition, prepared.digest))
         success = side is Side.BASELINE
         return AttemptResult(

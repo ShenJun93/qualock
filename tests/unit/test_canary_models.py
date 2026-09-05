@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from qualock.canary.models import CanarySpec
+from qualock.canary.models import CanarySpec, RuntimeSpec
 
 
 def valid_data(tmp_path: Path) -> dict:
@@ -56,3 +56,18 @@ def test_rejects_empty_grader_command(tmp_path: Path) -> None:
     data["grader"]["command"] = []
     with pytest.raises(ValidationError):
         CanarySpec.model_validate(data)
+
+
+def test_runtime_defaults_to_container() -> None:
+    runtime = RuntimeSpec(image="python:3.12")
+    assert runtime.execution == "container"
+    assert runtime.image == "python:3.12"
+
+
+def test_linux_host_runtime_rejects_container_image() -> None:
+    with pytest.raises(ValidationError):
+        RuntimeSpec(execution="linux-host", image="python:3.12")
+
+
+def test_linux_host_runtime_allows_no_image() -> None:
+    assert RuntimeSpec(execution="linux-host").image is None

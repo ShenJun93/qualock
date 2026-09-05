@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class PreparedImage:
+class PreparedTarget:
     reference: str
     digest: str
 
