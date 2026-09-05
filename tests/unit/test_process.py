@@ -1,7 +1,11 @@
+import os
 import sys
+import time
 from pathlib import Path
 
-from qualock.run.process import run_process
+import pytest
+
+from qualock.run.process import run_process, run_process_tree
 
 FIXTURE = Path("tests/fixtures/bin/process_fixture.py").resolve()
 
@@ -41,3 +45,28 @@ def test_process_can_stream_explicit_stdin() -> None:
     assert result.exit_code == 0
     assert result.stdout.strip() == "secret-input"
     assert result.stderr == ""
+
+
+def test_process_tree_timeout_kills_long_lived_descendant(tmp_path: Path) -> None:
+    process_info = tmp_path / "process-info"
+    script = (
+        "import os, pathlib, subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+        "pathlib.Path(sys.argv[1]).write_text(f'{os.getpgrp()} {child.pid}'); "
+        "time.sleep(60)"
+    )
+
+    result = run_process_tree(
+        [sys.executable, "-c", script, str(process_info)],
+        timeout_seconds=0.2,
+    )
+
+    assert result.timed_out is True
+    assert result.exit_code is None
+    process_group, child_pid = map(int, process_info.read_text(encoding="utf-8").split())
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and Path(f"/proc/{child_pid}").exists():
+        time.sleep(0.01)
+    assert not Path(f"/proc/{child_pid}").exists()
+    with pytest.raises(ProcessLookupError):
+        os.killpg(process_group, 0)
