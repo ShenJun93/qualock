@@ -2,18 +2,44 @@ from pathlib import Path
 
 import pytest
 
+import qualock.agents.claude_resolver as claude_resolver_module
 from qualock.agents.claude_resolver import ClaudeResolveError, ClaudeResolver
 from qualock.run.process import ProcessResult
 
+from ._platform_helpers import write_python_launcher
 
-def make_fake_npm(
-    path: Path,
+
+def make_fake_npm(path: Path, *, create_binary: bool = True) -> Path:
+    source = (
+        "import pathlib\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:3] == ['view', '@anthropic-ai/claude-code', 'version']:\n"
+        "    print('2.1.260')\n"
+        "    raise SystemExit(0)\n"
+        "if args and args[0] == 'install':\n"
+        "    prefix = pathlib.Path(args[args.index('--prefix') + 1])\n"
+        "    spec = next(x for x in args if x.startswith('@anthropic-ai/claude-code-linux-'))\n"
+        "    package, version = spec.rsplit('@', 1)\n"
+        "    package_name = package.removeprefix('@anthropic-ai/')\n"
+        f"    if {create_binary!r}:\n"
+        "        binary = prefix / 'node_modules' / '@anthropic-ai' / package_name / 'claude'\n"
+        "        binary.parent.mkdir(parents=True, exist_ok=True)\n"
+        "        binary.write_bytes(('native-claude-' + version).encode())\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(2)\n"
+    )
+    return write_python_launcher(path, source)
+
+
+def install_contract_probe(
+    monkeypatch: pytest.MonkeyPatch,
     *,
-    create_binary: bool = True,
+    reported_version: str = "2.1.260",
     missing_flag: str | None = None,
-    reported_version: str | None = None,
-) -> Path:
-    flags = [
+) -> None:
+    real_run = claude_resolver_module.run_process
+    flags = (
         "-p",
         "--safe-mode",
         "--restricted",
@@ -29,63 +55,27 @@ def make_fake_npm(
         "--strict-mcp-config",
         "--mcp-config",
         "--settings",
-    ]
-    if missing_flag is not None:
-        flags.remove(missing_flag)
-    help_lines = []
-    for flag in flags:
-        if flag == "-p":
-            help_lines.append("  -p, --print                           Print response and exit")
-        elif flag == "--allowed-tools":
-            help_lines.append("  --allowedTools, --allowed-tools <tools...>  Allow tools")
-        else:
-            help_lines.append(f"  {flag} <value>  Test option")
-    help_text = "\n".join(help_lines)
-    binary_template = (
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "args = sys.argv[1:]\n"
-        "if '--version' in args:\n"
-        "    print(REPORTED + ' (Claude Code)')\n"
-        "    raise SystemExit(0)\n"
-        "if '--help' in args:\n"
-        "    print(HELP_TEXT)\n"
-        "    raise SystemExit(0)\n"
-        "raise SystemExit(0)\n"
     )
-    binary_template = binary_template.replace("REPORTED", repr(reported_version or "__VERSION__"))
-    binary_template = binary_template.replace("HELP_TEXT", repr(help_text))
-    npm_script = (
-        "#!/usr/bin/env python3\n"
-        "import pathlib\n"
-        "import sys\n"
-        "args = sys.argv[1:]\n"
-        "if args[:3] == ['view', '@anthropic-ai/claude-code', 'version']:\n"
-        "    print('2.1.260')\n"
-        "    raise SystemExit(0)\n"
-        "if args and args[0] == 'install':\n"
-        "    prefix = pathlib.Path(args[args.index('--prefix') + 1])\n"
-        "    spec = next(x for x in args if x.startswith('@anthropic-ai/claude-code-linux-'))\n"
-        "    package, version = spec.rsplit('@', 1)\n"
-        "    package_name = package.removeprefix('@anthropic-ai/')\n"
-        f"    if {create_binary!r}:\n"
-        "        binary = prefix / 'node_modules' / '@anthropic-ai' / package_name / 'claude'\n"
-        "        binary.parent.mkdir(parents=True, exist_ok=True)\n"
-        f"        template = {binary_template!r}\n"
-        "        template = template.replace('__VERSION__', version)\n"
-        "        binary.write_text(template)\n"
-        "        binary.chmod(0o755)\n"
-        "    raise SystemExit(0)\n"
-        "raise SystemExit(2)\n"
-    )
-    path.write_text(npm_script, encoding="utf-8")
-    path.chmod(0o755)
-    return path
+
+    def portable_run(argv, *, timeout_seconds, env=None):
+        executable = Path(argv[0])
+        if executable.name == "claude" and argv[1:] == ["--version"]:
+            return ProcessResult(0, f"{reported_version} (Claude Code)\n", "", 0.01, False)
+        if executable.name == "claude" and argv[1:] == ["--help"]:
+            visible = [flag for flag in flags if flag != missing_flag]
+            help_text = "\n".join(f"  {flag} <value>  Test option" for flag in visible)
+            return ProcessResult(0, help_text, "", 0.01, False)
+        return real_run(argv, timeout_seconds=timeout_seconds, env=env)
+
+    monkeypatch.setattr(claude_resolver_module, "run_process", portable_run)
 
 
-def test_resolves_exact_x86_64_native_binary(tmp_path: Path) -> None:
+def test_resolves_exact_x86_64_native_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     npm = make_fake_npm(tmp_path / "npm")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+    install_contract_probe(monkeypatch)
 
     binary = resolver.resolve("2.1.260")
 
@@ -99,18 +89,24 @@ def test_resolves_exact_x86_64_native_binary(tmp_path: Path) -> None:
     assert binary.support_binaries == ()
 
 
-def test_arm64_uses_native_arm64_package(tmp_path: Path) -> None:
+def test_arm64_uses_native_arm64_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     npm = make_fake_npm(tmp_path / "npm")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="aarch64")
+    install_contract_probe(monkeypatch)
 
     binary = resolver.resolve("2.1.260")
 
     assert "claude-code-linux-arm64" in str(binary.path)
 
 
-def test_latest_is_resolved_before_install(tmp_path: Path) -> None:
+def test_latest_is_resolved_before_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     npm = make_fake_npm(tmp_path / "npm")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+    install_contract_probe(monkeypatch)
 
     binary = resolver.resolve("latest")
 
@@ -127,9 +123,12 @@ def test_latest_version_queries_metadata_without_cache(tmp_path: Path) -> None:
     assert not cache.exists()
 
 
-def test_cached_binary_is_reused_without_npm(tmp_path: Path) -> None:
+def test_cached_binary_is_reused_without_npm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     npm = make_fake_npm(tmp_path / "npm")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+    install_contract_probe(monkeypatch)
     first = resolver.resolve("2.1.260")
     npm.unlink()
 
@@ -143,33 +142,45 @@ def test_versions_before_validated_contract_are_rejected(tmp_path: Path) -> None
         ClaudeResolver(tmp_path / "cache", machine="x86_64").resolve("2.1.259")
 
 
-def test_resolved_binary_must_report_requested_version(tmp_path: Path) -> None:
-    npm = make_fake_npm(tmp_path / "npm", reported_version="2.1.261")
+def test_resolved_binary_must_report_requested_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npm = make_fake_npm(tmp_path / "npm")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+    install_contract_probe(monkeypatch, reported_version="2.1.261")
 
     with pytest.raises(ClaudeResolveError, match="reported version"):
         resolver.resolve("2.1.260")
 
 
-def test_resolved_binary_requires_print_flag_for_headless_contract(tmp_path: Path) -> None:
-    npm = make_fake_npm(tmp_path / "npm", missing_flag="-p")
+def test_resolved_binary_requires_print_flag_for_headless_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npm = make_fake_npm(tmp_path / "npm")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+    install_contract_probe(monkeypatch, missing_flag="-p")
 
     with pytest.raises(ClaudeResolveError, match=r"missing required CLI flag -p"):
         resolver.resolve("2.1.260")
 
 
-def test_resolved_binary_requires_verbose_for_stream_json_contract(tmp_path: Path) -> None:
-    npm = make_fake_npm(tmp_path / "npm", missing_flag="--verbose")
+def test_resolved_binary_requires_verbose_for_stream_json_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npm = make_fake_npm(tmp_path / "npm")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+    install_contract_probe(monkeypatch, missing_flag="--verbose")
 
     with pytest.raises(ClaudeResolveError, match="missing required CLI flag --verbose"):
         resolver.resolve("2.1.260")
 
 
-def test_resolved_binary_must_expose_required_cli_contract(tmp_path: Path) -> None:
-    npm = make_fake_npm(tmp_path / "npm", missing_flag="--restricted")
+def test_resolved_binary_must_expose_required_cli_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npm = make_fake_npm(tmp_path / "npm")
     resolver = ClaudeResolver(tmp_path / "cache", npm_executable=str(npm), machine="x86_64")
+    install_contract_probe(monkeypatch, missing_flag="--restricted")
 
     with pytest.raises(ClaudeResolveError, match="missing required CLI flag --restricted"):
         resolver.resolve("2.1.260")

@@ -5,11 +5,16 @@ import pytest
 from qualock.agents.resolver import CodexResolveError, CodexResolver
 from qualock.run.process import ProcessResult
 
+from ._platform_helpers import write_python_launcher
 
-def make_fake_npm(path: Path) -> Path:
-    path.write_text(
-        """#!/usr/bin/env python3
-import pathlib
+
+def make_fake_npm(
+    path: Path,
+    *,
+    package: str = "codex-linux-x64",
+    target: str = "x86_64-unknown-linux-musl",
+) -> Path:
+    source = f"""import pathlib
 import sys
 
 args = sys.argv[1:]
@@ -20,20 +25,15 @@ if args and args[0] == 'install':
     prefix = pathlib.Path(args[args.index('--prefix') + 1])
     spec = next(x for x in args if x.startswith('@openai/codex@'))
     version = spec.rsplit('@', 1)[1]
-    binary = prefix / 'node_modules' / '@openai' / 'codex-linux-x64' / 'vendor' / 'x86_64-unknown-linux-musl' / 'bin' / 'codex'
+    binary = prefix / 'node_modules' / '@openai' / '{package}' / 'vendor' / '{target}' / 'bin' / 'codex'
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.write_bytes(('native-codex-' + version).encode())
-    binary.chmod(0o755)
     host = binary.with_name('codex-code-mode-host')
     host.write_bytes(('code-mode-host-' + version).encode())
-    host.chmod(0o755)
     raise SystemExit(0)
 raise SystemExit(2)
-""",
-        encoding="utf-8",
-    )
-    path.chmod(0o755)
-    return path
+"""
+    return write_python_launcher(path, source)
 
 
 def test_resolves_exact_version_to_native_linux_binary(tmp_path: Path) -> None:
@@ -172,25 +172,11 @@ def test_existing_cached_native_binary_is_reused_without_npm(tmp_path: Path) -> 
 
 
 def test_arm64_resolves_linux_arm64_platform_package_path(tmp_path: Path) -> None:
-    npm = tmp_path / "npm"
-    npm.write_text(
-        """#!/usr/bin/env python3
-import pathlib, sys
-args = sys.argv[1:]
-prefix = pathlib.Path(args[args.index('--prefix') + 1])
-spec = next(x for x in args if x.startswith('@openai/codex@'))
-version = spec.rsplit('@', 1)[1]
-binary = prefix / 'node_modules' / '@openai' / 'codex-linux-arm64' / 'vendor' / 'aarch64-unknown-linux-musl' / 'bin' / 'codex'
-binary.parent.mkdir(parents=True, exist_ok=True)
-binary.write_bytes(('native-codex-' + version).encode())
-binary.chmod(0o755)
-host = binary.with_name('codex-code-mode-host')
-host.write_bytes(('code-mode-host-' + version).encode())
-host.chmod(0o755)
-""",
-        encoding="utf-8",
+    npm = make_fake_npm(
+        tmp_path / "npm",
+        package="codex-linux-arm64",
+        target="aarch64-unknown-linux-musl",
     )
-    npm.chmod(0o755)
     resolver = CodexResolver(tmp_path / "cache", npm_executable=str(npm), machine="arm64")
     binary = resolver.resolve("0.150.0")
     assert "codex-linux-arm64" in str(binary.path)

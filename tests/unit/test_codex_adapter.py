@@ -6,12 +6,20 @@ from qualock.agents.base import AgentBinary, AgentCapabilities
 from qualock.agents.codex import CodexAdapter, IncompatibleCodexError
 from qualock.evidence.models import AgentEvidence
 
-FAKE = Path("tests/fixtures/fake-codex").resolve()
+from ._platform_helpers import write_python_launcher
+
+FAKE_SOURCE = Path("tests/fixtures/fake-codex").read_text(encoding="utf-8")
 
 
-def test_detects_required_exec_capabilities() -> None:
+@pytest.fixture
+def fake_codex(tmp_path: Path) -> Path:
+    source = FAKE_SOURCE.removeprefix("#!/usr/bin/env python3\n")
+    return write_python_launcher(tmp_path / "codex", source)
+
+
+def test_detects_required_exec_capabilities(fake_codex: Path) -> None:
     adapter = CodexAdapter()
-    capabilities = adapter.detect_capabilities(FAKE)
+    capabilities = adapter.detect_capabilities(fake_codex)
     assert capabilities.exec is True
     assert capabilities.json is True
     assert capabilities.ephemeral is True
@@ -21,10 +29,10 @@ def test_detects_required_exec_capabilities() -> None:
     assert capabilities.model is True
 
 
-def test_builds_isolated_explicit_model_exec_command() -> None:
+def test_builds_isolated_explicit_model_exec_command(fake_codex: Path) -> None:
     adapter = CodexAdapter()
-    binary = AgentBinary(name="codex", version="0.150.0", path=FAKE, sha256="abc")
-    capabilities = adapter.detect_capabilities(FAKE)
+    binary = AgentBinary(name="codex", version="0.150.0", path=fake_codex, sha256="abc")
+    capabilities = adapter.detect_capabilities(fake_codex)
     argv = adapter.build_exec_argv(
         binary,
         capabilities,
@@ -32,7 +40,7 @@ def test_builds_isolated_explicit_model_exec_command() -> None:
         reasoning_effort="high",
         prompt="Fix it",
     )
-    assert argv[0] == str(FAKE)
+    assert argv[0] == str(fake_codex)
     assert argv[1] == "exec"
     assert "--ephemeral" in argv
     assert "--ignore-user-config" in argv
@@ -50,9 +58,7 @@ def test_builds_isolated_explicit_model_exec_command() -> None:
 
 
 def test_rejects_missing_common_capability(tmp_path: Path) -> None:
-    fake = tmp_path / "codex"
-    fake.write_text("#!/bin/sh\necho --json\n", encoding="utf-8")
-    fake.chmod(0o755)
+    fake = write_python_launcher(tmp_path / "codex", "print('--json')\n")
     adapter = CodexAdapter()
     capabilities = adapter.detect_capabilities(fake)
     binary = AgentBinary(name="codex", version="old", path=fake, sha256="x")
