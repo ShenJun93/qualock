@@ -38,16 +38,17 @@ class AntigravityResolver:
 
     def resolve(self, version: str) -> AgentBinary:
         binary_path = self._locate_binary()
+        resolved_path = binary_path.resolve()
 
-        if platform.system() != "Linux" or binary_path.suffix == ".exe":
+        if platform.system() != "Linux" or resolved_path.suffix.lower() == ".exe":
             raise AntigravityResolveError(
                 f"Antigravity resolver requires a native Linux binary, got {binary_path}"
             )
 
-        if not binary_path.is_file():
+        if not resolved_path.is_file():
             raise AntigravityResolveError(f"Antigravity binary not found: {binary_path}")
 
-        version_result = run_process([str(binary_path), "--version"], timeout_seconds=10)
+        version_result = run_process([str(resolved_path), "--version"], timeout_seconds=10)
         if version_result.timed_out or version_result.exit_code != 0:
             raise AntigravityResolveError(
                 version_result.stderr.strip() or "failed to inspect Antigravity version"
@@ -61,7 +62,7 @@ class AntigravityResolver:
                 f"Antigravity binary reports version {reported!r}, requested {version}"
             )
 
-        help_result = run_process([str(binary_path), "--help"], timeout_seconds=10)
+        help_result = run_process([str(resolved_path), "--help"], timeout_seconds=10)
         if help_result.timed_out or help_result.exit_code != 0:
             raise AntigravityResolveError(
                 help_result.stderr.strip() or "failed to inspect Antigravity CLI contract"
@@ -71,6 +72,5 @@ class AntigravityResolver:
             if flag not in help_text:
                 raise AntigravityResolveError(f"Antigravity binary missing required CLI flag {flag}")
 
-        resolved_path = binary_path.resolve()
         digest = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
         return AgentBinary(name="antigravity", version=version, path=resolved_path, sha256=digest)

@@ -65,6 +65,27 @@ def test_resolve_rejects_windows_executable(tmp_path: Path, monkeypatch: pytest.
         AntigravityResolver(tmp_path / "agy.exe").resolve("1.1.27")
 
 
+def test_resolve_rejects_uppercase_windows_executable_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+    with pytest.raises(AntigravityResolveError, match="native Linux"):
+        AntigravityResolver(tmp_path / "agy.EXE").resolve("1.1.27")
+
+
+def test_resolve_rejects_symlink_to_windows_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    windows_binary = write_fake_agy(tmp_path, version="1.1.27", name="agy.exe")
+    symlink = tmp_path / "agy"
+    symlink.symlink_to(windows_binary)
+
+    with pytest.raises(AntigravityResolveError, match="native Linux"):
+        AntigravityResolver(symlink).resolve("1.1.27")
+
+
 def test_resolve_rejects_non_linux_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     agy = write_fake_agy(tmp_path, version="1.1.27")
     monkeypatch.setattr(platform, "system", lambda: "Darwin")
