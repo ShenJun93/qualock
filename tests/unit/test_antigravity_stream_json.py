@@ -287,6 +287,23 @@ def test_first_active_event_for_step_index_wins() -> None:
     assert evidence.commands == [CommandEvent(command="first", exit_code=None)]
 
 
+@pytest.mark.parametrize("outcome_state", ["DONE", "ERROR"])
+def test_active_after_completed_step_index_is_not_counted_again(
+    outcome_state: str,
+) -> None:
+    evidence = parse_antigravity_stream_json(
+        [
+            init(),
+            tool_update(4, "ACTIVE", "run_command", {"CommandLine": "first"}),
+            tool_update(4, outcome_state, "run_command", {"CommandLine": "first"}),
+            tool_update(4, "ACTIVE", "run_command", {"CommandLine": "duplicate"}),
+            result(),
+        ]
+    )
+
+    assert evidence.commands == [CommandEvent(command="first", exit_code=None)]
+
+
 def test_init_requires_valid_conversation_id() -> None:
     with pytest.raises(AntigravityEvidenceError, match="conversation_id"):
         parse_antigravity_stream_json([init(conversation_id=None), result()])

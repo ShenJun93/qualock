@@ -116,6 +116,7 @@ def _record_step_update(
     evidence: AgentEvidence,
     event: dict[str, Any],
     active_steps: dict[int, tuple[str, str | None]],
+    seen_step_indexes: set[int],
 ) -> None:
     update = _required_object(event, "step_update", context="step_update payload")
     step_type = update.get("step_type")
@@ -141,9 +142,10 @@ def _record_step_update(
     parameters = _required_object(tool_info, "parameters", context="tool parameters")
 
     if state == "ACTIVE":
-        if step_index not in active_steps:
+        if step_index not in seen_step_indexes:
             pending_file_path = _record_tool_invocation(evidence, tool_name, parameters)
             active_steps[step_index] = (tool_name, pending_file_path)
+            seen_step_indexes.add(step_index)
         return
 
     active_step = active_steps.pop(step_index, None)
@@ -191,6 +193,7 @@ def parse_antigravity_stream_json(lines: Iterable[str]) -> AgentEvidence:
     init_conversation_id: str | None = None
     saw_result = False
     active_steps: dict[int, tuple[str, str | None]] = {}
+    seen_step_indexes: set[int] = set()
 
     for line_no, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
@@ -222,7 +225,7 @@ def parse_antigravity_stream_json(lines: Iterable[str]) -> AgentEvidence:
             )
             evidence.thread_id = init_conversation_id
         elif event_type == "step_update":
-            _record_step_update(evidence, event, active_steps)
+            _record_step_update(evidence, event, active_steps, seen_step_indexes)
         elif event_type == "result":
             if saw_result:
                 raise AntigravityEvidenceError("duplicate Antigravity result event")
