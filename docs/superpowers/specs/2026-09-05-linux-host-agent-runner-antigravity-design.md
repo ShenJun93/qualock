@@ -348,3 +348,48 @@ Batch #35 is complete only when:
 - real authenticated Antigravity qualification passes on the pinned Linux CLI/model contract;
 - full tests, Ruff, strict mypy, compileall, diff-check, and independent whole-branch review pass;
 - no push, PR, merge, tag, release, or publication occurs without separate authorization.
+
+## Acceptance spike findings — 2026-09-05
+
+The pre-implementation WSL spike did not satisfy the complete acceptance gate, so this design
+remains implementation-gated and no production plan may be executed yet.
+
+Verified positive results:
+
+- native Linux `agy 1.1.27` is installed as an ELF binary and authenticated headless execution works
+  from the operator's existing Linux HOME;
+- `stream-json` exposes init, tool, result, usage, denial, and error data suitable for a parser;
+- Antigravity Linux terminal sandbox starts successfully when the outer Bubblewrap probe provides a
+  private `/dev` via `--dev /dev`;
+- inside that terminal sandbox, workspace files and normal runtime system files are visible;
+- a designated file under the operator HOME is invisible to the sandboxed shell;
+- direct outbound TCP from the sandboxed shell is blocked;
+- the repository and user Antigravity `settings.json` were restored after probing.
+
+Load-bearing failures/blockers:
+
+- Antigravity file tools were able to read a sibling file outside the workspace while
+  `allowNonWorkspaceAccess=false`; this setting alone is therefore not an accepted QuaLock boundary;
+- changing HOME to a QuaLock-owned temporary directory causes `agy` to require OAuth again;
+- adding GNOME Secret Service and a DBus session collection did not migrate the pre-existing
+  Antigravity session, and fresh-HOME silent authentication remains unavailable;
+- because parent file tools and parent authentication still share the same HOME-visible state, the
+  current spike cannot prove that agent file tools are unable to inspect authentication/runtime
+  material while the parent process remains authenticated.
+
+Before implementation planning can resume, one of these must be proven with runtime evidence:
+
+1. **Keyring path:** a supported Antigravity login stored in Linux Secret Service survives a fresh
+   QuaLock-owned HOME, so parent authentication can be separated from user filesystem state; or
+2. **Parent-isolation path:** an outer Linux isolation boundary plus explicit Antigravity permission
+   rules prevents all agent file tools from reading parent authentication/runtime state while still
+   allowing the parent CLI to authenticate and operate.
+
+The second path must be demonstrated against the exact pinned CLI version. Documentation of
+`read_file(...)` deny precedence is not sufficient by itself; QuaLock requires a real negative probe.
+The bridge used in this session refused that explicit-deny probe before execution, so no claim is
+made about its runtime behavior.
+
+Until one path passes, Batch #35 stays **design-only**. Do not add `LinuxHostQualificationBackend`,
+do not route `antigravity@...`, and do not weaken the boundary with `--dangerously-skip-permissions`,
+a Windows fallback, copied credentials, API-key substitution, or an unsandboxed retry.
