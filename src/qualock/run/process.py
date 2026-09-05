@@ -1,3 +1,5 @@
+import os
+import signal
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -36,6 +38,49 @@ def run_process(
         stdout, stderr = process.communicate(input=input_text, timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         process.kill()
+        stdout, stderr = process.communicate()
+        return ProcessResult(
+            exit_code=None,
+            stdout=stdout,
+            stderr=stderr,
+            elapsed_seconds=time.monotonic() - started,
+            timed_out=True,
+        )
+    return ProcessResult(
+        exit_code=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        elapsed_seconds=time.monotonic() - started,
+        timed_out=False,
+    )
+
+
+def run_process_tree(
+    argv: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    input_text: str | None = None,
+    timeout_seconds: float,
+) -> ProcessResult:
+    started = time.monotonic()
+    process = subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        env=dict(env) if env is not None else None,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(input=input_text, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         stdout, stderr = process.communicate()
         return ProcessResult(
             exit_code=None,
