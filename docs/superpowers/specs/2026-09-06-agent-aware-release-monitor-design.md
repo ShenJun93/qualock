@@ -2,7 +2,7 @@
 
 Date: 2026-09-06
 Batch: #37
-Status: Draft for user review
+Status: Approved
 Base: `main@2c10e077392adcf0c374640a81480ef185d7ffb8`
 
 ## Goal
@@ -130,9 +130,9 @@ previously `codex@<latest>`.
 
 The existing state machine remains unchanged:
 
-- `NO_NEW_RELEASE[
+- `NO_NEW_RELEASE`
 - `ALREADY_QUALIFIED`
-- `NO_DOWNGRADE[
+- `NO_DOWNGRADE`
 - `CHECKED`
 
 The existing `--force` behavior remains unchanged.
@@ -239,7 +239,7 @@ Implementation uses strict TDD.
 
 Add tests proving:
 
- - Codex factory returns a latest-release source backed by Codex behavior.
+- Codex factory returns a latest-release source backed by Codex behavior.
 - Claude factory returns a latest-release source backed by Claude behavior.
 - Antigravity factory fails closed without constructing or probing `AntigravityResolver`.
 - Codex/Claude resolver discovery failures are normalized to `ReleaseDiscoveryError`.
@@ -302,7 +302,7 @@ Known pre-existing `types-PyYAML` mypy debt is not part of this batch.
 
 Likely production changes:
 
- - Create `src/qualock/agents/releases.py`
+- Create `src/qualock/agents/releases.py`
 - Modify `src/qualock/release_monitor/commands.py`
 - Modify `src/qualock/release_monitor/models.py`
 - Modify `src/qualock/cli.py`
@@ -310,8 +310,7 @@ Likely production changes:
 - No scheduler production change except agent-neutral user-facing wording if that wording lives in CLI
 
 Likely tests/docs:
-
- - Create or extend tests for the release source factory
+- Create or extend tests for the release source factory
 - Modify `tests/unit/test_release_monitor_flow.py`
 - Modify relevant CLI monitor tests
 - Modify `tests/unit/test_scheduler_commands.py`
