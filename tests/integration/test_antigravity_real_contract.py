@@ -35,13 +35,13 @@ CERTIFIED_MODEL = "gemini-3.8-flash-medium"
 CERTIFIED_EFFORT = "medium"
 WORKSPACE_MOUNT = "/tmp/qualock-workspace"
 PROBE_SCRIPT_NAME = "qualock_probe.py"
-PROBE_REPORT_NAME = "probe-result.json"
+PROBE_MARKER = "QUALOCK_PROBE_JSON::"
 AGENT_WRITE_NAME = "agent-written.txt"
 TARGET_NAME = "target.txt"
 AGENT_TIMEOUT_SECONDS = 600
 PROCESS_TIMEOUT_SECONDS = 780
 
-pytestmark = pytest.mark.skipif(
+_SKIP_WITHOUT_REAL_AGENT = pytest.mark.skipif(
     os.environ.get("QUALOCK_RUN_ANTIGRAVITY_REAL") != "1",
     reason="set QUALOCK_RUN_ANTIGRAVITY_REAL=1 to run the authenticated Antigravity contract",
 )
@@ -62,7 +62,7 @@ def _unchanged_state_marker(path: Path) -> tuple[int, int, int, int, int]:
     return (info.st_mode, info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _probe_source(*, home_sentinel: Path, tmp_sentinel: Path, report_path: str) -> str:
+def _probe_source(*, home_sentinel: Path, tmp_sentinel: Path, marker: str) -> str:
     """Build the sandboxed shell probe.
 
     The probe records booleans, an exception class name, and its own cwd. It never
@@ -97,9 +97,97 @@ try:
 except Exception as error:
     report["outbound_tcp"] = "blocked"
     report["outbound_tcp_error"] = type(error).__name__
-with open({json.dumps(report_path)}, "w", encoding="utf-8") as handle:
-    json.dump(report, handle)
+print({json.dumps(marker)} + json.dumps(report, separators=(",", ":")))
 """
+
+
+def _run_command_done_outputs(steps: list[dict[str, Any]]) -> list[str]:
+    """tool_info.output for every run_command step that reached DONE, in order.
+
+    Deliberately excludes ACTIVE/ERROR steps: a run_command step stuck in ACTIVE
+    forever (a PID/supervisor hang) must read as "no DONE output", not be silently
+    treated the same as a completed one.
+    """
+    outputs = []
+    for step in steps:
+        if step.get("tool_name") != "run_command" or step.get("state") != "DONE":
+            continue
+        tool_info = step.get("tool_info")
+        if isinstance(tool_info, dict) and isinstance(tool_info.get("output"), str):
+            outputs.append(tool_info["output"])
+    return outputs
+
+
+def _extract_probe(output: str, *, marker: str = PROBE_MARKER) -> dict[str, Any]:
+    """Extract and validate the sanitized probe JSON printed after `marker`.
+
+    Raised failures are distinct from a missing-DONE-output failure so a probe
+    that ran but was cut off or corrupted cannot be confused with run_command
+    never completing at all.
+    """
+    index = output.find(marker)
+    if index == -1:
+        raise AssertionError(f"probe marker {marker!r} not found in run_command output")
+    remainder = output[index + len(marker) :].splitlines()
+    payload = remainder[0] if remainder else ""
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"probe marker payload was not valid JSON: {exc}") from exc
+    if not isinstance(decoded, dict):
+        # AssertionError (not TypeError) so callers can uniformly catch probe
+        # rejection the same way as the missing-marker/malformed-JSON cases above.
+        raise AssertionError("probe marker payload must decode to a JSON object")  # noqa: TRY004
+    return decoded
+
+
+# Synthetic, no-auth coverage for the run_command/tool_info.output probe transport.
+# These exercise the extraction logic the real contract test below relies on, without
+# requiring QUALOCK_RUN_ANTIGRAVITY_REAL or any authenticated `agy` invocation.
+
+
+def _done_run_command_step(output: str) -> dict[str, Any]:
+    return {
+        "tool_name": "run_command",
+        "state": "DONE",
+        "tool_info": {"name": "run_command", "parameters": {}, "output": output},
+    }
+
+
+def test_run_command_done_outputs_returns_output_from_done_steps() -> None:
+    active = {
+        "tool_name": "run_command",
+        "state": "ACTIVE",
+        "tool_info": {"name": "run_command", "parameters": {}},
+    }
+    payload = {"cwd": WORKSPACE_MOUNT}
+    done = _done_run_command_step(PROBE_MARKER + json.dumps(payload))
+    assert _run_command_done_outputs([active, done]) == [done["tool_info"]["output"]]
+
+
+def test_run_command_done_outputs_empty_without_a_done_step() -> None:
+    active = {
+        "tool_name": "run_command",
+        "state": "ACTIVE",
+        "tool_info": {"name": "run_command", "parameters": {}},
+    }
+    assert _run_command_done_outputs([active]) == []
+
+
+def test_extract_probe_parses_marker_json_from_done_output() -> None:
+    payload = {"cwd": WORKSPACE_MOUNT, "home_sentinel_readable": False, "outbound_tcp": "blocked"}
+    output = "noise before\r\n" + PROBE_MARKER + json.dumps(payload, separators=(",", ":")) + "\r\n"
+    assert _extract_probe(output) == payload
+
+
+def test_extract_probe_rejects_output_missing_the_marker() -> None:
+    with pytest.raises(AssertionError, match="marker"):
+        _extract_probe("run_command finished with no marker in sight\r\n")
+
+
+def test_extract_probe_rejects_malformed_json_after_the_marker() -> None:
+    with pytest.raises(AssertionError, match="JSON"):
+        _extract_probe(PROBE_MARKER + "{not valid json")
 
 
 def _contract_prompt(*, view_token: str, home_sentinel: Path) -> str:
@@ -217,6 +305,7 @@ def _capture_cli_contract(binary_path: Path | None) -> None:
     Path(destination).write_text(json.dumps(captured, indent=2), encoding="utf-8")
 
 
+@_SKIP_WITHOUT_REAL_AGENT
 def test_real_antigravity_linux_host_contract(tmp_path: Path) -> None:
     gemini_root = Path.home() / ".gemini"
     auth_app_data = gemini_root / "antigravity-cli"
@@ -244,7 +333,7 @@ def test_real_antigravity_linux_host_contract(tmp_path: Path) -> None:
         _probe_source(
             home_sentinel=home_sentinel,
             tmp_sentinel=tmp_sentinel,
-            report_path=f"{WORKSPACE_MOUNT}/{PROBE_REPORT_NAME}",
+            marker=PROBE_MARKER,
         ),
         encoding="utf-8",
     )
@@ -277,10 +366,10 @@ def test_real_antigravity_linux_host_contract(tmp_path: Path) -> None:
 
         events = _stream_events(state.stdout)
         steps = _tool_steps(events)
-        report_path = workspace / PROBE_REPORT_NAME
-        probe: dict[str, Any] = {}
-        if report_path.is_file():
-            probe = json.loads(report_path.read_text(encoding="utf-8"))
+        run_command_done_outputs = _run_command_done_outputs(steps)
+        probe: dict[str, Any] = (
+            _extract_probe(run_command_done_outputs[-1]) if run_command_done_outputs else {}
+        )
 
         _write_summary(
             {
@@ -336,7 +425,10 @@ def test_real_antigravity_linux_host_contract(tmp_path: Path) -> None:
             step for step in steps
             if step.get("tool_name") == "run_command" and step.get("state") == "ERROR"
         ], "run_command errored; the Antigravity terminal sandbox did not start"
-        assert probe, f"sandboxed probe never produced {PROBE_REPORT_NAME}"
+        assert probe, (
+            "run_command never reached DONE; sandboxed probe result is unavailable "
+            "(possible PID/supervisor hang)"
+        )
         assert probe["cwd"] == WORKSPACE_MOUNT
 
         # 7. HOME sentinel and host /tmp sentinel are both invisible to that shell.
