@@ -195,6 +195,33 @@ def test_baseline_claude_output_uses_claude_code_name(tmp_path: Path, monkeypatc
     assert result.stdout == "Baseline pinned: Claude Code 2.1.260\n"
 
 
+def test_baseline_antigravity_output_uses_antigravity_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "qualock.cli.execute_baseline",
+        lambda root, agent: SimpleNamespace(
+            agent=SimpleNamespace(name="antigravity", version="1.1.27")
+        ),
+    )
+
+    result = runner.invoke(app, ["baseline", "antigravity@1.1.27"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "Baseline pinned: Antigravity 1.1.27\n"
+
+
+def test_check_antigravity_easy_output_uses_antigravity_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qualock.cli.execute_check", lambda root, candidate: sample_result())
+
+    result = runner.invoke(app, ["check", "antigravity@1.1.27"])
+
+    assert result.exit_code == 2
+    assert "Antigravity 0.150.0 -> 0.151.0" in result.stdout
+    assert "Keep using Antigravity 0.150.0" in result.stdout
+    assert "Do not update to Antigravity 0.151.0" in result.stdout
+
+
 def test_check_max_attempts_is_forwarded(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     captured: dict[str, int] = {}

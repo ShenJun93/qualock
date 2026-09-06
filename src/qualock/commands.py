@@ -9,6 +9,8 @@ from typing import Protocol
 from platformdirs import user_cache_dir
 
 from qualock import __version__
+from qualock.agents.antigravity import AntigravityAdapter
+from qualock.agents.antigravity_resolver import AntigravityResolver
 from qualock.agents.base import AgentAdapter, AgentBinary
 from qualock.agents.claude import ClaudeAdapter, select_claude_automation_credential
 from qualock.agents.claude_resolver import ClaudeResolver
@@ -28,6 +30,8 @@ from qualock.qualification.models import AttemptResult, QualificationResult
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
 from qualock.run.docker import DockerRunner
 from qualock.run.executor import QualificationBackend, QualificationExecutor
+from qualock.run.host import LinuxHostRunner
+from qualock.run.host_backend import LinuxHostQualificationBackend
 from qualock.run.schedule import Side
 from qualock.source.git import GitSourceManager
 
@@ -46,10 +50,16 @@ class BaselineUnstableError(RuntimeError):
 
 def parse_agent_spec(spec: str) -> tuple[str, str]:
     if "@" not in spec:
-        raise CommandError("agent spec must look like codex@<version> or claude@<version>")
+        raise CommandError(
+            "agent spec must look like codex@<version>, claude@<version>, "
+            "or antigravity@<version>"
+        )
     name, version = spec.rsplit("@", 1)
-    if name not in {"codex", "claude"} or not version:
-        raise CommandError("supported agents are codex@<version> and claude@<version>")
+    if name not in {"codex", "claude", "antigravity"} or not version:
+        raise CommandError(
+            "supported agents are codex@<version>, claude@<version>, "
+            "and antigravity@<version>"
+        )
     return name, version
 
 
@@ -58,6 +68,8 @@ def agent_display_name(agent_name: str) -> str:
         return "Codex"
     if agent_name == "claude":
         return "Claude Code"
+    if agent_name == "antigravity":
+        return "Antigravity"
     raise CommandError(f"unsupported agent: {agent_name}")
 
 
@@ -72,6 +84,9 @@ def _default_resolver(agent_name: str) -> Resolver:
         return CodexResolver(cache)
     if agent_name == "claude":
         return ClaudeResolver(cache)
+    if agent_name == "antigravity":
+        override = os.environ.get("QUALOCK_ANTIGRAVITY_BIN")
+        return AntigravityResolver(Path(override) if override else None)
     raise CommandError(f"unsupported agent: {agent_name}")
 
 
@@ -79,8 +94,25 @@ def _default_backend(
     root: Path,
     config: QualockConfig,
     agent_name: str,
-) -> DockerQualificationBackend:
+) -> QualificationBackend:
     cache = Path(user_cache_dir("qualock"))
+    if agent_name == "antigravity":
+        return LinuxHostQualificationBackend(
+            source_manager=GitSourceManager(cache),
+            host_runner=LinuxHostRunner(),
+            agent_adapter=AntigravityAdapter(
+                auth_app_data=Path.home() / ".gemini" / "antigravity-cli"
+            ),
+            model=config.model.effective_model,
+            reasoning_effort=config.model.reasoning_effort,
+            work_root=project_dir(root) / "work",
+            integrity_policy=IntegrityPolicy(
+                reject_web_search=config.integrity.reject_web_search,
+                reject_mcp_calls=config.integrity.reject_mcp_calls,
+                reject_protected_path_changes=config.integrity.reject_protected_path_changes,
+            ),
+        )
+
     adapter: AgentAdapter
     if agent_name == "codex":
         auth_home = Path.home() / ".codex"

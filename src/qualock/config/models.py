@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class AgentConfig(BaseModel):
-    name: Literal["codex", "claude"] = "codex"
+    name: Literal["codex", "claude", "antigravity"] = "codex"
 
 
 class ModelConfig(BaseModel):

@@ -26,6 +26,11 @@ def test_config_accepts_claude_agent() -> None:
     assert config.model.effective_model == "sonnet"
 
 
+def test_config_accepts_antigravity_agent() -> None:
+    config = QualockConfig.model_validate({"agent": {"name": "antigravity"}})
+    assert config.agent.name == "antigravity"
+
+
 def test_invalid_config_is_wrapped(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
     path.write_text("schema_version: 2\n", encoding="utf-8")

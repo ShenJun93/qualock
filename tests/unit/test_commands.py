@@ -4,12 +4,15 @@ from pathlib import Path
 import pytest
 import yaml
 
+from qualock.agents.antigravity import AntigravityAdapter
+from qualock.agents.antigravity_resolver import AntigravityResolver
 from qualock.agents.base import AgentBinary
 from qualock.baseline.io import read_baseline_lock, write_baseline_lock
 from qualock.commands import (
     BaselineUnstableError,
     CommandError,
     _default_backend,
+    _default_resolver,
     agent_display_name,
     execute_baseline,
     execute_check,
@@ -18,6 +21,8 @@ from qualock.commands import (
 from qualock.config.io import write_default_config
 from qualock.project import load_project
 from qualock.qualification.models import AttemptResult, Usage, Verdict
+from qualock.run.host import LinuxHostRunner
+from qualock.run.host_backend import LinuxHostQualificationBackend
 from qualock.run.models import PreparedTarget
 from qualock.run.schedule import Side
 
@@ -111,6 +116,58 @@ def test_agent_display_name_is_shared_and_fail_closed() -> None:
 def test_parse_agent_spec_accepts_codex_and_claude() -> None:
     assert parse_agent_spec("codex@0.150.0") == ("codex", "0.150.0")
     assert parse_agent_spec("claude@2.1.260") == ("claude", "2.1.260")
+
+
+def test_parse_agent_spec_accepts_antigravity() -> None:
+    assert parse_agent_spec("antigravity@1.1.27") == ("antigravity", "1.1.27")
+
+
+def test_antigravity_display_name() -> None:
+    assert agent_display_name("antigravity") == "Antigravity"
+
+
+def test_default_resolver_antigravity_uses_path_lookup_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("QUALOCK_ANTIGRAVITY_BIN", raising=False)
+
+    resolver = _default_resolver("antigravity")
+
+    assert isinstance(resolver, AntigravityResolver)
+    assert resolver.binary_path is None
+
+
+def test_default_resolver_antigravity_uses_explicit_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    override = tmp_path / "agy"
+    monkeypatch.setenv("QUALOCK_ANTIGRAVITY_BIN", str(override))
+
+    resolver = _default_resolver("antigravity")
+
+    assert isinstance(resolver, AntigravityResolver)
+    assert resolver.binary_path == override
+
+
+def test_default_backend_antigravity_uses_linux_host_runner(tmp_path: Path) -> None:
+    setup_project(tmp_path, agent_name="antigravity")
+    config, _ = load_project(tmp_path)
+
+    backend = _default_backend(tmp_path, config, "antigravity")
+
+    assert isinstance(backend, LinuxHostQualificationBackend)
+    assert isinstance(backend.host_runner, LinuxHostRunner)
+    assert isinstance(backend.agent_adapter, AntigravityAdapter)
+    assert backend.agent_adapter.auth_app_data == Path.home() / ".gemini" / "antigravity-cli"
+
+
+def test_default_backend_codex_and_claude_still_use_docker(tmp_path: Path) -> None:
+    from qualock.run.backend import DockerQualificationBackend
+
+    setup_project(tmp_path, agent_name="codex")
+    config, _ = load_project(tmp_path)
+    backend = _default_backend(tmp_path, config, "codex")
+    assert isinstance(backend, DockerQualificationBackend)
 
 
 def test_default_claude_backend_requires_explicit_automation_credential(
