@@ -93,6 +93,59 @@ def test_github_setup_prints_paths_secret_name_and_status_context(
     ) in result.stdout
 
 
+def test_github_setup_prints_claude_secret_guidance_without_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(cli.app, ["github", "setup"])
+    assert result.exit_code == 0
+    for expected in (
+        "QUALOCK_CODEX_AUTH_B64",
+        "QUALOCK_ANTHROPIC_AUTH_TOKEN",
+        "QUALOCK_ANTHROPIC_API_KEY",
+        "QUALOCK_CLAUDE_CODE_OAUTH_TOKEN",
+        "claude setup-token",
+        "qualock/pr",
+    ):
+        assert expected in result.stdout
+    assert (
+        "python -c \"import base64,pathlib; "
+        "p=pathlib.Path.home()/'.codex/auth.json'; "
+        "print(base64.b64encode(p.read_bytes()).decode())\""
+    ) in result.stdout
+
+
+def test_github_setup_never_reads_or_leaks_claude_credential_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    sentinels = {
+        "ANTHROPIC_AUTH_TOKEN": "sentinel-auth-token-value",
+        "ANTHROPIC_API_KEY": "sentinel-api-key-value",
+        "CLAUDE_CODE_OAUTH_TOKEN": "sentinel-oauth-token-value",
+    }
+    for name, value in sentinels.items():
+        monkeypatch.setenv(name, value)
+
+    required_env_calls: list[str] = []
+    original_required_env = cli._required_env
+
+    def _spy_required_env(name: str) -> str:
+        required_env_calls.append(name)
+        return original_required_env(name)
+
+    monkeypatch.setattr(cli, "_required_env", _spy_required_env)
+
+    result = runner.invoke(cli.app, ["github", "setup"])
+
+    assert result.exit_code == 0
+    for value in sentinels.values():
+        assert value not in result.stdout
+        assert value not in result.stderr
+    for name in sentinels:
+        assert name not in required_env_calls
+
+
 def test_github_setup_conflict_exits_3(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
