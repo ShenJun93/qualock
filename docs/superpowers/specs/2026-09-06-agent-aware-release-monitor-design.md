@@ -212,11 +212,13 @@ No error path may silently fall back from Claude or Antigravity to Codex.
 
 ## State and compatibility
 
-`MonitorState` remains unchanged. It stores baseline SHA, candidate version, verdict, qualification id, and completion time.
+`MonitorState` keeps schema version `1` and the same persisted field set. Its existing `agent` field expands from `Literal["codex"]` to `Literal["codex", "claude"]`, retaining the default value `"codex"` for backward compatibility with existing state that omits the field.
 
-No new `agent_name` field is required in persisted monitor state because `baseline_sha256` identifies the complete trusted baseline lock, which already contains the agent identity. A baseline-agent change therefore changes the baseline digest and invalidates old monitor state matching.
+When persisting a terminal monitor result, `execute_monitor()` writes `agent=context.agent_name`. When matching prior state, it requires both `state.baseline_sha256 == context.baseline_sha256` and `state.agent == context.agent_name`.
 
-Existing Codex monitor state remains readable.
+This is a value-domain expansion, not a persisted schema migration: file paths, field names, schema version, state-store format, and project-key semantics remain unchanged. Existing Codex monitor state remains readable, while new Claude state records its agent identity explicitly.
+
+Antigravity cannot produce monitor state because its preflight fails before release discovery, state lookup, or qualification.
 
 `ScheduleRegistration` and scheduler state remain unchanged.
 
@@ -262,9 +264,12 @@ Prove:
 - Claude baseline + newer Claude release calls `check_executor(root, "claude@<latest>")`.
 - Claude no-new-release does not call qualification.
 - Claude already-qualified/no-downgrade/force paths preserve existing state semantics.
+- Claude terminal results persist `agent == "claude"` and are reusable only for Claude.
+- Existing Codex state remains readable, including schema-v1 payloads that rely on the default `agent == "codex"`.
+- State reuse requires both matching baseline SHA and matching agent identity.
 - Codex candidate spec remains `codex@<latest>`.
 - Antigravity cannot be made to run by injecting a fake release source.
-- persisted state schema is unchanged.
+- Persisted state field set and schema version remain unchanged.
 
 ### CLI tests
 
