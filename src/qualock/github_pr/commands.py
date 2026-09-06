@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 from platformdirs import user_cache_dir
 from pydantic import ValidationError
 
@@ -12,7 +12,9 @@ import qualock
 from qualock.agents.resolver import CodexResolver
 from qualock.baseline.io import BaselineStaleError, assert_suite_fresh, read_baseline_lock
 from qualock.baseline.models import BaselineLock
+from qualock.canary.loader import CanaryLoadError
 from qualock.commands import Resolver, execute_check
+from qualock.config.io import ConfigError
 from qualock.github_pr.models import (
     PrAgent,
     PrClassification,
@@ -33,6 +35,13 @@ _EXACT_STABLE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _BASELINE_LOCK_PATH = ".qualock/baseline.lock"
 _MAX_PROPOSED_LOCK_BYTES = 131_072
+_TRUSTED_STATE_LOAD_ERRORS = (
+    ConfigError,
+    CanaryLoadError,
+    OSError,
+    ValidationError,
+    InvalidVersion,
+)
 
 
 class PrValidationError(Exception):
@@ -51,10 +60,15 @@ class CandidateRequest:
 
 
 def _trusted_pr_agent(root: Path) -> PrAgent:
-    config, canaries = load_project(root)
-    trusted = read_baseline_lock(project_dir(root) / "baseline.lock")
-    suite_sha = suite_fingerprint(canaries)
-    config_sha = config_fingerprint(config)
+    try:
+        config, canaries = load_project(root)
+        trusted = read_baseline_lock(project_dir(root) / "baseline.lock")
+        suite_sha = suite_fingerprint(canaries)
+        config_sha = config_fingerprint(config)
+        Version(trusted.agent.version)
+    except _TRUSTED_STATE_LOAD_ERRORS as error:
+        raise BaselineStaleError("trusted project or baseline state is unusable") from error
+
     assert_suite_fresh(trusted, suite_sha, config_sha)
 
     if config.agent.name != trusted.agent.name:
@@ -200,6 +214,18 @@ def prepare_pr(
 
     try:
         validate_proposed_lock(root, raw)
+    except BaselineStaleError:
+        return PreparePrOutcome(
+            context,
+            None,
+            incomplete_report(context, reason_codes=(PrReasonCode.TRUSTED_BASELINE_STALE,)),
+        )
+    except UnsupportedPrAgentError:
+        return PreparePrOutcome(
+            context,
+            None,
+            incomplete_report(context, reason_codes=(PrReasonCode.UNSUPPORTED_AGENT,)),
+        )
     except PrValidationError:
         return PreparePrOutcome(
             context,
