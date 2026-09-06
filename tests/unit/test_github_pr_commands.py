@@ -1,20 +1,24 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 import qualock
 from qualock.agents.base import AgentBinary
-from qualock.baseline.io import read_baseline_lock, write_baseline_lock
+from qualock.baseline.io import BaselineStaleError, read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
-from qualock.config.io import write_default_config
+from qualock.config.models import AgentConfig, QualockConfig
 from qualock.github_pr import commands
 from qualock.github_pr.commands import (
     CandidateRequest,
     PrValidationError,
+    UnsupportedPrAgentError,
+    _trusted_pr_agent,
     prepare_pr,
     qualify_prepared_pr,
     validate_proposed_lock,
@@ -50,11 +54,15 @@ class RecordingResolver:
         )
 
 
-def _write_trusted_project(root: Path) -> None:
+def _write_trusted_project(root: Path, *, agent: str = "codex") -> None:
     project = root / ".qualock"
     (project / "canaries").mkdir(parents=True)
     (project / "results").mkdir()
-    write_default_config(project / "config.yaml")
+    config = QualockConfig(agent=AgentConfig(name=agent))
+    (project / "config.yaml").write_text(
+        yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False),
+        encoding="utf-8",
+    )
     grader = project / "canaries/grader.patch"
     grader.write_text("patch", encoding="utf-8")
     (project / "canaries/sample.yaml").write_text(
@@ -83,42 +91,64 @@ critical: true
     )
 
 
+def _build_trusted_lock(root: Path, *, agent: str, version: str, sha: str = "b" * 64) -> BaselineLock:
+    config, canaries = load_project(root)
+    return BaselineLock(
+        schema_version=1,
+        created_at="2026-09-01T00:00:00+00:00",
+        agent=AgentPin(name=agent, version=version, binary_sha256=sha),
+        model=ModelPin(
+            id=config.model.id,
+            snapshot=config.model.snapshot,
+            reasoning_effort=config.model.reasoning_effort,
+        ),
+        qualock_version=qualock.__version__,
+        suite_sha256=suite_fingerprint(canaries),
+        config_sha256=config_fingerprint(config),
+        canaries={"sample": CanaryStability(valid_runs=3, successes=3)},
+    )
+
+
+def _setup_trusted_project(
+    root: Path,
+    *,
+    config_agent: str,
+    baseline_agent: str,
+    trusted_version: str = _TRUSTED_VERSION,
+) -> None:
+    _write_trusted_project(root, agent=config_agent)
+    lock = _build_trusted_lock(root, agent=baseline_agent, version=trusted_version)
+    write_baseline_lock(project_dir(root) / "baseline.lock", lock)
+
+
 @dataclass
 class ProjectFixture:
     root: Path
+    agent: str = "codex"
+    trusted_version: str = _TRUSTED_VERSION
+    candidate_version: str = _DEFAULT_CANDIDATE_VERSION
     resolver: RecordingResolver = field(init=False)
 
     def __post_init__(self) -> None:
         self.resolver = RecordingResolver()
-        _write_trusted_project(self.root)
-        config, canaries = load_project(self.root)
-        trusted = BaselineLock(
-            schema_version=1,
-            created_at="2026-09-01T00:00:00+00:00",
-            agent=AgentPin(name="codex", version=_TRUSTED_VERSION, binary_sha256="trusted-sha"),
-            model=ModelPin(
-                id=config.model.id,
-                snapshot=config.model.snapshot,
-                reasoning_effort=config.model.reasoning_effort,
-            ),
-            qualock_version=qualock.__version__,
-            suite_sha256=suite_fingerprint(canaries),
-            config_sha256=config_fingerprint(config),
-            canaries={"sample": CanaryStability(valid_runs=3, successes=3)},
+        _setup_trusted_project(
+            self.root,
+            config_agent=self.agent,
+            baseline_agent=self.agent,
+            trusted_version=self.trusted_version,
         )
-        write_baseline_lock(project_dir(self.root) / "baseline.lock", trusted)
 
     def proposed_lock_json(self, **overrides: Any) -> bytes:
         config, canaries = load_project(self.root)
-        candidate_version = overrides.get("candidate_version", _DEFAULT_CANDIDATE_VERSION)
+        candidate_version = overrides.get("candidate_version", self.candidate_version)
         default_canaries = {"sample": CanaryStability(valid_runs=3, successes=3)}
         lock = BaselineLock(
             schema_version=1,
             created_at=overrides.get("created_at", "2026-09-02T00:00:00+00:00"),
             agent=AgentPin(
-                name=overrides.get("agent_name", "codex"),
+                name=overrides.get("agent_name", self.agent),
                 version=candidate_version,
-                binary_sha256=overrides.get("binary_sha256", f"sha-{candidate_version}"),
+                binary_sha256=overrides.get("binary_sha256", "a" * 64),
             ),
             model=ModelPin(
                 id=overrides.get("model_id", config.model.id),
@@ -140,7 +170,71 @@ def project_fixture(tmp_path: Path) -> ProjectFixture:
     return ProjectFixture(root=tmp_path)
 
 
+@pytest.fixture
+def claude_project_fixture(tmp_path: Path) -> ProjectFixture:
+    return ProjectFixture(
+        root=tmp_path, agent="claude", trusted_version="2.1.200", candidate_version="2.1.263"
+    )
+
+
+# --- trusted-agent preflight --------------------------------------------------
+
+
+def test_trusted_pr_agent_returns_codex(tmp_path: Path) -> None:
+    _setup_trusted_project(tmp_path, config_agent="codex", baseline_agent="codex")
+    assert _trusted_pr_agent(tmp_path) == "codex"
+
+
+def test_trusted_pr_agent_returns_claude(tmp_path: Path) -> None:
+    _setup_trusted_project(tmp_path, config_agent="claude", baseline_agent="claude")
+    assert _trusted_pr_agent(tmp_path) == "claude"
+
+
+def test_trusted_pr_agent_rejects_config_baseline_mismatch(tmp_path: Path) -> None:
+    _setup_trusted_project(tmp_path, config_agent="claude", baseline_agent="codex")
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
+def test_trusted_pr_agent_rejects_stale_fingerprint(tmp_path: Path) -> None:
+    _setup_trusted_project(tmp_path, config_agent="codex", baseline_agent="codex")
+    trusted = read_baseline_lock(project_dir(tmp_path) / "baseline.lock")
+    stale = trusted.model_copy(update={"suite_sha256": "stale-suite-sha"})
+    write_baseline_lock(project_dir(tmp_path) / "baseline.lock", stale)
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
+def test_trusted_pr_agent_rejects_antigravity(tmp_path: Path) -> None:
+    _setup_trusted_project(tmp_path, config_agent="antigravity", baseline_agent="antigravity")
+    with pytest.raises(UnsupportedPrAgentError):
+        _trusted_pr_agent(tmp_path)
+
+
 # --- proposed-lock validation -----------------------------------------------
+
+
+def test_validate_proposed_lock_has_no_resolver_parameter() -> None:
+    assert "resolver" not in inspect.signature(validate_proposed_lock).parameters
+
+
+def test_validate_proposed_lock_rejects_stale_before_parsing_proposed(tmp_path: Path) -> None:
+    _setup_trusted_project(tmp_path, config_agent="codex", baseline_agent="codex")
+    trusted = read_baseline_lock(project_dir(tmp_path) / "baseline.lock")
+    stale = trusted.model_copy(update={"suite_sha256": "stale-suite-sha"})
+    write_baseline_lock(project_dir(tmp_path) / "baseline.lock", stale)
+
+    with pytest.raises(BaselineStaleError):
+        validate_proposed_lock(tmp_path, b"not-json-at-all")
+
+
+def test_validate_proposed_lock_rejects_antigravity_before_parsing_proposed(
+    tmp_path: Path,
+) -> None:
+    _setup_trusted_project(tmp_path, config_agent="antigravity", baseline_agent="antigravity")
+
+    with pytest.raises(UnsupportedPrAgentError):
+        validate_proposed_lock(tmp_path, b"not-json-at-all")
 
 
 @pytest.mark.parametrize(
@@ -152,22 +246,25 @@ def test_non_stable_or_not_newer_candidate_is_rejected(
 ) -> None:
     raw = project_fixture.proposed_lock_json(candidate_version=candidate_version)
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == []
+        validate_proposed_lock(project_fixture.root, raw)
+
+
+def test_cross_agent_candidate_is_rejected(project_fixture: ProjectFixture) -> None:
+    raw = project_fixture.proposed_lock_json(agent_name="claude")
+    with pytest.raises(PrValidationError):
+        validate_proposed_lock(project_fixture.root, raw)
 
 
 def test_wrong_model_pin_is_rejected(project_fixture: ProjectFixture) -> None:
     raw = project_fixture.proposed_lock_json(model_id="a-different-model")
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == []
+        validate_proposed_lock(project_fixture.root, raw)
 
 
 def test_missing_canary_id_is_rejected(project_fixture: ProjectFixture) -> None:
     raw = project_fixture.proposed_lock_json(canaries={})
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == []
+        validate_proposed_lock(project_fixture.root, raw)
 
 
 def test_extra_canary_id_is_rejected(project_fixture: ProjectFixture) -> None:
@@ -178,8 +275,7 @@ def test_extra_canary_id_is_rejected(project_fixture: ProjectFixture) -> None:
         }
     )
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == []
+        validate_proposed_lock(project_fixture.root, raw)
 
 
 def test_successes_exceeds_valid_runs_is_rejected(project_fixture: ProjectFixture) -> None:
@@ -187,8 +283,7 @@ def test_successes_exceeds_valid_runs_is_rejected(project_fixture: ProjectFixtur
         canaries={"sample": CanaryStability(valid_runs=2, successes=3)}
     )
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == []
+        validate_proposed_lock(project_fixture.root, raw)
 
 
 def test_counts_above_configured_repetitions_is_rejected(project_fixture: ProjectFixture) -> None:
@@ -196,8 +291,7 @@ def test_counts_above_configured_repetitions_is_rejected(project_fixture: Projec
         canaries={"sample": CanaryStability(valid_runs=4, successes=4)}
     )
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == []
+        validate_proposed_lock(project_fixture.root, raw)
 
 
 def test_unstable_critical_canary_is_rejected(project_fixture: ProjectFixture) -> None:
@@ -205,33 +299,63 @@ def test_unstable_critical_canary_is_rejected(project_fixture: ProjectFixture) -
         canaries={"sample": CanaryStability(valid_runs=3, successes=2)}
     )
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == []
+        validate_proposed_lock(project_fixture.root, raw)
 
 
 def test_unparseable_created_at_is_rejected(project_fixture: ProjectFixture) -> None:
     raw = project_fixture.proposed_lock_json(created_at="not-a-timestamp")
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == []
+        validate_proposed_lock(project_fixture.root, raw)
 
 
-def test_candidate_binary_sha_mismatch_is_rejected(project_fixture: ProjectFixture) -> None:
-    raw = project_fixture.proposed_lock_json(binary_sha256="wrong-sha")
+@pytest.mark.parametrize(
+    "binary_sha256",
+    ["A" * 64, "g" * 64, "a" * 63, "a" * 65, "not-a-sha-at-all", "sha-0.152.0"],
+)
+def test_invalid_binary_sha_format_is_rejected(
+    project_fixture: ProjectFixture, binary_sha256: str
+) -> None:
+    raw = project_fixture.proposed_lock_json(binary_sha256=binary_sha256)
     with pytest.raises(PrValidationError):
-        validate_proposed_lock(project_fixture.root, raw, resolver=project_fixture.resolver)
-    assert project_fixture.resolver.resolve_calls == [_DEFAULT_CANDIDATE_VERSION]
+        validate_proposed_lock(project_fixture.root, raw)
 
 
 def test_valid_proposed_lock_is_accepted(project_fixture: ProjectFixture) -> None:
     raw = project_fixture.proposed_lock_json()
-    candidate = validate_proposed_lock(
-        project_fixture.root, raw, resolver=project_fixture.resolver
-    )
+    candidate = validate_proposed_lock(project_fixture.root, raw)
     assert candidate == CandidateRequest(
-        version=_DEFAULT_CANDIDATE_VERSION, binary_sha256=f"sha-{_DEFAULT_CANDIDATE_VERSION}"
+        agent_name="codex",
+        version=_DEFAULT_CANDIDATE_VERSION,
+        binary_sha256="a" * 64,
     )
-    assert project_fixture.resolver.resolve_calls == [_DEFAULT_CANDIDATE_VERSION]
+
+
+def test_valid_claude_proposed_lock_is_accepted(tmp_path: Path) -> None:
+    _setup_trusted_project(
+        tmp_path, config_agent="claude", baseline_agent="claude", trusted_version="2.1.200"
+    )
+    config, canaries = load_project(tmp_path)
+    raw = BaselineLock(
+        schema_version=1,
+        created_at="2026-09-02T00:00:00+00:00",
+        agent=AgentPin(name="claude", version="2.1.263", binary_sha256="a" * 64),
+        model=ModelPin(
+            id=config.model.id,
+            snapshot=config.model.snapshot,
+            reasoning_effort=config.model.reasoning_effort,
+        ),
+        qualock_version=qualock.__version__,
+        suite_sha256=suite_fingerprint(canaries),
+        config_sha256=config_fingerprint(config),
+        canaries={"sample": CanaryStability(valid_runs=3, successes=3)},
+    ).model_dump_json().encode("utf-8")
+
+    candidate = validate_proposed_lock(tmp_path, raw)
+    assert candidate == CandidateRequest(
+        agent_name="claude",
+        version="2.1.263",
+        binary_sha256="a" * 64,
+    )
 
 
 # --- producer orchestration --------------------------------------------------
@@ -316,6 +440,7 @@ def test_not_applicable_prepare_never_reads_baseline(
     )
 
     assert outcome.context == context
+    assert outcome.context.agent is None
     assert outcome.proposed_lock is None
     assert outcome.terminal_report is not None
     assert outcome.terminal_report.verdict is PrReportVerdict.NOT_APPLICABLE
@@ -338,6 +463,7 @@ def test_invalid_scope_prepare_never_reads_baseline(
     )
 
     assert outcome.context == context
+    assert outcome.context.agent is None
     assert outcome.proposed_lock is None
     assert outcome.terminal_report is not None
     assert outcome.terminal_report.verdict is PrReportVerdict.INCOMPLETE
@@ -345,12 +471,56 @@ def test_invalid_scope_prepare_never_reads_baseline(
     assert source.read_calls == []
 
 
-def test_upgrade_prepare_returns_proposed_lock_bytes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_codex_upgrade_prepare_returns_agent_and_proposed_bytes(
+    monkeypatch: pytest.MonkeyPatch, project_fixture: ProjectFixture
 ) -> None:
     context = _context(PrClassification.UPGRADE)
     monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
-    source = FakeSource(read_result=b"proposed-lock-bytes")
+    raw = project_fixture.proposed_lock_json()
+    source = FakeSource(read_result=raw)
+
+    outcome = prepare_pr(
+        project_fixture.root,
+        project_fixture.root / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent == "codex"
+    assert outcome.proposed_lock == raw
+    assert outcome.terminal_report is None
+    assert source.read_calls == [("owner/repo", ".qualock/baseline.lock", "b" * 40, 131_072)]
+
+
+def test_claude_upgrade_prepare_returns_agent_and_proposed_bytes(
+    monkeypatch: pytest.MonkeyPatch, claude_project_fixture: ProjectFixture
+) -> None:
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    raw = claude_project_fixture.proposed_lock_json()
+    source = FakeSource(read_result=raw)
+
+    outcome = prepare_pr(
+        claude_project_fixture.root,
+        claude_project_fixture.root / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent == "claude"
+    assert outcome.proposed_lock == raw
+    assert outcome.terminal_report is None
+
+
+def test_config_baseline_mismatch_prepare_is_stale_before_proposed_head_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _setup_trusted_project(tmp_path, config_agent="claude", baseline_agent="codex")
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    source = FakeSource()
 
     outcome = prepare_pr(
         tmp_path,
@@ -360,34 +530,112 @@ def test_upgrade_prepare_returns_proposed_lock_bytes(
         expected_repository="owner/repo",
     )
 
-    assert outcome.context == context
-    assert outcome.proposed_lock == b"proposed-lock-bytes"
-    assert outcome.terminal_report is None
-    assert source.read_calls == [
-        ("owner/repo", ".qualock/baseline.lock", "b" * 40, 131_072)
-    ]
+    assert outcome.context.agent is None
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert outcome.terminal_report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.TRUSTED_BASELINE_STALE in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent is None
+    assert source.read_calls == []
+
+
+def test_stale_fingerprint_prepare_is_stale_before_proposed_head_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _setup_trusted_project(tmp_path, config_agent="codex", baseline_agent="codex")
+    trusted = read_baseline_lock(project_dir(tmp_path) / "baseline.lock")
+    stale = trusted.model_copy(update={"suite_sha256": "stale-suite-sha"})
+    write_baseline_lock(project_dir(tmp_path) / "baseline.lock", stale)
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    source = FakeSource()
+
+    outcome = prepare_pr(
+        tmp_path,
+        tmp_path / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent is None
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert PrReasonCode.TRUSTED_BASELINE_STALE in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent is None
+    assert source.read_calls == []
+
+
+def test_antigravity_prepare_is_unsupported_before_proposed_head_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _setup_trusted_project(tmp_path, config_agent="antigravity", baseline_agent="antigravity")
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    source = FakeSource()
+
+    outcome = prepare_pr(
+        tmp_path,
+        tmp_path / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent is None
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert outcome.terminal_report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.UNSUPPORTED_AGENT in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent is None
+    assert source.read_calls == []
+
+
+def test_invalid_proposed_lock_prepare_preserves_established_agent(
+    monkeypatch: pytest.MonkeyPatch, project_fixture: ProjectFixture
+) -> None:
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    raw = project_fixture.proposed_lock_json(agent_name="claude")
+    source = FakeSource(read_result=raw)
+
+    outcome = prepare_pr(
+        project_fixture.root,
+        project_fixture.root / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent == "codex"
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert outcome.terminal_report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent == "codex"
 
 
 def test_upgrade_prepare_fixed_file_read_failure_is_incomplete(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, project_fixture: ProjectFixture
 ) -> None:
     context = _context(PrClassification.UPGRADE)
     monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
     source = FakeSource(read_error=GitHubSourceError("missing at fixed ref"))
 
     outcome = prepare_pr(
-        tmp_path,
-        tmp_path / "event.json",
+        project_fixture.root,
+        project_fixture.root / "event.json",
         source=source,
         producer_run_id=1,
         expected_repository="owner/repo",
     )
 
-    assert outcome.context == context
+    assert outcome.context.agent == "codex"
     assert outcome.proposed_lock is None
     assert outcome.terminal_report is not None
     assert outcome.terminal_report.verdict is PrReportVerdict.INCOMPLETE
     assert PrReasonCode.INVALID_PROPOSED_LOCK in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent == "codex"
 
 
 def test_qualify_calls_check_executor_exactly_once_with_trusted_root_and_candidate(

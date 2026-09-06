@@ -14,6 +14,7 @@ from qualock.baseline.io import BaselineStaleError, assert_suite_fresh, read_bas
 from qualock.baseline.models import BaselineLock
 from qualock.commands import Resolver, execute_check
 from qualock.github_pr.models import (
+    PrAgent,
     PrClassification,
     PrReasonCode,
     PullRequestContext,
@@ -29,6 +30,7 @@ from qualock.project import config_fingerprint, load_project, project_dir, suite
 from qualock.qualification.models import QualificationResult
 
 _EXACT_STABLE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _BASELINE_LOCK_PATH = ".qualock/baseline.lock"
 _MAX_PROPOSED_LOCK_BYTES = 131_072
 
@@ -37,18 +39,38 @@ class PrValidationError(Exception):
     """Raised when a proposed baseline lock cannot be trusted for qualification."""
 
 
+class UnsupportedPrAgentError(ValueError):
+    """Raised when the trusted base project selects an agent unsupported for PR qualification."""
+
+
 @dataclass(frozen=True)
 class CandidateRequest:
+    agent_name: PrAgent
     version: str
     binary_sha256: str
 
 
-def validate_proposed_lock(
-    root: Path,
-    raw: bytes,
-    *,
-    resolver: Resolver,
-) -> CandidateRequest:
+def _trusted_pr_agent(root: Path) -> PrAgent:
+    config, canaries = load_project(root)
+    trusted = read_baseline_lock(project_dir(root) / "baseline.lock")
+    suite_sha = suite_fingerprint(canaries)
+    config_sha = config_fingerprint(config)
+    assert_suite_fresh(trusted, suite_sha, config_sha)
+
+    if config.agent.name != trusted.agent.name:
+        raise BaselineStaleError("trusted config and baseline agent identity do not match")
+
+    agent = trusted.agent.name
+    if agent == "codex":
+        return "codex"
+    if agent == "claude":
+        return "claude"
+    raise UnsupportedPrAgentError(f"unsupported trusted agent: {agent}")
+
+
+def validate_proposed_lock(root: Path, raw: bytes) -> CandidateRequest:
+    trusted_agent = _trusted_pr_agent(root)
+
     try:
         proposed = BaselineLock.model_validate_json(raw)
     except ValidationError as error:
@@ -58,14 +80,9 @@ def validate_proposed_lock(
     trusted = read_baseline_lock(project_dir(root) / "baseline.lock")
     suite_sha = suite_fingerprint(canaries)
     config_sha = config_fingerprint(config)
-    assert_suite_fresh(trusted, suite_sha, config_sha)
 
-    if (
-        proposed.agent.name != "codex"
-        or trusted.agent.name != "codex"
-        or config.agent.name != "codex"
-    ):
-        raise PrValidationError("agent must be codex")
+    if proposed.agent.name != trusted_agent:
+        raise PrValidationError("proposed agent does not match the trusted agent")
 
     if not _EXACT_STABLE_VERSION_RE.match(proposed.agent.version):
         raise PrValidationError("candidate version must be an exact stable release")
@@ -106,11 +123,14 @@ def validate_proposed_lock(
     except ValueError as error:
         raise PrValidationError("proposed created_at is not a valid timestamp") from error
 
-    candidate_binary = resolver.resolve(proposed.agent.version)
-    if candidate_binary.sha256 != proposed.agent.binary_sha256:
-        raise PrValidationError("resolved candidate binary does not match proposed lock")
+    if not _SHA256_RE.fullmatch(proposed.agent.binary_sha256):
+        raise PrValidationError("candidate binary sha256 must be exactly lowercase 64-hex")
 
-    return CandidateRequest(version=proposed.agent.version, binary_sha256=candidate_binary.sha256)
+    return CandidateRequest(
+        agent_name=trusted_agent,
+        version=proposed.agent.version,
+        binary_sha256=proposed.agent.binary_sha256,
+    )
 
 
 def _default_resolver() -> CodexResolver:
@@ -146,6 +166,24 @@ def prepare_pr(
             None,
             incomplete_report(context, reason_codes=(PrReasonCode.INVALID_SCOPE,)),
         )
+
+    try:
+        agent = _trusted_pr_agent(root)
+    except BaselineStaleError:
+        return PreparePrOutcome(
+            context,
+            None,
+            incomplete_report(context, reason_codes=(PrReasonCode.TRUSTED_BASELINE_STALE,)),
+        )
+    except UnsupportedPrAgentError:
+        return PreparePrOutcome(
+            context,
+            None,
+            incomplete_report(context, reason_codes=(PrReasonCode.UNSUPPORTED_AGENT,)),
+        )
+
+    context = context.model_copy(update={"agent": agent})
+
     try:
         raw = source.read_file_at_ref(
             context.repository_full_name,
@@ -159,6 +197,16 @@ def prepare_pr(
             None,
             incomplete_report(context, reason_codes=(PrReasonCode.INVALID_PROPOSED_LOCK,)),
         )
+
+    try:
+        validate_proposed_lock(root, raw)
+    except PrValidationError:
+        return PreparePrOutcome(
+            context,
+            None,
+            incomplete_report(context, reason_codes=(PrReasonCode.INVALID_PROPOSED_LOCK,)),
+        )
+
     return PreparePrOutcome(context, raw, None)
 
 
@@ -189,10 +237,12 @@ def qualify_prepared_pr(
         )
     resolver = resolver or _default_resolver()
     try:
-        candidate = validate_proposed_lock(root, proposed_lock, resolver=resolver)
+        candidate = validate_proposed_lock(root, proposed_lock)
         result = check_executor(root, f"codex@{candidate.version}", resolver=resolver)
     except BaselineStaleError:
         return incomplete_report(context, reason_codes=(PrReasonCode.TRUSTED_BASELINE_STALE,))
+    except UnsupportedPrAgentError:
+        return incomplete_report(context, reason_codes=(PrReasonCode.UNSUPPORTED_AGENT,))
     except PrValidationError:
         return incomplete_report(context, reason_codes=(PrReasonCode.INVALID_PROPOSED_LOCK,))
     except Exception:  # noqa: BLE001 - producer boundary bounds any qualification/runtime failure
