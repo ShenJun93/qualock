@@ -26,7 +26,7 @@ from qualock.qualification.models import (
 )
 
 
-def valid_context() -> PullRequestContext:
+def valid_context(*, agent: str | None = None) -> PullRequestContext:
     return PullRequestContext(
         repository_id=123,
         repository_full_name="owner/repo",
@@ -37,6 +37,7 @@ def valid_context() -> PullRequestContext:
         producer_run_id=999,
         changed_paths=(".qualock/baseline.lock",),
         classification=PrClassification.UPGRADE,
+        agent=agent,
     )
 
 
@@ -119,6 +120,24 @@ def test_report_from_qualification_dedupes_reason_codes_in_first_seen_order() ->
     )
     report = report_from_qualification(context, result)
     assert report.reason_codes == (PrReasonCode.CRITICAL_REGRESSION,)
+
+
+@pytest.mark.parametrize("agent", ["codex", "claude", None])
+def test_report_from_qualification_copies_context_agent(agent: str | None) -> None:
+    report = report_from_qualification(valid_context(agent=agent), leaky_result())
+    assert report.agent == agent
+
+
+@pytest.mark.parametrize("agent", ["codex", "claude", None])
+def test_not_applicable_report_copies_context_agent(agent: str | None) -> None:
+    report = not_applicable_report(valid_context(agent=agent))
+    assert report.agent == agent
+
+
+@pytest.mark.parametrize("agent", ["codex", "claude", None])
+def test_incomplete_report_copies_context_agent(agent: str | None) -> None:
+    report = incomplete_report(valid_context(agent=agent))
+    assert report.agent == agent
 
 
 def test_not_applicable_report_has_no_canaries_or_versions() -> None:

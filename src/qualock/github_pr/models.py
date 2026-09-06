@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from qualock.qualification.models import Verdict
 
+PrAgent = Literal["codex", "claude"]
+
 
 class PrClassification(str, Enum):
     NOT_APPLICABLE = "not_applicable"
@@ -31,6 +33,7 @@ class PrReasonCode(str, Enum):
     UNSTABLE_BASELINE = "unstable_baseline"
     QUALITY_REGRESSION = "quality_regression"
     CRITICAL_REGRESSION = "critical_regression"
+    UNSUPPORTED_AGENT = "unsupported_agent"
 
 
 _SHA_PATTERN = r"^[0-9a-f]{40}$"
@@ -52,7 +55,7 @@ class PrCanarySummary(BaseModel):
 
 class PullRequestContext(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     repository_id: int = Field(gt=0)
     repository_full_name: str = Field(pattern=_REPOSITORY_PATTERN, max_length=256)
     pr_number: int = Field(gt=0)
@@ -62,11 +65,12 @@ class PullRequestContext(BaseModel):
     producer_run_id: int = Field(gt=0)
     changed_paths: Annotated[tuple[_ChangedPath, ...], Field(max_length=_MAX_CHANGED_PATHS)]
     classification: PrClassification
+    agent: PrAgent | None = None
 
 
 class PullRequestReport(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     repository_id: int = Field(gt=0)
     repository_full_name: str = Field(pattern=_REPOSITORY_PATTERN, max_length=256)
     pr_number: int = Field(gt=0)
@@ -83,3 +87,4 @@ class PullRequestReport(BaseModel):
     reason_codes: tuple[PrReasonCode, ...] = ()
     credential_unavailable: bool = False
     qualification_completed: bool = False
+    agent: PrAgent | None = None

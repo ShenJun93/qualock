@@ -122,6 +122,7 @@ def report_from_qualification(
         reason_codes=tuple(reason_codes),
         credential_unavailable=False,
         qualification_completed=True,
+        agent=context.agent,
     )
 
 
@@ -138,6 +139,7 @@ def not_applicable_report(context: PullRequestContext) -> PullRequestReport:
         verdict=PrReportVerdict.NOT_APPLICABLE,
         credential_unavailable=False,
         qualification_completed=False,
+        agent=context.agent,
     )
 
 
@@ -160,4 +162,5 @@ def incomplete_report(
         reason_codes=reason_codes,
         credential_unavailable=credential_unavailable,
         qualification_completed=False,
+        agent=context.agent,
     )
