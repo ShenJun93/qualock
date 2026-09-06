@@ -291,28 +291,27 @@ QUALOCK_ANTIGRAVITY_BIN=/path/to/agy \
 PYTHONPATH=src python -m pytest tests/integration/test_antigravity_real_contract.py -q
 ```
 
-### Status: not certified
+### Status: unreleased, locally certified against one account
 
-Antigravity host qualification is **unreleased and uncertified**. Exactly one authenticated
-contract run has been executed against `agy 1.1.27`, and it failed. It surfaced two CLI
-compatibility gaps, both now fixed and covered by unit tests (`--help` printed to stderr;
-object-shaped `tool_info.error` payloads), and one load-bearing runtime failure:
-Antigravity's terminal sandbox could not start, so `run_command` failed with
-`fork/exec <agy path>: read-only file system`.
+Antigravity host qualification is **unreleased**, and supported for `baseline` and `check`
+runs only. Three authenticated contract runs have been executed against `agy 1.1.27`. The
+first two surfaced issues: two CLI compatibility gaps (`--help` printed to stderr;
+object-shaped `tool_info.error` payloads) and a load-bearing runtime failure where
+Antigravity's terminal sandbox could not start (`run_command` failed with
+`fork/exec <agy path>: read-only file system`). All three are now fixed — the runtime
+failure was root-caused to the runner mounting the host root read-only, which also made the
+inherited `/proc` read-only; Antigravity's terminal sandbox re-execs itself into a nested
+user namespace, and the required writes to `/proc/self/{setgroups,uid_map,gid_map}`
+therefore failed `EROFS`. The runner now mounts a private `procfs` in a private PID
+namespace, which restores those writes while leaving the host root read-only and every
+other mount unchanged, and keeps host processes out of the sandbox's view.
 
-That runtime failure has since been root-caused and fixed locally without authentication.
-The runner mounts the host root read-only, which also made the inherited `/proc` read-only;
-Antigravity's terminal sandbox re-execs itself into a nested user namespace, and the
-required writes to `/proc/self/{setgroups,uid_map,gid_map}` therefore failed `EROFS`. The
-runner now mounts a private `procfs` in a private PID namespace, which restores those writes
-while leaving the host root read-only and every other mount unchanged, and keeps host
-processes out of the sandbox's view. A local Bubblewrap reproducer confirms both the failure
-and the fix, and confirms the Task 5 isolation invariants still hold.
-
-The fix has **not** been revalidated against a live account. Until an authorized
-authenticated rerun passes, no runtime claim above the mount layer is proven: permission
-mode, hook denials, workspace cwd, HOME-sentinel invisibility, private outer `/tmp`,
-blocked outbound TCP, and terminal `SUCCESS` all remain unverified against the real CLI.
+The third authenticated run, on this branch's current commit, passed against `agy 1.1.27`
+with model `gemini-3.8-flash-medium`: permission mode, hook denials (`search_web` and
+`invoke_subagent` both denied), workspace cwd, HOME- and `/tmp`-sentinel invisibility,
+blocked outbound TCP, and a terminal `SUCCESS` were all confirmed against the real CLI. This
+result is a single local run against one account and CLI/model pair, not a released or
+broadly revalidated certification.
 
 ## Qualify GitHub pull requests
 

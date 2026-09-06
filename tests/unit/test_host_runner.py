@@ -336,6 +336,7 @@ def test_inspect_agent_state_uses_exact_qualock_owned_git_commands(
     assert environments == [first_environment, first_environment, first_environment]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX-only: exercises real git under PATH=os.defpath")
 def test_inspect_agent_state_does_not_execute_local_diff_configuration(tmp_path: Path) -> None:
     workspace = tmp_path / "attempt"
     workspace.mkdir()
@@ -369,6 +370,7 @@ def test_inspect_agent_state_does_not_execute_local_diff_configuration(tmp_path:
     assert "diff --git a/tracked.txt b/tracked.txt" in evidence.patch
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX-only: executes a real sh -lc POSIX shell")
 def test_run_grader_uses_copy_applies_patch_and_scrubs_account_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -499,6 +501,7 @@ def test_run_grader_rejects_symlink_that_escapes_grader_copy(tmp_path: Path) -> 
     assert outside.read_text(encoding="utf-8") == "outside\n"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX-only: executes a real sh -lc sleep and os.killpg")
 def test_run_grader_reports_timeout(tmp_path: Path) -> None:
     workspace = tmp_path / "attempt"
     workspace.mkdir()
