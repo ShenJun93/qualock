@@ -1,4 +1,5 @@
 import os
+import platform
 import shutil
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
@@ -8,6 +9,7 @@ from packaging.version import Version
 from pydantic import ValidationError
 from rich.console import Console
 
+from qualock.agents.antigravity_resolver import AntigravityResolveError, AntigravityResolver
 from qualock.agents.resolver import CodexResolveError
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock
 from qualock.canary.loader import CanaryLoadError
@@ -140,11 +142,21 @@ def init_command() -> None:
     console.print("Created .qualock/config.yaml, canaries/, results/")
 
 
+def _antigravity_binary_available() -> bool:
+    override = os.environ.get("QUALOCK_ANTIGRAVITY_BIN")
+    resolver = AntigravityResolver(Path(override) if override else None)
+    try:
+        resolver.locate()
+    except AntigravityResolveError:
+        return False
+    return True
+
+
 @app.command("doctor")
 def doctor_command() -> None:
     root = Path.cwd()
     try:
-        _config, canaries = load_project(root)
+        config, canaries = load_project(root)
     except (ConfigError, CanaryLoadError, FileNotFoundError) as exc:
         console.print(f"Config  FAIL  {exc}")
         raise typer.Exit(3) from exc
@@ -152,9 +164,15 @@ def doctor_command() -> None:
     checks = {
         "Git": shutil.which("git") is not None,
         "npm": shutil.which("npm") is not None,
-        "Docker": DockerRunner().daemon_ready(),
-        "Canaries": bool(canaries),
     }
+    if config.agent.name == "antigravity":
+        checks["Linux"] = platform.system() == "Linux"
+        checks["bwrap"] = shutil.which("bwrap") is not None
+        checks["Antigravity"] = _antigravity_binary_available()
+    else:
+        checks["Docker"] = DockerRunner().daemon_ready()
+    checks["Canaries"] = bool(canaries)
+
     for name, ok in checks.items():
         console.print(f"{name:<10} {'PASS' if ok else 'FAIL'}")
     if not all(checks.values()):

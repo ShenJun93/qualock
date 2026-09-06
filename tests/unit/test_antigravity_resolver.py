@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import qualock.agents.antigravity_resolver as antigravity_resolver_module
 from qualock.agents.antigravity_resolver import AntigravityResolveError, AntigravityResolver
 
 from ._platform_helpers import write_python_launcher
@@ -201,3 +202,74 @@ def test_resolve_disables_auto_update_while_probing_binary(
         "--version=true",
         "--help=true",
     ]
+
+
+def test_locate_does_not_execute_the_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    agy = tmp_path / "agy"
+    agy.write_text("not executed by locate()", encoding="utf-8")
+
+    def _fail_if_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("locate() must not run any process")
+
+    monkeypatch.setattr(antigravity_resolver_module, "run_process", _fail_if_called)
+
+    resolved = AntigravityResolver(agy).locate()
+
+    assert resolved == agy.resolve()
+
+
+def test_locate_prefers_explicit_binary_path_over_path_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    override = tmp_path / "override" / "agy"
+    override.parent.mkdir()
+    override.write_text("override binary", encoding="utf-8")
+    on_path = tmp_path / "on-path" / "agy"
+    on_path.parent.mkdir()
+    on_path.write_text("path binary", encoding="utf-8")
+    monkeypatch.setattr(shutil, "which", lambda name: str(on_path) if name == "agy" else None)
+
+    resolved = AntigravityResolver(override).locate()
+
+    assert resolved == override.resolve()
+
+
+def test_locate_falls_back_to_path_lookup_when_no_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_path = tmp_path / "agy"
+    on_path.write_text("path binary", encoding="utf-8")
+    monkeypatch.setattr(shutil, "which", lambda name: str(on_path) if name == "agy" else None)
+
+    resolved = AntigravityResolver().locate()
+
+    assert resolved == on_path.resolve()
+
+
+def test_locate_raises_when_no_binary_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    with pytest.raises(AntigravityResolveError, match="no Antigravity binary found"):
+        AntigravityResolver().locate()
+
+
+def test_locate_rejects_windows_executable(tmp_path: Path) -> None:
+    with pytest.raises(AntigravityResolveError, match="native Linux"):
+        AntigravityResolver(tmp_path / "agy.exe").locate()
+
+
+def test_locate_rejects_symlink_to_windows_executable(tmp_path: Path) -> None:
+    windows_binary = tmp_path / "agy.exe"
+    windows_binary.write_text("not executed; suffix check rejects first", encoding="utf-8")
+    symlink = tmp_path / "agy"
+    symlink.symlink_to(windows_binary)
+
+    with pytest.raises(AntigravityResolveError, match="native Linux"):
+        AntigravityResolver(symlink).locate()
+
+
+def test_locate_rejects_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "agy"
+
+    with pytest.raises(AntigravityResolveError, match="not found"):
+        AntigravityResolver(missing).locate()

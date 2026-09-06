@@ -242,8 +242,16 @@ qualock check antigravity@1.1.28
 `QUALOCK_ANTIGRAVITY_BIN` is only a path override; when it is unset QuaLock falls back to
 `agy` on `PATH`. QuaLock does not download, install, or discover Antigravity releases, so
 both sides of a check must be binaries that already exist locally. Antigravity is
-supported for `baseline` and `check` only — `qualock doctor`, `qualock bisect`,
-`qualock monitor`, and the GitHub PR workflow remain Codex-only.
+supported for `baseline`, `check`, and `doctor`. `qualock bisect`, `qualock monitor`, and
+the GitHub PR workflow remain Codex-only.
+
+`qualock doctor` reads the project's `.qualock/config.yaml` and checks prerequisites for
+whichever agent the project is configured for. For a project configured for `codex` or
+`claude` it checks Docker, unchanged. For a project configured for `antigravity` it checks
+native Linux, `bwrap` on `PATH`, and that an Antigravity binary resolves under the same
+`QUALOCK_ANTIGRAVITY_BIN`/`PATH` precedence used by `baseline`/`check` instead of Docker —
+it never runs `agy`, so it does not probe `--version`/`--help` or touch any authentication
+state.
 
 Antigravity canaries must opt into the host runtime explicitly and must not declare a
 container image:

@@ -116,7 +116,8 @@ def test_doctor_fails_when_docker_cli_exists_but_daemon_is_unreachable(tmp_path:
             return False
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("qualock.cli.load_project", lambda root: (object(), [object()]))
+    config = SimpleNamespace(agent=SimpleNamespace(name="codex"))
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (config, [object()]))
     monkeypatch.setattr("qualock.cli.shutil.which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr("qualock.cli.DockerRunner", FakeDockerRunner)
 
@@ -125,6 +126,90 @@ def test_doctor_fails_when_docker_cli_exists_but_daemon_is_unreachable(tmp_path:
     assert result.exit_code == 1
     assert "Docker" in result.stdout
     assert "FAIL" in result.stdout
+
+
+def _doctor_docker_should_not_be_constructed(*args, **kwargs):
+    raise AssertionError("antigravity doctor must not touch Docker")
+
+
+def test_doctor_antigravity_passes_without_touching_docker(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = SimpleNamespace(agent=SimpleNamespace(name="antigravity"))
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (config, [object()]))
+    monkeypatch.setattr("qualock.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("qualock.cli.platform.system", lambda: "Linux")
+    monkeypatch.setattr(
+        "qualock.cli.AntigravityResolver.locate", lambda self: Path("/usr/bin/agy")
+    )
+    monkeypatch.setattr("qualock.cli.DockerRunner", _doctor_docker_should_not_be_constructed)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "Linux" in result.stdout
+    assert "bwrap" in result.stdout
+    assert "Antigravity" in result.stdout
+    assert "Canaries" in result.stdout
+    assert "Docker" not in result.stdout
+
+
+def test_doctor_antigravity_fails_on_non_linux_host(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = SimpleNamespace(agent=SimpleNamespace(name="antigravity"))
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (config, [object()]))
+    monkeypatch.setattr("qualock.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("qualock.cli.platform.system", lambda: "Darwin")
+    monkeypatch.setattr(
+        "qualock.cli.AntigravityResolver.locate", lambda self: Path("/usr/bin/agy")
+    )
+    monkeypatch.setattr("qualock.cli.DockerRunner", _doctor_docker_should_not_be_constructed)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "Linux" in result.stdout
+    assert "Docker" not in result.stdout
+
+
+def test_doctor_antigravity_fails_when_bwrap_missing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = SimpleNamespace(agent=SimpleNamespace(name="antigravity"))
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (config, [object()]))
+    monkeypatch.setattr(
+        "qualock.cli.shutil.which", lambda name: None if name == "bwrap" else f"/usr/bin/{name}"
+    )
+    monkeypatch.setattr("qualock.cli.platform.system", lambda: "Linux")
+    monkeypatch.setattr(
+        "qualock.cli.AntigravityResolver.locate", lambda self: Path("/usr/bin/agy")
+    )
+    monkeypatch.setattr("qualock.cli.DockerRunner", _doctor_docker_should_not_be_constructed)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "bwrap" in result.stdout
+    assert "Docker" not in result.stdout
+
+
+def test_doctor_antigravity_fails_when_binary_missing_or_rejected(tmp_path: Path, monkeypatch) -> None:
+    from qualock.agents.antigravity_resolver import AntigravityResolveError
+
+    def _reject(self) -> Path:
+        raise AntigravityResolveError("no Antigravity binary found: pass binary_path or install agy on PATH")
+
+    monkeypatch.chdir(tmp_path)
+    config = SimpleNamespace(agent=SimpleNamespace(name="antigravity"))
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (config, [object()]))
+    monkeypatch.setattr("qualock.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("qualock.cli.platform.system", lambda: "Linux")
+    monkeypatch.setattr("qualock.cli.AntigravityResolver.locate", _reject)
+    monkeypatch.setattr("qualock.cli.DockerRunner", _doctor_docker_should_not_be_constructed)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "Antigravity" in result.stdout
+    assert "Docker" not in result.stdout
 
 
 def test_check_easy_renders_workflow_name_literally(tmp_path: Path, monkeypatch) -> None:
