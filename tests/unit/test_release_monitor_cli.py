@@ -5,6 +5,7 @@ import pytest
 from typer.testing import CliRunner
 
 from qualock import cli
+from qualock.agents.releases import ReleaseDiscoveryError
 from qualock.baseline.io import BaselineStaleError
 from qualock.canary.loader import CanaryLoadError
 from qualock.commands import CommandError
@@ -32,13 +33,14 @@ def result_with_verdict(verdict: Verdict) -> QualificationResult:
 def monitor_outcome(
     action: MonitorAction,
     *,
+    agent_name: str = "codex",
     result: QualificationResult | None = None,
     recorded: Verdict | None = None,
     warning: str | None = None,
 ) -> MonitorOutcome:
     return MonitorOutcome(
         action=action,
-        agent_name="codex",
+        agent_name=agent_name,
         baseline_version="0.151.0",
         latest_version="0.152.0",
         qualification_result=result,
@@ -66,6 +68,43 @@ def test_monitor_no_new_release_exits_zero(tmp_path: Path, monkeypatch) -> None:
     assert "Baseline: Codex 0.151.0" in result.stdout
     assert "Latest:   Codex 0.151.0" in result.stdout
     assert "No newer Codex release needs qualification." in result.stdout
+
+
+def test_monitor_claude_no_new_release_uses_claude_display_name(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outcome = MonitorOutcome(
+        action=MonitorAction.NO_NEW_RELEASE,
+        agent_name="claude",
+        baseline_version="2.1.260",
+        latest_version="2.1.260",
+    )
+
+    result = invoke_outcome(tmp_path, monkeypatch, outcome)
+
+    assert result.exit_code == 0
+    assert "Baseline: Claude Code 2.1.260" in result.stdout
+    assert "Latest:   Claude Code 2.1.260" in result.stdout
+    assert "No newer Claude Code release needs qualification." in result.stdout
+    assert "Codex" not in result.stdout
+
+
+def test_monitor_claude_already_qualified_uses_claude_display_name(
+    tmp_path: Path, monkeypatch
+) -> None:
+    result = invoke_outcome(
+        tmp_path,
+        monkeypatch,
+        monitor_outcome(
+            MonitorAction.ALREADY_QUALIFIED,
+            agent_name="claude",
+            recorded=Verdict.PASS,
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert "Claude Code 0.152.0 was already qualified" in result.stdout
+    assert "Codex" not in result.stdout
 
 
 def test_monitor_baseline_newer_than_npm_reports_no_downgrade(
@@ -179,6 +218,22 @@ def test_monitor_operational_error_exits_one(tmp_path: Path, monkeypatch) -> Non
     assert runner.invoke(cli.app, ["monitor"]).exit_code == 1
 
 
+def test_release_discovery_error_exits_one(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "execute_monitor",
+        lambda root, **kwargs: (_ for _ in ()).throw(
+            ReleaseDiscoveryError("npm unavailable")
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["monitor"])
+
+    assert result.exit_code == 1
+    assert "npm unavailable" in result.stdout
+
+
 def test_monitor_warning_is_literal_and_preserves_pass_exit(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -239,3 +294,45 @@ def test_monitor_check_executor_prints_transition_before_check(monkeypatch) -> N
         "\nNew Codex release found. Qualifying 0.152.0 against baseline 0.151.0.",
         "check",
     ]
+
+
+def test_monitor_check_executor_prints_claude_transition(monkeypatch) -> None:
+    events: list[str] = []
+    expected = sample_result()
+    monkeypatch.setattr(
+        cli,
+        "read_baseline_lock",
+        lambda path: SimpleNamespace(
+            agent=SimpleNamespace(name="claude", version="2.1.260")
+        ),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message, **kwargs: events.append(message),
+    )
+    monkeypatch.setattr(
+        cli,
+        "execute_check",
+        lambda root, candidate: events.append("check") or expected,
+    )
+
+    result = cli._monitor_check_executor(Path("."), "claude@2.1.261")
+
+    assert result is expected
+    assert events == [
+        "Baseline: Claude Code 2.1.260",
+        "Latest:   Claude Code 2.1.261",
+        (
+            "\nNew Claude Code release found. Qualifying 2.1.261 "
+            "against baseline 2.1.260."
+        ),
+        "check",
+    ]
+
+
+def test_monitor_force_help_is_agent_neutral() -> None:
+    result = runner.invoke(cli.app, ["monitor", "--help"])
+    assert result.exit_code == 0
+    assert "newer release" in result.stdout
+    assert "newer Codex release" not in result.stdout

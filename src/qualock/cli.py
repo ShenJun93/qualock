@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from qualock.agents.antigravity_resolver import AntigravityResolveError, AntigravityResolver
+from qualock.agents.releases import ReleaseDiscoveryError
 from qualock.agents.resolver import CodexResolveError
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock
 from qualock.canary.loader import CanaryLoadError
@@ -115,13 +116,16 @@ def _render_safety_result(
 
 
 def _monitor_check_executor(root: Path, candidate_spec: str) -> QualificationResult:
-    version = candidate_spec.rsplit("@", 1)[1]
+    agent_name, version = parse_agent_spec(candidate_spec)
     lock = read_baseline_lock(project_dir(root) / "baseline.lock")
-    console.print(f"Baseline: Codex {lock.agent.version}", markup=False)
-    console.print(f"Latest:   Codex {version}", markup=False)
+    display_name = agent_display_name(agent_name)
+    console.print(f"Baseline: {display_name} {lock.agent.version}", markup=False)
+    console.print(f"Latest:   {display_name} {version}", markup=False)
     console.print(
-        f"\nNew Codex release found. Qualifying {version} against baseline "
-        f"{lock.agent.version}.",
+        (
+            f"\nNew {display_name} release found. Qualifying {version} "
+            f"against baseline {lock.agent.version}."
+        ),
         markup=False,
     )
     return execute_check(root, candidate_spec)
@@ -251,7 +255,7 @@ def monitor_command(
         bool,
         typer.Option(
             "--force",
-            help="Re-run the matching newer Codex release if it was already qualified.",
+            help="Re-run the matching newer release if it was already qualified.",
         ),
     ] = False,
 ) -> None:
@@ -269,13 +273,20 @@ def monitor_command(
     except BaselineStaleError as exc:
         console.print(str(exc), markup=False)
         raise typer.Exit(4) from exc
+    except ReleaseDiscoveryError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
     except Exception as exc:
         console.print(str(exc), markup=False)
         raise typer.Exit(1) from exc
 
+    display_name = agent_display_name(outcome.agent_name)
     if outcome.action is not MonitorAction.CHECKED:
-        console.print(f"Baseline: Codex {outcome.baseline_version}", markup=False)
-        console.print(f"Latest:   Codex {outcome.latest_version}", markup=False)
+        console.print(
+            f"Baseline: {display_name} {outcome.baseline_version}",
+            markup=False,
+        )
+        console.print(f"Latest:   {display_name} {outcome.latest_version}", markup=False)
     if outcome.state_warning:
         console.print(f"Warning: {outcome.state_warning}", markup=False)
 
@@ -286,7 +297,10 @@ def monitor_command(
                 markup=False,
             )
         else:
-            console.print("No newer Codex release needs qualification.", markup=False)
+            console.print(
+                f"No newer {display_name} release needs qualification.",
+                markup=False,
+            )
         return
     if outcome.action is MonitorAction.NO_DOWNGRADE:
         console.print(
@@ -299,8 +313,10 @@ def monitor_command(
             console.print("Release monitor state is missing its verdict.", markup=False)
             raise typer.Exit(1)
         console.print(
-            f"Codex {outcome.latest_version} was already qualified for this baseline: "
-            f"{outcome.recorded_verdict.value.upper()}",
+            (
+                f"{display_name} {outcome.latest_version} was already qualified "
+                f"for this baseline: {outcome.recorded_verdict.value.upper()}"
+            ),
             markup=False,
         )
         console.print("Run `qualock monitor --force` to qualify it again.", markup=False)
@@ -312,7 +328,7 @@ def monitor_command(
     if result is None:
         console.print("Release monitor check result is missing.", markup=False)
         raise typer.Exit(1)
-    _render_safety_result(root, result, "Codex")
+    _render_safety_result(root, result, display_name)
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)
     if result.verdict is Verdict.INCOMPLETE:
