@@ -9,6 +9,7 @@ from qualock.agents.antigravity import AntigravityInvocation
 from qualock.agents.base import AgentBinary
 from qualock.canary.models import CanarySpec, RuntimeSpec
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
+from qualock.run import host_backend
 from qualock.run.backend import IntegrityPolicy, UnsupportedRuntimeError
 from qualock.run.host import HostAgentState, HostCommandError
 from qualock.run.host_backend import LinuxHostQualificationBackend
@@ -40,9 +41,11 @@ class FakeAdapter:
         *,
         evidence: AgentEvidence | None = None,
         parse_error: str | None = None,
+        invocation_error: Exception | None = None,
     ) -> None:
         self.evidence = evidence or AgentEvidence(input_tokens=12, output_tokens=3)
         self.parse_error = parse_error
+        self.invocation_error = invocation_error
         self.invocation_kwargs: dict[str, object] = {}
         self.profile_roots: list[Path] = []
         self.invocations: list[AntigravityInvocation] = []
@@ -58,6 +61,8 @@ class FakeAdapter:
         workspace: Path,
         timeout_seconds: int,
     ) -> Iterator[AntigravityInvocation]:
+        if self.invocation_error is not None:
+            raise self.invocation_error
         self.invocation_kwargs = {
             "binary": binary,
             "model": model,
@@ -231,7 +236,11 @@ def backend(
     adapter: FakeAdapter | None = None,
     source: FakeSource | None = None,
     integrity_policy: IntegrityPolicy | None = None,
+    platform_system: str | None = None,
 ) -> LinuxHostQualificationBackend:
+    extra: dict[str, object] = {}
+    if platform_system is not None:
+        extra["platform_system"] = platform_system
     return LinuxHostQualificationBackend(
         source_manager=source or FakeSource(),
         host_runner=runner,
@@ -240,6 +249,7 @@ def backend(
         reasoning_effort="high",
         work_root=tmp_path / "work",
         integrity_policy=integrity_policy or IntegrityPolicy(),
+        **extra,  # type: ignore[arg-type]
     )
 
 
@@ -387,19 +397,140 @@ def test_attempt_directories_are_removed_after_each_attempt(tmp_path: Path) -> N
     assert not workspace.parent.exists()
 
 
-def test_attempt_directory_and_agent_profile_are_cleaned_when_agent_raises(
+def test_attempt_directory_and_agent_profile_are_cleaned_when_agent_launch_fails(
     tmp_path: Path,
 ) -> None:
     runner = FakeHostRunner(agent_error=HostCommandError("bwrap missing"))
     adapter = FakeAdapter()
     service = backend(tmp_path, runner, adapter=adapter)
 
-    with pytest.raises(HostCommandError):
-        run_once(tmp_path, service)
+    result = run_once(tmp_path, service)
 
+    assert result.valid is False
     assert not runner.agent_workspaces[0].exists()
     assert not adapter.profile_roots[0].exists()
     assert runner.grader_calls == []
+
+
+def test_sandbox_launch_failure_invalidates_attempt_instead_of_aborting(tmp_path: Path) -> None:
+    runner = FakeHostRunner(agent_error=HostCommandError("bwrap missing"))
+    service = backend(tmp_path, runner)
+
+    result = run_once(tmp_path, service, side=Side.CANDIDATE, repetition=2)
+
+    assert result.valid is False
+    assert result.success is False
+    assert result.side == Side.CANDIDATE.value
+    assert result.repetition == 2
+    assert "bwrap missing" in (result.invalid_reason or "")
+    assert result.usage.input_tokens == 0
+    assert result.events_jsonl == ""
+    assert runner.inspect_calls == []
+    assert runner.grader_calls == []
+
+
+def test_missing_sandbox_executable_invalidates_attempt(tmp_path: Path) -> None:
+    runner = FakeHostRunner(
+        agent_error=FileNotFoundError(2, "No such file or directory", "bwrap")
+    )
+    service = backend(tmp_path, runner)
+
+    result = run_once(tmp_path, service)
+
+    assert result.valid is False
+    assert "bwrap" in (result.invalid_reason or "")
+    assert runner.grader_calls == []
+
+
+def test_forbidden_agent_argument_invalidates_attempt(tmp_path: Path) -> None:
+    runner = FakeHostRunner(agent_error=ValueError("forbidden Antigravity argument: --share-net"))
+    service = backend(tmp_path, runner)
+
+    result = run_once(tmp_path, service)
+
+    assert result.valid is False
+    assert "forbidden Antigravity argument" in (result.invalid_reason or "")
+    assert runner.grader_calls == []
+
+
+def test_adapter_profile_failure_invalidates_attempt_without_running_the_agent(
+    tmp_path: Path,
+) -> None:
+    runner = FakeHostRunner()
+    adapter = FakeAdapter(invocation_error=OSError("cannot create private profile"))
+    service = backend(tmp_path, runner, adapter=adapter)
+
+    result = run_once(tmp_path, service)
+
+    assert result.valid is False
+    assert "cannot create private profile" in (result.invalid_reason or "")
+    assert runner.agent_workspaces == []
+    assert runner.grader_calls == []
+    assert list((tmp_path / "work" / "attempts").glob("*")) == []
+
+
+def test_unexpected_programmer_error_is_not_swallowed_as_an_invalid_attempt(
+    tmp_path: Path,
+) -> None:
+    runner = FakeHostRunner(agent_error=TypeError("run_agent() got an unexpected argument"))
+    service = backend(tmp_path, runner)
+
+    with pytest.raises(TypeError):
+        run_once(tmp_path, service)
+
+    assert not runner.agent_workspaces[0].exists()
+
+
+def test_prepare_rejects_non_linux_platform_before_any_work(tmp_path: Path) -> None:
+    source = FakeSource()
+    runner = FakeHostRunner()
+    service = backend(tmp_path, runner, source=source, platform_system="Windows")
+
+    with pytest.raises(UnsupportedRuntimeError):
+        service.prepare(canary(tmp_path), "q1")
+
+    assert source.calls == []
+    assert runner.setup_calls == []
+    assert not (tmp_path / "work").exists()
+
+
+def test_run_attempt_rejects_non_linux_platform_before_creating_attempt_directories(
+    tmp_path: Path,
+) -> None:
+    runner = FakeHostRunner()
+    adapter = FakeAdapter()
+    service = backend(tmp_path, runner, adapter=adapter, platform_system="Darwin")
+
+    with pytest.raises(UnsupportedRuntimeError):
+        run_once(tmp_path, service)
+
+    assert runner.agent_workspaces == []
+    assert adapter.invocation_kwargs == {}
+    assert not (tmp_path / "work").exists()
+
+
+def test_platform_check_defaults_to_the_running_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(host_backend.platform, "system", lambda: "Windows")
+    source = FakeSource()
+    service = backend(tmp_path, FakeHostRunner(), source=source)
+
+    with pytest.raises(UnsupportedRuntimeError):
+        service.prepare(canary(tmp_path), "q1")
+
+    assert source.calls == []
+
+
+def test_linux_platform_is_accepted(tmp_path: Path) -> None:
+    source = FakeSource()
+    runner = FakeHostRunner()
+    service = backend(tmp_path, runner, source=source, platform_system="Linux")
+
+    prepared = service.prepare(canary(tmp_path), "q1")
+
+    assert prepared.reference == str(tmp_path / "work" / "q1" / "sample" / "prepared")
+    assert len(source.calls) == 1
 
 
 def test_agent_runs_through_the_adapter_invocation_and_host_runner(tmp_path: Path) -> None:
