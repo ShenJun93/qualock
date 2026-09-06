@@ -61,7 +61,7 @@ def test_build_agent_argv_has_exact_private_mount_contract(tmp_path: Path) -> No
     assert argv == [
         "bwrap",
         "--unshare-user",
-        "--bind",
+        "--ro-bind",
         "/",
         "/",
         "--tmpfs",
@@ -105,6 +105,39 @@ def test_build_agent_argv_has_exact_private_mount_contract(tmp_path: Path) -> No
     assert "--dangerously-skip-permissions" not in argv
 
 
+def _bindings(argv: list[str], flag: str) -> set[tuple[str, str]]:
+    return {
+        (argv[index + 1], argv[index + 2])
+        for index, argument in enumerate(argv)
+        if argument == flag
+    }
+
+
+def test_build_agent_argv_mounts_host_root_read_only_with_explicit_writable_mounts(
+    tmp_path: Path,
+) -> None:
+    workspace = Path("/home/qualock/.qualock/work/attempt")
+    home = tmp_path / "home"
+    invocation = fake_invocation(tmp_path)
+
+    argv = LinuxHostRunner(home=home).build_agent_argv(
+        workspace=workspace,
+        invocation=invocation,
+    )
+
+    assert argv[1:5] == ["--unshare-user", "--ro-bind", "/", "/"]
+    read_write = _bindings(argv, "--bind")
+    assert read_write == {
+        (str(workspace.resolve()), "/tmp/qualock-workspace"),
+        (str(invocation.config_root.resolve()), str(home / ".gemini" / "config")),
+        (str(invocation.app_data_root.resolve()), str(home / ".gemini" / "antigravity-cli")),
+    }
+    assert ("/", "/") not in read_write
+    assert ("/", "/") in _bindings(argv, "--ro-bind")
+    assert argv[argv.index("--tmpfs") : argv.index("--tmpfs") + 2] == ["--tmpfs", "/tmp"]
+    assert argv.index("--tmpfs") < argv.index("--dir") < argv.index("--chdir")
+
+
 def test_build_agent_argv_protects_git_through_original_workspace_path(tmp_path: Path) -> None:
     workspace = Path("/home/qualock/.qualock/work/attempt")
     invocation = fake_invocation(tmp_path)
@@ -115,11 +148,7 @@ def test_build_agent_argv_protects_git_through_original_workspace_path(tmp_path:
     )
 
     git_dir = str((workspace / ".git").resolve())
-    read_only_bindings = {
-        (argv[index + 1], argv[index + 2])
-        for index, argument in enumerate(argv)
-        if argument == "--ro-bind"
-    }
+    read_only_bindings = _bindings(argv, "--ro-bind")
     assert (git_dir, "/tmp/qualock-workspace/.git") in read_only_bindings
     assert (git_dir, git_dir) in read_only_bindings
 
