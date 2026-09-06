@@ -226,12 +226,12 @@ def test_bisect_antigravity_unsupported_exits_three_with_literal_text(
         cli,
         "execute_bisect",
         lambda root, upper_spec, **kwargs: (_ for _ in ()).throw(
-            CommandError("version bisect is unavailable for Antigravity")
+            CommandError("version bisect does not support agent 'antigravity'")
         ),
     )
     result = runner.invoke(cli.app, ["bisect", "0.153.0"])
     assert result.exit_code == 3
-    assert "version bisect is unavailable for Antigravity" in result.stdout
+    assert "version bisect does not support agent 'antigravity'" in result.stdout
 
 
 def test_bisect_release_discovery_error_exits_one_with_literal_text(
