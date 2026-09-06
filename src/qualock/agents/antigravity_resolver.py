@@ -45,17 +45,34 @@ class AntigravityResolver:
             )
         return Path(found)
 
-    def resolve(self, version: str) -> AgentBinary:
+    def locate(self) -> Path:
+        """Resolve the Antigravity binary path without executing it.
+
+        Applies binary_path/PATH precedence and rejects a resolved Windows
+        executable or a missing/non-file path. Never runs a process, so it is
+        safe to call without probing version/help or touching auth state.
+        """
         binary_path = self._locate_binary()
         resolved_path = binary_path.resolve()
 
-        if platform.system() != "Linux" or resolved_path.suffix.lower() == ".exe":
+        if resolved_path.suffix.lower() == ".exe":
             raise AntigravityResolveError(
                 f"Antigravity resolver requires a native Linux binary, got {binary_path}"
             )
 
         if not resolved_path.is_file():
             raise AntigravityResolveError(f"Antigravity binary not found: {binary_path}")
+
+        return resolved_path
+
+    def resolve(self, version: str) -> AgentBinary:
+        if platform.system() != "Linux":
+            binary_path = self._locate_binary()
+            raise AntigravityResolveError(
+                f"Antigravity resolver requires a native Linux binary, got {binary_path}"
+            )
+
+        resolved_path = self.locate()
 
         environment = _probe_environment()
         version_result = run_process(
