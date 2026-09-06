@@ -22,10 +22,10 @@ class FakeCatalog:
 
 
 class FailStore:
-    def create(self, **kwargs: object) -> Path:
+    def create(self, *, agent: BisectAgent, **kwargs: object) -> Path:
         raise AssertionError("store must not be used")
 
-    def save(self, **kwargs: object) -> None:
+    def save(self, *, agent: BisectAgent, **kwargs: object) -> None:
         raise AssertionError("store must not be used")
 
 
@@ -34,12 +34,12 @@ class MemoryStore:
         self.created: list[dict[str, object]] = []
         self.saved: list[dict[str, object]] = []
 
-    def create(self, **kwargs: object) -> Path:
-        self.created.append(kwargs)
+    def create(self, *, agent: BisectAgent, **kwargs: object) -> Path:
+        self.created.append({**kwargs, "agent": agent})
         return Path("/memory") / str(kwargs["bisect_id"])
 
-    def save(self, **kwargs: object) -> None:
-        self.saved.append(kwargs)
+    def save(self, *, agent: BisectAgent, **kwargs: object) -> None:
+        self.saved.append({**kwargs, "agent": agent})
 
 
 def fail_check(root: Path, candidate_spec: str) -> QualificationResult:
@@ -361,6 +361,7 @@ def test_claude_all_pass_scans_full_range_excluding_baseline(
 ) -> None:
     patch_preflight(monkeypatch, agent_name="claude", baseline="2.1.260")
     calls: list[str] = []
+    store = MemoryStore()
 
     def check(root: Path, spec: str) -> QualificationResult:
         calls.append(spec)
@@ -370,7 +371,7 @@ def test_claude_all_pass_scans_full_range_excluding_baseline(
         tmp_path,
         "claude@2.1.263",
         catalog=FakeCatalog(("2.1.260", "2.1.261", "2.1.263")),
-        summary_store=MemoryStore(),
+        summary_store=store,
         check_executor=check,
         bisect_id="bisect-test",
     )
@@ -379,6 +380,8 @@ def test_claude_all_pass_scans_full_range_excluding_baseline(
     assert outcome.stop_reason is BisectStop.NO_BAD_FOUND
     assert outcome.first_bad is None
     assert outcome.last_known_good == "2.1.263"
+    assert store.created[0]["agent"] == "claude"
+    assert [call["agent"] for call in store.saved] == ["claude"] * len(store.saved)
 
 
 def test_claude_pass_then_block_stops_at_first_bad(
@@ -390,12 +393,13 @@ def test_claude_pass_then_block_stops_at_first_bad(
         "claude@2.1.261": qualification("2.1.261", Verdict.PASS, "check-261"),
         "claude@2.1.263": qualification("2.1.263", Verdict.BLOCK, "check-263"),
     }
+    store = MemoryStore()
 
     outcome = execute_bisect(
         tmp_path,
         "claude@2.1.263",
         catalog=FakeCatalog(("2.1.260", "2.1.261", "2.1.263")),
-        summary_store=MemoryStore(),
+        summary_store=store,
         check_executor=lambda root, spec: calls.append(spec) or results[spec],
         bisect_id="bisect-test",
     )
@@ -404,6 +408,8 @@ def test_claude_pass_then_block_stops_at_first_bad(
     assert outcome.stop_reason is BisectStop.FIRST_BAD_FOUND
     assert outcome.last_known_good == "2.1.261"
     assert outcome.first_bad == "2.1.263"
+    assert store.created[0]["agent"] == "claude"
+    assert [call["agent"] for call in store.saved] == ["claude"] * len(store.saved)
 
 
 def test_create_and_on_start_precede_first_check_and_step_saves_before_callback(

@@ -3,7 +3,7 @@ import uuid
 from pathlib import Path
 from typing import Protocol
 
-from qualock.version_bisect.models import BisectStep, BisectStop
+from qualock.version_bisect.models import BisectAgent, BisectStep, BisectStop
 
 
 class BisectSummaryStore(Protocol):
@@ -18,6 +18,7 @@ class BisectSummaryStore(Protocol):
         last_good: str,
         first_bad: str | None,
         stop: BisectStop | None,
+        agent: BisectAgent,
     ) -> Path: ...
 
     def save(
@@ -31,6 +32,7 @@ class BisectSummaryStore(Protocol):
         last_good: str,
         first_bad: str | None,
         stop: BisectStop | None,
+        agent: BisectAgent,
     ) -> None: ...
 
 
@@ -49,6 +51,7 @@ class FileBisectSummaryStore:
         last_good: str,
         first_bad: str | None,
         stop: BisectStop | None,
+        agent: BisectAgent,
     ) -> Path:
         run_dir = self._root / bisect_id
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -63,6 +66,7 @@ class FileBisectSummaryStore:
                 last_good=last_good,
                 first_bad=first_bad,
                 stop=stop,
+                agent=agent,
             ),
         )
         return run_dir
@@ -78,6 +82,7 @@ class FileBisectSummaryStore:
         last_good: str,
         first_bad: str | None,
         stop: BisectStop | None,
+        agent: BisectAgent,
     ) -> None:
         run_dir = self._root / bisect_id
         if not run_dir.is_dir():
@@ -93,6 +98,7 @@ class FileBisectSummaryStore:
                 last_good=last_good,
                 first_bad=first_bad,
                 stop=stop,
+                agent=agent,
             ),
         )
 
@@ -118,9 +124,10 @@ def _payload(
     last_good: str,
     first_bad: str | None,
     stop: BisectStop | None,
+    agent: BisectAgent,
 ) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "bisect_id": bisect_id,
         "baseline_version": baseline,
         "upper_version": upper,
@@ -136,4 +143,5 @@ def _payload(
         "last_known_good": last_good,
         "first_bad": first_bad,
         "stop_reason": stop.value if stop is not None else None,
+        "agent": agent,
     }
