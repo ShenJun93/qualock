@@ -331,9 +331,11 @@ def test_stable_versions_filters_dedupes_and_sorts_numerically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     observed_command: list[str] = []
+    observed_timeout: list[int] = []
 
     def fake_run(argv: list[str], *, timeout_seconds: int) -> ProcessResult:
         observed_command.extend(argv)
+        observed_timeout.append(timeout_seconds)
         return ProcessResult(
             0,
             '["2.1.260","2.1.9","2.1.10","2.1.9","2.1.11-beta.1",'
@@ -352,6 +354,7 @@ def test_stable_versions_filters_dedupes_and_sorts_numerically(
     assert observed_command == [
         "npm-test", "view", "@anthropic-ai/claude-code", "versions", "--json"
     ]
+    assert observed_timeout == [30]
 
 
 @pytest.mark.parametrize(

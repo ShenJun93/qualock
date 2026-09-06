@@ -121,4 +121,6 @@ def test_historical_v1_summary_is_never_migrated_or_rewritten(tmp_path: Path) ->
     )
 
     assert legacy_path.read_bytes() == legacy_bytes
-    assert (run_dir / "summary.json").exists()
+    new_summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert new_summary["schema_version"] == 2
+    assert new_summary["agent"] == "codex"
