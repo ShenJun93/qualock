@@ -273,3 +273,37 @@ def test_locate_rejects_missing_file(tmp_path: Path) -> None:
 
     with pytest.raises(AntigravityResolveError, match="not found"):
         AntigravityResolver(missing).locate()
+
+
+def test_from_environment_uses_explicit_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    override = tmp_path / "agy"
+    monkeypatch.setenv("QUALOCK_ANTIGRAVITY_BIN", str(override))
+
+    resolver = AntigravityResolver.from_environment()
+
+    assert isinstance(resolver, AntigravityResolver)
+    assert resolver.binary_path == override
+
+
+def test_from_environment_falls_back_to_path_lookup_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("QUALOCK_ANTIGRAVITY_BIN", raising=False)
+
+    resolver = AntigravityResolver.from_environment()
+
+    assert isinstance(resolver, AntigravityResolver)
+    assert resolver.binary_path is None
+
+
+def test_from_environment_falls_back_to_path_lookup_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QUALOCK_ANTIGRAVITY_BIN", "")
+
+    resolver = AntigravityResolver.from_environment()
+
+    assert isinstance(resolver, AntigravityResolver)
+    assert resolver.binary_path is None

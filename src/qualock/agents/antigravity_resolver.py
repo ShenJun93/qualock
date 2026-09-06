@@ -31,9 +31,21 @@ _REQUIRED_CLI_FLAGS = (
 )
 
 
+_ENV_BINARY_OVERRIDE = "QUALOCK_ANTIGRAVITY_BIN"
+
+
 class AntigravityResolver:
     def __init__(self, binary_path: Path | None = None) -> None:
         self.binary_path = binary_path
+
+    @classmethod
+    def from_environment(cls) -> "AntigravityResolver":
+        """Build a resolver honoring QUALOCK_ANTIGRAVITY_BIN -> PATH precedence.
+
+        An unset or empty override falls back to PATH lookup at locate/resolve time.
+        """
+        override = os.environ.get(_ENV_BINARY_OVERRIDE)
+        return cls(Path(override) if override else None)
 
     def _locate_binary(self) -> Path:
         if self.binary_path is not None:
