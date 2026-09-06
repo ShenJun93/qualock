@@ -41,6 +41,7 @@ def context_fixture(
     base_sha: str = "a" * 40,
     head_sha: str = "b" * 40,
     producer_run_id: int = DEFAULT_RUN_ID,
+    agent: str | None = None,
 ) -> PullRequestContext:
     return PullRequestContext(
         repository_id=repository_id,
@@ -52,11 +53,15 @@ def context_fixture(
         producer_run_id=producer_run_id,
         changed_paths=(".qualock/baseline.lock",),
         classification=classification,
+        agent=agent,
     )
 
 
 def report_fixture(
-    context: PullRequestContext, *, verdict: PrReportVerdict = PrReportVerdict.PASS
+    context: PullRequestContext,
+    *,
+    verdict: PrReportVerdict = PrReportVerdict.PASS,
+    agent: str | None = None,
 ) -> PullRequestReport:
     return PullRequestReport(
         repository_id=context.repository_id,
@@ -73,6 +78,7 @@ def report_fixture(
         verdict=verdict,
         credential_unavailable=False,
         qualification_completed=True,
+        agent=agent if agent is not None else context.agent,
     )
 
 
@@ -315,6 +321,20 @@ def test_validate_allows_missing_report_for_invalid_scope() -> None:
 def test_validate_accepts_matching_identity_context_report() -> None:
     context = context_fixture()
     validate_reporter_inputs(identity_fixture(context), context, report_fixture(context))
+
+
+def test_validate_rejects_agent_mismatch() -> None:
+    context = context_fixture(agent="claude")
+    report = report_fixture(context, agent="codex")
+    with pytest.raises(ReporterValidationError):
+        validate_reporter_inputs(identity_fixture(context), context, report)
+
+
+@pytest.mark.parametrize("agent", ["codex", "claude", None])
+def test_validate_accepts_matching_agent_values(agent: str | None) -> None:
+    context = context_fixture(agent=agent)
+    report = report_fixture(context, agent=agent)
+    validate_reporter_inputs(identity_fixture(context), context, report)
 
 
 # --- HttpxGitHubPublisher narrow HTTP behavior ---
@@ -695,6 +715,34 @@ def test_render_pr_comment_includes_marker_and_verdict() -> None:
     body = render_pr_comment(context, report, {})
     assert body.startswith("<!-- qualock-pr-report:v1 -->")
     assert "WARN" in body
+
+
+def test_render_pr_comment_shows_codex_display_name() -> None:
+    context = context_fixture(agent="codex")
+    report = report_fixture(context, agent="codex")
+    body = render_pr_comment(context, report, {})
+    assert "- Agent: Codex" in body
+
+
+def test_render_pr_comment_shows_claude_display_name() -> None:
+    context = context_fixture(agent="claude")
+    report = report_fixture(context, agent="claude")
+    body = render_pr_comment(context, report, {})
+    assert "- Agent: Claude Code" in body
+
+
+def test_render_pr_comment_omits_agent_line_when_agent_is_none() -> None:
+    context = context_fixture(agent=None)
+    report = report_fixture(context, agent=None)
+    body = render_pr_comment(context, report, {})
+    assert "- Agent:" not in body
+
+
+def test_comment_marker_constant_is_unchanged_v1() -> None:
+    context = context_fixture(agent="claude")
+    report = report_fixture(context, agent="claude")
+    body = render_pr_comment(context, report, {})
+    assert "<!-- qualock-pr-report:v1 -->" in body
 
 
 def test_publish_propagates_status_write_failure(tmp_path: Path) -> None:

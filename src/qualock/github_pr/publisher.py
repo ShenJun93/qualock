@@ -9,6 +9,7 @@ import httpx
 
 import qualock
 from qualock.github_pr.models import (
+    PrAgent,
     PrClassification,
     PrReportVerdict,
     PullRequestContext,
@@ -44,6 +45,11 @@ _DESCRIPTION_BY_VERDICT: dict[PrReportVerdict, str] = {
 }
 
 _MISSING_REPORT_DESCRIPTION = "reporter could not obtain a qualification report"
+
+_AGENT_DISPLAY_NAMES: dict[PrAgent, str] = {
+    "codex": "Codex",
+    "claude": "Claude Code",
+}
 
 
 class GitHubPublishError(Exception):
@@ -191,6 +197,8 @@ def validate_reporter_inputs(
         raise ReporterValidationError("report classification does not match context")
     if report.qualock_version != qualock.__version__:
         raise ReporterValidationError("report qualock version does not match trusted runtime")
+    if report.agent != context.agent:
+        raise ReporterValidationError("report agent does not match context")
 
 
 class HttpxGitHubPublisher:
@@ -342,6 +350,8 @@ def render_pr_comment(
             "This PR changes files outside `.qualock/baseline.lock` and cannot be qualified."
         )
     else:
+        if report.agent is not None:
+            lines.append(f"- Agent: {_AGENT_DISPLAY_NAMES[report.agent]}")
         if report.baseline_version and report.candidate_version:
             lines.append(
                 f"- Candidate: `{report.candidate_version}` (baseline `{report.baseline_version}`)"

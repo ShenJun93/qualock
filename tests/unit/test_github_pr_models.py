@@ -12,7 +12,7 @@ from qualock.github_pr.models import (
 from qualock.qualification.models import Verdict
 
 
-def valid_context() -> PullRequestContext:
+def valid_context(*, agent: str | None = None) -> PullRequestContext:
     return PullRequestContext(
         repository_id=123,
         repository_full_name="owner/repo",
@@ -23,10 +23,11 @@ def valid_context() -> PullRequestContext:
         producer_run_id=999,
         changed_paths=(".qualock/baseline.lock",),
         classification=PrClassification.UPGRADE,
+        agent=agent,
     )
 
 
-def valid_report() -> PullRequestReport:
+def valid_report(*, agent: str | None = None) -> PullRequestReport:
     return PullRequestReport(
         repository_id=123,
         repository_full_name="owner/repo",
@@ -40,12 +41,13 @@ def valid_report() -> PullRequestReport:
         qualification_id="check-1",
         qualock_version="0.1.1",
         verdict=PrReportVerdict.PASS,
+        agent=agent,
     )
 
 
 def test_context_is_strict_and_frozen() -> None:
     context = valid_context()
-    assert context.schema_version == 1
+    assert context.schema_version == 2
     assert context.classification is PrClassification.UPGRADE
     with pytest.raises(ValidationError):
         PullRequestContext.model_validate({**context.model_dump(), "unexpected": True})
@@ -117,7 +119,7 @@ def test_canary_summary_rejects_negative_counts_and_is_frozen() -> None:
 
 def test_report_is_strict_and_frozen_and_carries_no_free_form_reason() -> None:
     report = valid_report()
-    assert report.schema_version == 1
+    assert report.schema_version == 2
     assert report.verdict is PrReportVerdict.PASS
     assert report.canaries == ()
     assert report.reason_codes == ()
@@ -137,3 +139,53 @@ def test_report_reason_codes_are_bounded_enum_values() -> None:
         reason_codes=(PrReasonCode.CRITICAL_REGRESSION,),
     )
     assert report.reason_codes == (PrReasonCode.CRITICAL_REGRESSION,)
+
+
+def test_reason_code_includes_unsupported_agent() -> None:
+    assert PrReasonCode.UNSUPPORTED_AGENT.value == "unsupported_agent"
+
+
+@pytest.mark.parametrize("agent", ["codex", "claude", None])
+def test_context_schema_v2_accepts_bounded_agent_values(agent: str | None) -> None:
+    context = valid_context(agent=agent)
+    assert context.schema_version == 2
+    assert context.agent == agent
+    reloaded = PullRequestContext.model_validate_json(context.model_dump_json())
+    assert reloaded.agent == agent
+    assert reloaded.schema_version == 2
+
+
+@pytest.mark.parametrize("agent", ["codex", "claude", None])
+def test_report_schema_v2_accepts_bounded_agent_values(agent: str | None) -> None:
+    report = valid_report(agent=agent)
+    assert report.schema_version == 2
+    assert report.agent == agent
+    reloaded = PullRequestReport.model_validate_json(report.model_dump_json())
+    assert reloaded.agent == agent
+    assert reloaded.schema_version == 2
+
+
+def test_context_rejects_schema_version_1_json() -> None:
+    payload = valid_context().model_dump_json()
+    stale = payload.replace('"schema_version":2', '"schema_version":1')
+    with pytest.raises(ValidationError):
+        PullRequestContext.model_validate_json(stale)
+
+
+def test_report_rejects_schema_version_1_json() -> None:
+    payload = valid_report().model_dump_json()
+    stale = payload.replace('"schema_version":2', '"schema_version":1')
+    with pytest.raises(ValidationError):
+        PullRequestReport.model_validate_json(stale)
+
+
+def test_context_rejects_invalid_agent_value() -> None:
+    base = valid_context().model_dump()
+    with pytest.raises(ValidationError):
+        PullRequestContext.model_validate({**base, "agent": "antigravity"})
+
+
+def test_report_rejects_invalid_agent_value() -> None:
+    base = valid_report().model_dump()
+    with pytest.raises(ValidationError):
+        PullRequestReport.model_validate({**base, "agent": "antigravity"})
