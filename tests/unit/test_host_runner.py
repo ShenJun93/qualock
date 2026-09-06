@@ -83,6 +83,9 @@ def test_build_agent_argv_has_exact_private_mount_contract(tmp_path: Path) -> No
         "--ro-bind",
         str((workspace / ".git").resolve()),
         "/tmp/qualock-workspace/.git",
+        "--ro-bind",
+        str((workspace / ".git").resolve()),
+        str((workspace / ".git").resolve()),
         "--dev",
         "/dev",
         "--chdir",
@@ -100,6 +103,25 @@ def test_build_agent_argv_has_exact_private_mount_contract(tmp_path: Path) -> No
     assert "--share-net" not in argv
     assert "--unshare-net" not in argv
     assert "--dangerously-skip-permissions" not in argv
+
+
+def test_build_agent_argv_protects_git_through_original_workspace_path(tmp_path: Path) -> None:
+    workspace = Path("/home/qualock/.qualock/work/attempt")
+    invocation = fake_invocation(tmp_path)
+
+    argv = LinuxHostRunner(home=tmp_path / "home").build_agent_argv(
+        workspace=workspace,
+        invocation=invocation,
+    )
+
+    git_dir = str((workspace / ".git").resolve())
+    read_only_bindings = {
+        (argv[index + 1], argv[index + 2])
+        for index, argument in enumerate(argv)
+        if argument == "--ro-bind"
+    }
+    assert (git_dir, "/tmp/qualock-workspace/.git") in read_only_bindings
+    assert (git_dir, git_dir) in read_only_bindings
 
 
 def test_run_agent_uses_process_tree_control(
