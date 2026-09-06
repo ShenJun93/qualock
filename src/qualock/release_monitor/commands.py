@@ -27,6 +27,7 @@ CheckExecutor = Callable[[Path, str], QualificationResult]
 
 @dataclass(frozen=True)
 class MonitorPreflight:
+    agent_name: str
     baseline_version: str
     baseline_sha256: str
 
@@ -39,9 +40,18 @@ def monitor_preflight(root: Path) -> MonitorPreflight:
     config, canaries = load_project(root)
     lock = read_baseline_lock(project_dir(root) / "baseline.lock")
     assert_suite_fresh(lock, suite_fingerprint(canaries), config_fingerprint(config))
-    if lock.agent.name != "codex":
-        raise CommandError("release monitor supports only a Codex baseline")
+    agent_name = lock.agent.name
+    if config.agent.name != agent_name:
+        raise CommandError("baseline agent does not match configured agent")
+    if agent_name == "antigravity":
+        raise CommandError(
+            "release monitor is unavailable for Antigravity because "
+            "QuaLock does not discover Antigravity releases"
+        )
+    if agent_name not in {"codex", "claude"}:
+        raise CommandError(f"release monitor does not support agent {agent_name!r}")
     return MonitorPreflight(
+        agent_name=agent_name,
         baseline_version=lock.agent.version,
         baseline_sha256=baseline_sha256(lock),
     )
@@ -68,6 +78,7 @@ def execute_monitor(
     if latest_order <= baseline_order:
         return MonitorOutcome(
             action=MonitorAction.NO_NEW_RELEASE,
+            agent_name=context.agent_name,
             baseline_version=context.baseline_version,
             latest_version=latest,
         )
@@ -85,6 +96,7 @@ def execute_monitor(
         if latest == matching.candidate_version and not force:
             return MonitorOutcome(
                 action=MonitorAction.ALREADY_QUALIFIED,
+                agent_name=context.agent_name,
                 baseline_version=context.baseline_version,
                 latest_version=latest,
                 recorded_verdict=Verdict(matching.verdict.value),
@@ -93,6 +105,7 @@ def execute_monitor(
         if latest_order < recorded_order:
             return MonitorOutcome(
                 action=MonitorAction.NO_DOWNGRADE,
+                agent_name=context.agent_name,
                 baseline_version=context.baseline_version,
                 latest_version=latest,
                 recorded_verdict=Verdict(matching.verdict.value),
@@ -123,6 +136,7 @@ def execute_monitor(
 
     return MonitorOutcome(
         action=MonitorAction.CHECKED,
+        agent_name=context.agent_name,
         baseline_version=context.baseline_version,
         latest_version=latest,
         qualification_result=result,

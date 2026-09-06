@@ -24,9 +24,14 @@ def sample_baseline_lock() -> BaselineLock:
     )
 
 
-def sample_state(verdict: TerminalVerdict = TerminalVerdict.PASS) -> MonitorState:
+def sample_state(
+    verdict: TerminalVerdict = TerminalVerdict.PASS,
+    *,
+    agent: str = "codex",
+) -> MonitorState:
     return MonitorState(
         baseline_sha256="d" * 64,
+        agent=agent,
         candidate_version="0.152.0",
         verdict=verdict,
         qualification_id="check-test",
@@ -73,6 +78,47 @@ def test_terminal_state_round_trips_atomically(tmp_path: Path, verdict: Terminal
     path = store.path_for(tmp_path / "project")
     assert json.loads(path.read_text(encoding="utf-8"))["verdict"] == verdict.value
     assert list(path.parent.glob(f".{path.name}.*.tmp")) == []
+
+
+def test_claude_state_round_trips_without_schema_change(tmp_path: Path) -> None:
+    store = FileMonitorStateStore(base_dir=tmp_path / "state")
+    state = sample_state(agent="claude")
+
+    store.save(tmp_path / "project", state)
+    loaded, warning = store.load(tmp_path / "project")
+    payload = json.loads(
+        store.path_for(tmp_path / "project").read_text(encoding="utf-8")
+    )
+
+    assert warning is None
+    assert loaded == state
+    assert payload["schema_version"] == 1
+    assert payload["agent"] == "claude"
+
+
+def test_schema_v1_state_without_agent_defaults_to_codex(tmp_path: Path) -> None:
+    store = FileMonitorStateStore(base_dir=tmp_path / "state")
+    path = store.path_for(tmp_path / "project")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "baseline_sha256": "d" * 64,
+                "candidate_version": "0.152.0",
+                "verdict": "pass",
+                "qualification_id": "check-test",
+                "completed_at": "2026-09-02T01:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded, warning = store.load(tmp_path / "project")
+
+    assert warning is None
+    assert loaded is not None
+    assert loaded.agent == "codex"
 
 
 def test_missing_state_is_clean_absence(tmp_path: Path) -> None:

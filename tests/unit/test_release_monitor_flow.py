@@ -79,10 +79,26 @@ def qualification(verdict: Verdict, candidate: str = "0.152.0") -> Qualification
     )
 
 
-def patch_project_loading(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("qualock.release_monitor.commands.load_project", lambda root: (object(), []))
-    monkeypatch.setattr("qualock.release_monitor.commands.suite_fingerprint", lambda canaries: "suite-now")
-    monkeypatch.setattr("qualock.release_monitor.commands.config_fingerprint", lambda config: "config-now")
+def project_config(agent_name: str = "codex") -> SimpleNamespace:
+    return SimpleNamespace(agent=SimpleNamespace(name=agent_name))
+
+
+def patch_project_loading(
+    monkeypatch: pytest.MonkeyPatch,
+    agent_name: str = "codex",
+) -> None:
+    monkeypatch.setattr(
+        "qualock.release_monitor.commands.load_project",
+        lambda root: (project_config(agent_name), []),
+    )
+    monkeypatch.setattr(
+        "qualock.release_monitor.commands.suite_fingerprint",
+        lambda canaries: "suite-now",
+    )
+    monkeypatch.setattr(
+        "qualock.release_monitor.commands.config_fingerprint",
+        lambda config: "config-now",
+    )
 
 
 def test_stale_baseline_stops_before_release_or_state_lookup(
@@ -103,20 +119,60 @@ def test_stale_baseline_stops_before_release_or_state_lookup(
         )
 
 
-def test_non_codex_baseline_stops_before_release_or_state_lookup(
+def test_claude_fresh_baseline_preflight_returns_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    patch_project_loading(monkeypatch)
-    monkeypatch.setattr("qualock.release_monitor.commands.read_baseline_lock", lambda path: baseline_lock("other"))
-    monkeypatch.setattr("qualock.release_monitor.commands.assert_suite_fresh", lambda *args: None)
+    patch_project_loading(monkeypatch, "claude")
+    lock = baseline_lock("claude")
+    monkeypatch.setattr(monitor_commands, "read_baseline_lock", lambda path: lock)
+    monkeypatch.setattr(monitor_commands, "assert_suite_fresh", lambda *args: None)
 
-    with pytest.raises(CommandError) as exc_info:
+    context = monitor_commands.monitor_preflight(tmp_path)
+
+    assert context.agent_name == "claude"
+    assert context.baseline_version == lock.agent.version
+    assert context.baseline_sha256 == baseline_sha256(lock)
+
+
+def test_agent_mismatch_fails_before_release_or_state_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_project_loading(monkeypatch, "claude")
+    monkeypatch.setattr(
+        monitor_commands,
+        "read_baseline_lock",
+        lambda path: baseline_lock("codex"),
+    )
+    monkeypatch.setattr(monitor_commands, "assert_suite_fresh", lambda *args: None)
+
+    with pytest.raises(CommandError, match="baseline agent does not match configured agent"):
         execute_monitor(
             tmp_path,
             release_source=FailIfCalledReleaseSource(),
             state_store=FailIfCalledStateStore(),
         )
-    assert str(exc_info.value) == "release monitor supports only a Codex baseline"
+
+
+def test_antigravity_fails_before_release_or_state_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_project_loading(monkeypatch, "antigravity")
+    monkeypatch.setattr(
+        monitor_commands,
+        "read_baseline_lock",
+        lambda path: baseline_lock("antigravity"),
+    )
+    monkeypatch.setattr(monitor_commands, "assert_suite_fresh", lambda *args: None)
+
+    with pytest.raises(
+        CommandError,
+        match="release monitor is unavailable for Antigravity",
+    ):
+        execute_monitor(
+            tmp_path,
+            release_source=FailIfCalledReleaseSource(),
+            state_store=FailIfCalledStateStore(),
+        )
 
 
 def test_missing_baseline_stops_before_release_or_state_lookup(
@@ -155,6 +211,7 @@ def patch_fresh_context(
         monitor_commands,
         "monitor_preflight",
         lambda root: SimpleNamespace(
+            agent_name="codex",
             baseline_version=baseline_version,
             baseline_sha256=FRESH_SHA,
         ),
@@ -169,7 +226,7 @@ def test_monitor_preflight_reuses_exact_freshness_chain(
     monkeypatch.setattr(
         monitor_commands,
         "load_project",
-        lambda root: events.append("load_project") or (object(), []),
+        lambda root: events.append("load_project") or (project_config("codex"), []),
     )
     monkeypatch.setattr(
         monitor_commands,
@@ -201,6 +258,7 @@ def test_monitor_preflight_reuses_exact_freshness_chain(
         "config_fingerprint",
         "assert_suite_fresh",
     ]
+    assert context.agent_name == "codex"
     assert context.baseline_version == lock.agent.version
     assert context.baseline_sha256 == baseline_sha256(lock)
 
