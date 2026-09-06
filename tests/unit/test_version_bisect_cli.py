@@ -4,13 +4,14 @@ import pytest
 from typer.testing import CliRunner
 
 from qualock import cli
+from qualock.agents.releases import ReleaseDiscoveryError
 from qualock.agents.resolver import CodexResolveError
 from qualock.baseline.io import BaselineStaleError
 from qualock.canary.loader import CanaryLoadError
 from qualock.commands import CommandError
 from qualock.config.io import ConfigError
 from qualock.qualification.models import Verdict
-from qualock.version_bisect.models import BisectOutcome, BisectStep, BisectStop
+from qualock.version_bisect.models import BisectAgent, BisectOutcome, BisectStep, BisectStop
 
 runner = CliRunner()
 
@@ -21,11 +22,14 @@ def make_outcome(
     steps: tuple[BisectStep, ...],
     last_known_good: str = "0.151.0",
     first_bad: str | None = None,
+    baseline_version: str = "0.151.0",
     upper_version: str = "0.153.0",
+    agent_name: BisectAgent = "codex",
 ) -> BisectOutcome:
     return BisectOutcome(
         bisect_id="bisect-20260903T120000Z-aaaaaaaa",
-        baseline_version="0.151.0",
+        agent_name=agent_name,
+        baseline_version=baseline_version,
         upper_version=upper_version,
         steps=steps,
         last_known_good=last_known_good,
@@ -39,7 +43,7 @@ def invoke_outcome(tmp_path: Path, monkeypatch, outcome: BisectOutcome, *args: s
 
     def fake_execute_bisect(root: Path, upper_spec: str, *, on_start=None, on_step=None, **kwargs):
         if on_start is not None:
-            on_start(outcome.baseline_version, outcome.upper_version, tmp_path)
+            on_start(outcome.agent_name, outcome.baseline_version, outcome.upper_version, tmp_path)
         if on_step is not None:
             for step in outcome.steps:
                 on_step(step)
@@ -71,6 +75,63 @@ def test_bisect_first_bad_found_prints_report_and_exits_two(
     assert "0.151.0" in result.stdout
     assert f".qualock/results/{outcome.bisect_id}/" in result.stdout
     assert result.exit_code == 2
+
+
+def test_bisect_claude_first_bad_found_prints_report_and_exits_two(
+    tmp_path: Path, monkeypatch
+) -> None:
+    steps = (
+        BisectStep(version="2.1.261", qualification_id="q1", verdict=Verdict.BLOCK),
+    )
+    outcome = make_outcome(
+        BisectStop.FIRST_BAD_FOUND,
+        steps=steps,
+        last_known_good="2.1.260",
+        first_bad="2.1.261",
+        baseline_version="2.1.260",
+        upper_version="2.1.263",
+        agent_name="claude",
+    )
+    result = invoke_outcome(tmp_path, monkeypatch, outcome, "2.1.263")
+
+    assert "Baseline: Claude Code 2.1.260" in result.stdout
+    assert "Searching through: 2.1.263" in result.stdout
+    assert "2.1.261  BLOCK" in result.stdout
+    assert "FIRST BAD RELEASE" in result.stdout
+    assert "Claude Code 2.1.261" in result.stdout
+    assert "Last known good: Claude Code 2.1.260" in result.stdout
+    assert "Codex" not in result.stdout
+    assert result.exit_code == 2
+
+
+def test_bisect_claude_no_bad_found_prints_summary_and_exits_zero(
+    tmp_path: Path, monkeypatch
+) -> None:
+    steps = (
+        BisectStep(version="2.1.261", qualification_id="q1", verdict=Verdict.PASS),
+        BisectStep(version="2.1.263", qualification_id="q2", verdict=Verdict.PASS),
+    )
+    outcome = make_outcome(
+        BisectStop.NO_BAD_FOUND,
+        steps=steps,
+        last_known_good="2.1.263",
+        upper_version="2.1.263",
+        agent_name="claude",
+    )
+    result = invoke_outcome(tmp_path, monkeypatch, outcome, "2.1.263")
+
+    assert "No confirmed bad release found through Claude Code 2.1.263." in result.stdout
+    assert "Last known good: Claude Code 2.1.263" in result.stdout
+    assert "Codex" not in result.stdout
+    assert result.exit_code == 0
+
+
+def test_print_bisect_start_renders_agent_display_name(tmp_path: Path, capsys) -> None:
+    cli._print_bisect_start("claude", "2.1.260", "2.1.263", tmp_path)
+
+    captured = capsys.readouterr()
+    assert "Baseline: Claude Code 2.1.260" in captured.out
+    assert "Searching through: 2.1.263" in captured.out
 
 
 def test_bisect_no_bad_found_prints_summary_and_exits_zero(
@@ -155,6 +216,38 @@ def test_bisect_stale_baseline_exits_four(tmp_path: Path, monkeypatch) -> None:
     )
     result = runner.invoke(cli.app, ["bisect", "0.153.0"])
     assert result.exit_code == 4
+
+
+def test_bisect_antigravity_unsupported_exits_three_with_literal_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "execute_bisect",
+        lambda root, upper_spec, **kwargs: (_ for _ in ()).throw(
+            CommandError("version bisect is unavailable for Antigravity")
+        ),
+    )
+    result = runner.invoke(cli.app, ["bisect", "0.153.0"])
+    assert result.exit_code == 3
+    assert "version bisect is unavailable for Antigravity" in result.stdout
+
+
+def test_bisect_release_discovery_error_exits_one_with_literal_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "execute_bisect",
+        lambda root, upper_spec, **kwargs: (_ for _ in ()).throw(
+            ReleaseDiscoveryError("catalog unavailable")
+        ),
+    )
+    result = runner.invoke(cli.app, ["bisect", "0.153.0"])
+    assert result.exit_code == 1
+    assert "catalog unavailable" in result.stdout
 
 
 def test_bisect_codex_resolve_error_exits_one_with_literal_text(
