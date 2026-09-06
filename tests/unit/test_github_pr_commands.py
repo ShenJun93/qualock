@@ -211,6 +211,39 @@ def test_trusted_pr_agent_rejects_antigravity(tmp_path: Path) -> None:
         _trusted_pr_agent(tmp_path)
 
 
+def test_trusted_pr_agent_rejects_missing_project(tmp_path: Path) -> None:
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
+def test_trusted_pr_agent_rejects_corrupt_config(tmp_path: Path) -> None:
+    _setup_trusted_project(tmp_path, config_agent="codex", baseline_agent="codex")
+    (project_dir(tmp_path) / "config.yaml").write_text("not: [valid, yaml", encoding="utf-8")
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
+def test_trusted_pr_agent_rejects_missing_baseline(tmp_path: Path) -> None:
+    _write_trusted_project(tmp_path, agent="codex")
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
+def test_trusted_pr_agent_rejects_corrupt_baseline(tmp_path: Path) -> None:
+    _setup_trusted_project(tmp_path, config_agent="codex", baseline_agent="codex")
+    (project_dir(tmp_path) / "baseline.lock").write_text("not-json-at-all", encoding="utf-8")
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
+def test_trusted_pr_agent_rejects_invalid_trusted_version(tmp_path: Path) -> None:
+    _write_trusted_project(tmp_path, agent="codex")
+    lock = _build_trusted_lock(tmp_path, agent="codex", version="not-a-version")
+    write_baseline_lock(project_dir(tmp_path) / "baseline.lock", lock)
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
 # --- proposed-lock validation -----------------------------------------------
 
 
@@ -429,6 +462,10 @@ def test_not_applicable_prepare_never_reads_baseline(
 ) -> None:
     context = _context(PrClassification.NOT_APPLICABLE)
     monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    trusted_agent_calls: list[Path] = []
+    monkeypatch.setattr(
+        commands, "_trusted_pr_agent", lambda root: trusted_agent_calls.append(root)
+    )
     source = FakeSource()
 
     outcome = prepare_pr(
@@ -445,6 +482,7 @@ def test_not_applicable_prepare_never_reads_baseline(
     assert outcome.terminal_report is not None
     assert outcome.terminal_report.verdict is PrReportVerdict.NOT_APPLICABLE
     assert source.read_calls == []
+    assert trusted_agent_calls == []
 
 
 def test_invalid_scope_prepare_never_reads_baseline(
@@ -452,6 +490,10 @@ def test_invalid_scope_prepare_never_reads_baseline(
 ) -> None:
     context = _context(PrClassification.INVALID_SCOPE)
     monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    trusted_agent_calls: list[Path] = []
+    monkeypatch.setattr(
+        commands, "_trusted_pr_agent", lambda root: trusted_agent_calls.append(root)
+    )
     source = FakeSource()
 
     outcome = prepare_pr(
@@ -469,6 +511,7 @@ def test_invalid_scope_prepare_never_reads_baseline(
     assert outcome.terminal_report.verdict is PrReportVerdict.INCOMPLETE
     assert PrReasonCode.INVALID_SCOPE in outcome.terminal_report.reason_codes
     assert source.read_calls == []
+    assert trusted_agent_calls == []
 
 
 def test_codex_upgrade_prepare_returns_agent_and_proposed_bytes(
@@ -589,6 +632,197 @@ def test_antigravity_prepare_is_unsupported_before_proposed_head_read(
     assert PrReasonCode.UNSUPPORTED_AGENT in outcome.terminal_report.reason_codes
     assert outcome.terminal_report.agent is None
     assert source.read_calls == []
+
+
+def test_missing_project_prepare_is_stale_before_proposed_head_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    source = FakeSource()
+
+    outcome = prepare_pr(
+        tmp_path,
+        tmp_path / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent is None
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert PrReasonCode.TRUSTED_BASELINE_STALE in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent is None
+    assert source.read_calls == []
+
+
+def test_missing_baseline_prepare_is_stale_before_proposed_head_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _write_trusted_project(tmp_path, agent="codex")
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    source = FakeSource()
+
+    outcome = prepare_pr(
+        tmp_path,
+        tmp_path / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent is None
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert PrReasonCode.TRUSTED_BASELINE_STALE in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent is None
+    assert source.read_calls == []
+
+
+def test_corrupt_config_prepare_is_stale_before_proposed_head_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _setup_trusted_project(tmp_path, config_agent="codex", baseline_agent="codex")
+    (project_dir(tmp_path) / "config.yaml").write_text("not: [valid, yaml", encoding="utf-8")
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    source = FakeSource()
+
+    outcome = prepare_pr(
+        tmp_path,
+        tmp_path / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent is None
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert PrReasonCode.TRUSTED_BASELINE_STALE in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent is None
+    assert source.read_calls == []
+
+
+def test_corrupt_baseline_prepare_is_stale_before_proposed_head_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _setup_trusted_project(tmp_path, config_agent="codex", baseline_agent="codex")
+    (project_dir(tmp_path) / "baseline.lock").write_text("not-json-at-all", encoding="utf-8")
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    source = FakeSource()
+
+    outcome = prepare_pr(
+        tmp_path,
+        tmp_path / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent is None
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert PrReasonCode.TRUSTED_BASELINE_STALE in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent is None
+    assert source.read_calls == []
+
+
+def test_invalid_trusted_version_prepare_is_stale_before_proposed_head_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _write_trusted_project(tmp_path, agent="codex")
+    lock = _build_trusted_lock(tmp_path, agent="codex", version="not-a-version")
+    write_baseline_lock(project_dir(tmp_path) / "baseline.lock", lock)
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    source = FakeSource()
+
+    outcome = prepare_pr(
+        tmp_path,
+        tmp_path / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.context.agent is None
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert PrReasonCode.TRUSTED_BASELINE_STALE in outcome.terminal_report.reason_codes
+    assert outcome.terminal_report.agent is None
+    assert source.read_calls == []
+
+
+def test_prepare_preserves_stale_reason_on_second_validation_pass(
+    monkeypatch: pytest.MonkeyPatch, project_fixture: ProjectFixture
+) -> None:
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    raw = project_fixture.proposed_lock_json()
+    source = FakeSource(read_result=raw)
+
+    real_trusted_pr_agent = commands._trusted_pr_agent
+    calls = {"n": 0}
+
+    def flaky(root: Path) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_trusted_pr_agent(root)
+        raise commands.BaselineStaleError("re-observed staleness on second pass")
+
+    monkeypatch.setattr(commands, "_trusted_pr_agent", flaky)
+
+    outcome = prepare_pr(
+        project_fixture.root,
+        project_fixture.root / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert outcome.terminal_report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.TRUSTED_BASELINE_STALE in outcome.terminal_report.reason_codes
+    assert PrReasonCode.INVALID_PROPOSED_LOCK not in outcome.terminal_report.reason_codes
+
+
+def test_prepare_preserves_unsupported_reason_on_second_validation_pass(
+    monkeypatch: pytest.MonkeyPatch, project_fixture: ProjectFixture
+) -> None:
+    context = _context(PrClassification.UPGRADE)
+    monkeypatch.setattr(commands, "prepare_pr_context", lambda *a, **kw: context)
+    raw = project_fixture.proposed_lock_json()
+    source = FakeSource(read_result=raw)
+
+    real_trusted_pr_agent = commands._trusted_pr_agent
+    calls = {"n": 0}
+
+    def flaky(root: Path) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_trusted_pr_agent(root)
+        raise commands.UnsupportedPrAgentError("re-observed unsupported agent on second pass")
+
+    monkeypatch.setattr(commands, "_trusted_pr_agent", flaky)
+
+    outcome = prepare_pr(
+        project_fixture.root,
+        project_fixture.root / "event.json",
+        source=source,
+        producer_run_id=1,
+        expected_repository="owner/repo",
+    )
+
+    assert outcome.proposed_lock is None
+    assert outcome.terminal_report is not None
+    assert outcome.terminal_report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.UNSUPPORTED_AGENT in outcome.terminal_report.reason_codes
+    assert PrReasonCode.INVALID_PROPOSED_LOCK not in outcome.terminal_report.reason_codes
 
 
 def test_invalid_proposed_lock_prepare_preserves_established_agent(
