@@ -304,9 +304,10 @@ That runtime failure has since been root-caused and fixed locally without authen
 The runner mounts the host root read-only, which also made the inherited `/proc` read-only;
 Antigravity's terminal sandbox re-execs itself into a nested user namespace, and the
 required writes to `/proc/self/{setgroups,uid_map,gid_map}` therefore failed `EROFS`. The
-runner now mounts a private `procfs`, which restores those writes while leaving the host
-root read-only and every other mount unchanged. A local Bubblewrap reproducer confirms both
-the failure and the fix, and confirms the Task 5 isolation invariants still hold.
+runner now mounts a private `procfs` in a private PID namespace, which restores those writes
+while leaving the host root read-only and every other mount unchanged, and keeps host
+processes out of the sandbox's view. A local Bubblewrap reproducer confirms both the failure
+and the fix, and confirms the Task 5 isolation invariants still hold.
 
 The fix has **not** been revalidated against a live account. Until an authorized
 authenticated rerun passes, no runtime claim above the mount layer is proven: permission

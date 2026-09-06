@@ -76,6 +76,12 @@ class LinuxHostRunner:
         argv = [
             self.bwrap_executable,
             "--unshare-user",
+            # A private PID namespace keeps the private procfs below from
+            # exposing same-uid host processes: without it, host
+            # /proc/<pid> controls such as oom_score_adj become writable.
+            # It also makes the sandbox root the namespace init, so the
+            # process-tree timeout reaps every descendant structurally.
+            "--unshare-pid",
             "--ro-bind",
             "/",
             "/",
@@ -105,7 +111,8 @@ class LinuxHostRunner:
             # which breaks the nested user namespace Antigravity's own terminal
             # sandbox re-execs into: writing /proc/self/{setgroups,uid,gid}_map
             # fails EROFS.  A private procfs restores those writes without
-            # making any host path writable.
+            # making any host path writable, and reflects the unshared PID
+            # namespace above rather than the host process table.
             "--proc",
             "/proc",
             "--dev",
