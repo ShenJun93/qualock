@@ -93,7 +93,7 @@ def test_schedule_enable_output_is_exact(
         "Backend: systemd user timer\n"
         f"Logs: {outcome.log_path}\n\n"
         "The scheduled job only runs `qualock monitor`.\n"
-        "It does not update Codex or change your baseline.\n"
+        "It does not update the configured agent or change your baseline.\n"
     )
 
 
