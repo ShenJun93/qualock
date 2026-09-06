@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 import textwrap
 
 import pytest
@@ -442,6 +443,64 @@ def test_producer_model_secret_is_isolated_to_a_single_step(
 def test_reporter_workflow_contains_no_model_secret_names() -> None:
     for name in MODEL_SECRET_NAMES:
         assert name not in REPORTER_WORKFLOW
+
+
+def _claude_precedence_script(doc: dict[str, object]) -> str:
+    run = _named_step(doc, "Qualify upgrade (claude)")["run"]
+    assert isinstance(run, str)
+    return run[: run.index("qualock github qualify-pr")]
+
+
+def _run_claude_precedence(
+    script: str,
+    *,
+    auth_token: str,
+    api_key: str,
+    oauth_token: str,
+) -> dict[str, str]:
+    probe = script + (
+        'printf \'AUTH=%s\\n\' "${ANTHROPIC_AUTH_TOKEN:-<unset>}"\n'
+        'printf \'API=%s\\n\' "${ANTHROPIC_API_KEY:-<unset>}"\n'
+        'printf \'OAUTH=%s\\n\' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}"\n'
+        'printf \'AVAILABLE=%s\\n\' "$credential_available"\n'
+    )
+    env = dict(os.environ)
+    env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+    env["ANTHROPIC_API_KEY"] = api_key
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+    result = subprocess.run(
+        ["bash", "-c", probe], env=env, capture_output=True, text=True, check=True
+    )
+    return dict(line.split("=", 1) for line in result.stdout.splitlines())
+
+
+@pytest.mark.parametrize(
+    ("auth_token", "api_key", "oauth_token", "expected"),
+    [
+        ("auth-val", "api-val", "oauth-val", {
+            "AUTH": "auth-val", "API": "<unset>", "OAUTH": "<unset>", "AVAILABLE": "true",
+        }),
+        ("", "api-val", "oauth-val", {
+            "AUTH": "<unset>", "API": "api-val", "OAUTH": "<unset>", "AVAILABLE": "true",
+        }),
+        ("", "", "oauth-val", {
+            "AUTH": "<unset>", "API": "<unset>", "OAUTH": "oauth-val", "AVAILABLE": "true",
+        }),
+        ("", "", "", {
+            "AUTH": "<unset>", "API": "<unset>", "OAUTH": "<unset>", "AVAILABLE": "false",
+        }),
+    ],
+)
+def test_producer_claude_credential_precedence_unsets_lower_priority_variables(
+    auth_token: str, api_key: str, oauth_token: str, expected: dict[str, str]
+) -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    script = _claude_precedence_script(doc)
+    outputs = _run_claude_precedence(
+        script, auth_token=auth_token, api_key=api_key, oauth_token=oauth_token
+    )
+    assert outputs == expected
 
 
 def test_producer_claude_step_never_writes_secret_to_github_output() -> None:

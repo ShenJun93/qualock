@@ -117,13 +117,13 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{{{ secrets.QUALOCK_CLAUDE_CODE_OAUTH_TOKEN }}}}
         run: |
           set +x
-          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-            unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+          if [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
+            unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
             credential_available=true
           elif [ -n "$ANTHROPIC_API_KEY" ]; then
-            unset ANTHROPIC_AUTH_TOKEN
+            unset CLAUDE_CODE_OAUTH_TOKEN
             credential_available=true
-          elif [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
+          elif [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
             credential_available=true
           else
             unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
