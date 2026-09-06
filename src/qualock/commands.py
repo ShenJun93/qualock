@@ -85,8 +85,7 @@ def _default_resolver(agent_name: str) -> Resolver:
     if agent_name == "claude":
         return ClaudeResolver(cache)
     if agent_name == "antigravity":
-        override = os.environ.get("QUALOCK_ANTIGRAVITY_BIN")
-        return AntigravityResolver(Path(override) if override else None)
+        return AntigravityResolver.from_environment()
     raise CommandError(f"unsupported agent: {agent_name}")
 
 

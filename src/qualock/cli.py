@@ -143,8 +143,7 @@ def init_command() -> None:
 
 
 def _antigravity_binary_available() -> bool:
-    override = os.environ.get("QUALOCK_ANTIGRAVITY_BIN")
-    resolver = AntigravityResolver(Path(override) if override else None)
+    resolver = AntigravityResolver.from_environment()
     try:
         resolver.locate()
     except AntigravityResolveError:

@@ -191,6 +191,36 @@ def test_doctor_antigravity_fails_when_bwrap_missing(tmp_path: Path, monkeypatch
     assert "Docker" not in result.stdout
 
 
+def test_doctor_antigravity_uses_shared_resolver_construction(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls: list[None] = []
+
+    class FakeResolver:
+        def locate(self) -> Path:
+            return Path("/usr/bin/agy")
+
+    def fake_from_environment() -> FakeResolver:
+        calls.append(None)
+        return FakeResolver()
+
+    monkeypatch.chdir(tmp_path)
+    config = SimpleNamespace(agent=SimpleNamespace(name="antigravity"))
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (config, [object()]))
+    monkeypatch.setattr("qualock.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("qualock.cli.platform.system", lambda: "Linux")
+    monkeypatch.setattr(
+        "qualock.cli.AntigravityResolver.from_environment",
+        staticmethod(fake_from_environment),
+    )
+    monkeypatch.setattr("qualock.cli.DockerRunner", _doctor_docker_should_not_be_constructed)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert calls == [None]
+
+
 def test_doctor_antigravity_fails_when_binary_missing_or_rejected(tmp_path: Path, monkeypatch) -> None:
     from qualock.agents.antigravity_resolver import AntigravityResolveError
 
