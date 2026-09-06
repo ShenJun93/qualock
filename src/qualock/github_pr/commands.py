@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Protocol
 
 from packaging.version import InvalidVersion, Version
-from platformdirs import user_cache_dir
 from pydantic import ValidationError
 
 import qualock
+from qualock.agents.claude_resolver import ClaudeResolver
+from qualock.agents.releases import default_agent_cache_root
 from qualock.agents.resolver import CodexResolver
 from qualock.baseline.io import BaselineStaleError, assert_suite_fresh, read_baseline_lock
 from qualock.baseline.models import BaselineLock
@@ -147,8 +148,13 @@ def validate_proposed_lock(root: Path, raw: bytes) -> CandidateRequest:
     )
 
 
-def _default_resolver() -> CodexResolver:
-    return CodexResolver(Path(user_cache_dir("qualock")))
+def _default_pr_resolver(agent_name: PrAgent) -> Resolver:
+    cache = default_agent_cache_root()
+    if agent_name == "codex":
+        return CodexResolver(cache)
+    if agent_name == "claude":
+        return ClaudeResolver(cache)
+    raise UnsupportedPrAgentError(f"unsupported PR qualification agent: {agent_name}")
 
 
 @dataclass(frozen=True)
@@ -255,16 +261,25 @@ def qualify_prepared_pr(
     resolver: Resolver | None = None,
     check_executor: CheckExecutor = execute_check,
 ) -> PullRequestReport:
-    if not credential_available:
-        return incomplete_report(
-            context,
-            reason_codes=(PrReasonCode.CREDENTIAL_UNAVAILABLE,),
-            credential_unavailable=True,
-        )
-    resolver = resolver or _default_resolver()
     try:
         candidate = validate_proposed_lock(root, proposed_lock)
-        result = check_executor(root, f"codex@{candidate.version}", resolver=resolver)
+        if context.agent != candidate.agent_name:
+            raise PrValidationError("context agent does not match trusted candidate agent")
+        if not credential_available:
+            return incomplete_report(
+                context,
+                reason_codes=(PrReasonCode.CREDENTIAL_UNAVAILABLE,),
+                credential_unavailable=True,
+            )
+        active_resolver = resolver or _default_pr_resolver(candidate.agent_name)
+        resolved = active_resolver.resolve(candidate.version)
+        if resolved.name != candidate.agent_name or resolved.sha256 != candidate.binary_sha256:
+            raise PrValidationError("resolved agent binary does not match trusted candidate")
+        result = check_executor(
+            root,
+            f"{candidate.agent_name}@{candidate.version}",
+            resolver=active_resolver,
+        )
     except BaselineStaleError:
         return incomplete_report(context, reason_codes=(PrReasonCode.TRUSTED_BASELINE_STALE,))
     except UnsupportedPrAgentError:

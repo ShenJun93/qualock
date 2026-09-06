@@ -10,6 +10,8 @@ import yaml
 
 import qualock
 from qualock.agents.base import AgentBinary
+from qualock.agents.claude_resolver import ClaudeResolver
+from qualock.agents.resolver import CodexResolver
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
 from qualock.config.models import AgentConfig, QualockConfig
@@ -41,17 +43,38 @@ _DEFAULT_CANDIDATE_VERSION = "0.152.0"
 
 
 class RecordingResolver:
-    def __init__(self) -> None:
+    def __init__(self, *, name: str = "codex", sha256: str = "a" * 64) -> None:
         self.resolve_calls: list[str] = []
+        self._name = name
+        self._sha256 = sha256
 
     def resolve(self, version: str) -> AgentBinary:
         self.resolve_calls.append(version)
         return AgentBinary(
-            name="codex",
+            name=self._name,
             version=version,
-            path=Path(f"/fake/{version}/codex"),
-            sha256=f"sha-{version}",
+            path=Path(f"/fake/{version}/{self._name}"),
+            sha256=self._sha256,
         )
+
+
+class FakeResolver:
+    def __init__(
+        self,
+        binary: AgentBinary | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self.resolve_calls: list[str] = []
+        self._binary = binary
+        self._error = error
+
+    def resolve(self, version: str) -> AgentBinary:
+        self.resolve_calls.append(version)
+        if self._error is not None:
+            raise self._error
+        assert self._binary is not None
+        return self._binary
 
 
 def _write_trusted_project(root: Path, *, agent: str = "codex") -> None:
@@ -130,7 +153,7 @@ class ProjectFixture:
     resolver: RecordingResolver = field(init=False)
 
     def __post_init__(self) -> None:
-        self.resolver = RecordingResolver()
+        self.resolver = RecordingResolver(name=self.agent)
         _setup_trusted_project(
             self.root,
             config_agent=self.agent,
@@ -875,7 +898,7 @@ def test_upgrade_prepare_fixed_file_read_failure_is_incomplete(
 def test_qualify_calls_check_executor_exactly_once_with_trusted_root_and_candidate(
     project_fixture: ProjectFixture,
 ) -> None:
-    context = _context(PrClassification.UPGRADE)
+    context = _context(PrClassification.UPGRADE, agent="codex")
     raw = project_fixture.proposed_lock_json()
     calls: list[tuple[Path, str, Any]] = []
 
@@ -912,7 +935,7 @@ def test_qualify_calls_check_executor_exactly_once_with_trusted_root_and_candida
 def test_qualification_verdicts_are_copied_unchanged(
     project_fixture: ProjectFixture, verdict: Verdict, report_verdict: PrReportVerdict
 ) -> None:
-    context = _context(PrClassification.UPGRADE)
+    context = _context(PrClassification.UPGRADE, agent="codex")
     raw = project_fixture.proposed_lock_json()
 
     report = qualify_prepared_pr(
@@ -930,7 +953,7 @@ def test_qualification_verdicts_are_copied_unchanged(
 def test_missing_credential_is_incomplete_without_check(
     project_fixture: ProjectFixture,
 ) -> None:
-    context = _context(PrClassification.UPGRADE)
+    context = _context(PrClassification.UPGRADE, agent="codex")
     raw = project_fixture.proposed_lock_json()
 
     report = qualify_prepared_pr(
@@ -954,7 +977,7 @@ def test_stale_trusted_baseline_is_incomplete_without_candidate_resolve(
     trusted = read_baseline_lock(project_dir(project_fixture.root) / "baseline.lock")
     stale = trusted.model_copy(update={"suite_sha256": "stale-suite-sha"})
     write_baseline_lock(project_dir(project_fixture.root) / "baseline.lock", stale)
-    context = _context(PrClassification.UPGRADE)
+    context = _context(PrClassification.UPGRADE, agent="codex")
     raw = project_fixture.proposed_lock_json()
 
     report = qualify_prepared_pr(
@@ -974,7 +997,7 @@ def test_stale_trusted_baseline_is_incomplete_without_candidate_resolve(
 def test_invalid_proposed_lock_is_incomplete_without_check(
     project_fixture: ProjectFixture,
 ) -> None:
-    context = _context(PrClassification.UPGRADE)
+    context = _context(PrClassification.UPGRADE, agent="codex")
     raw = project_fixture.proposed_lock_json(model_id="a-different-model")
 
     report = qualify_prepared_pr(
@@ -993,7 +1016,7 @@ def test_invalid_proposed_lock_is_incomplete_without_check(
 def test_check_executor_exception_is_incomplete_without_fabricated_id(
     project_fixture: ProjectFixture,
 ) -> None:
-    context = _context(PrClassification.UPGRADE)
+    context = _context(PrClassification.UPGRADE, agent="codex")
     raw = project_fixture.proposed_lock_json()
 
     def check_executor(
@@ -1016,13 +1039,301 @@ def test_check_executor_exception_is_incomplete_without_fabricated_id(
     assert report.qualification_id is None
 
 
+# --- trusted agent resolver allow-list ---------------------------------------
+
+
+def test_default_pr_resolver_builds_codex_resolver_with_shared_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(commands, "default_agent_cache_root", lambda: tmp_path)
+
+    resolver = commands._default_pr_resolver("codex")
+
+    assert isinstance(resolver, CodexResolver)
+    assert resolver.cache_root == tmp_path
+
+
+def test_default_pr_resolver_builds_claude_resolver_with_shared_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(commands, "default_agent_cache_root", lambda: tmp_path)
+
+    resolver = commands._default_pr_resolver("claude")
+
+    assert isinstance(resolver, ClaudeResolver)
+    assert resolver.cache_root == tmp_path
+
+
+def test_commands_module_never_imports_or_references_antigravity_or_agy() -> None:
+    source = Path(commands.__file__).read_text(encoding="utf-8")
+    for forbidden in ("AntigravityResolver", "AntigravityAdapter", "agy"):
+        assert forbidden not in source
+
+
+# --- agent-aware candidate identity and routing ------------------------------
+
+
+def test_codex_candidate_routes_exactly_one_codex_check(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = project_fixture.proposed_lock_json()
+    resolver = FakeResolver(
+        AgentBinary(
+            name="codex",
+            version=project_fixture.candidate_version,
+            path=Path("/fake/codex"),
+            sha256="a" * 64,
+        )
+    )
+    calls: list[tuple[Path, str, Any]] = []
+
+    def check_executor(
+        root: Path, candidate_spec: str, *, resolver: Any = None
+    ) -> QualificationResult:
+        calls.append((root, candidate_spec, resolver))
+        return _qualification_result(Verdict.PASS)
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=check_executor,
+    )
+
+    assert resolver.resolve_calls == [project_fixture.candidate_version]
+    assert calls == [
+        (project_fixture.root, f"codex@{project_fixture.candidate_version}", resolver)
+    ]
+    assert report.verdict is PrReportVerdict.PASS
+
+
+def test_claude_candidate_routes_exactly_one_claude_check(
+    claude_project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="claude")
+    raw = claude_project_fixture.proposed_lock_json()
+    resolver = FakeResolver(
+        AgentBinary(
+            name="claude",
+            version=claude_project_fixture.candidate_version,
+            path=Path("/fake/claude"),
+            sha256="a" * 64,
+        )
+    )
+    calls: list[tuple[Path, str, Any]] = []
+
+    def check_executor(
+        root: Path, candidate_spec: str, *, resolver: Any = None
+    ) -> QualificationResult:
+        calls.append((root, candidate_spec, resolver))
+        return _qualification_result(Verdict.PASS)
+
+    report = qualify_prepared_pr(
+        claude_project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=check_executor,
+    )
+
+    assert resolver.resolve_calls == [claude_project_fixture.candidate_version]
+    assert calls == [
+        (
+            claude_project_fixture.root,
+            f"claude@{claude_project_fixture.candidate_version}",
+            resolver,
+        )
+    ]
+    assert report.verdict is PrReportVerdict.PASS
+
+
+def test_context_agent_mismatch_is_invalid_proposed_lock_without_resolve(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="claude")
+    raw = project_fixture.proposed_lock_json()
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=project_fixture.resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert project_fixture.resolver.resolve_calls == []
+
+
+def test_context_agent_none_is_invalid_proposed_lock_without_resolve(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE)
+    raw = project_fixture.proposed_lock_json()
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=project_fixture.resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert project_fixture.resolver.resolve_calls == []
+
+
+def test_resolved_binary_wrong_name_is_invalid_proposed_lock_without_check(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = project_fixture.proposed_lock_json()
+    resolver = FakeResolver(
+        AgentBinary(
+            name="claude",
+            version=project_fixture.candidate_version,
+            path=Path("/fake/claude"),
+            sha256="a" * 64,
+        )
+    )
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert resolver.resolve_calls == [project_fixture.candidate_version]
+
+
+def test_resolved_binary_wrong_sha_is_invalid_proposed_lock_without_check(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = project_fixture.proposed_lock_json()
+    resolver = FakeResolver(
+        AgentBinary(
+            name="codex",
+            version=project_fixture.candidate_version,
+            path=Path("/fake/codex"),
+            sha256="f" * 64,
+        )
+    )
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert resolver.resolve_calls == [project_fixture.candidate_version]
+
+
+def test_resolver_exception_is_qualification_failed(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = project_fixture.proposed_lock_json()
+    resolver = FakeResolver(error=RuntimeError("resolver blew up"))
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.QUALIFICATION_FAILED in report.reason_codes
+
+
+def test_missing_credential_after_pure_validation_makes_no_resolver_or_check_calls(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = project_fixture.proposed_lock_json()
+    resolver = FakeResolver(error=AssertionError("resolver must not run"))
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=False,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.CREDENTIAL_UNAVAILABLE in report.reason_codes
+    assert resolver.resolve_calls == []
+
+
+def test_cross_agent_proposed_lock_with_missing_credential_is_invalid_proposed_lock(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = project_fixture.proposed_lock_json(agent_name="claude")
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=False,
+        resolver=project_fixture.resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert project_fixture.resolver.resolve_calls == []
+
+
+def test_malformed_proposed_lock_with_missing_credential_is_invalid_proposed_lock(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        b"not-json-at-all",
+        credential_available=False,
+        resolver=project_fixture.resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert project_fixture.resolver.resolve_calls == []
+
+
 # --- artifact write failure propagation --------------------------------------
 
 
 def test_report_write_failure_propagates_and_context_remains_truthful(
     project_fixture: ProjectFixture, tmp_path: Path
 ) -> None:
-    context = _context(PrClassification.UPGRADE)
+    context = _context(PrClassification.UPGRADE, agent="codex")
     raw = project_fixture.proposed_lock_json()
 
     def check_executor(
