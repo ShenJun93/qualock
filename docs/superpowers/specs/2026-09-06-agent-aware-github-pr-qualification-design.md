@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-06
 **Base:** `main@ad0a568e629c29832607d5003315de62edfbe3bc`
-**Status:** In-chat design approved; written spec awaiting user approval.
+**Status:** In-chat design approved; approved for implementation planning.
 
 ## Goal
 
