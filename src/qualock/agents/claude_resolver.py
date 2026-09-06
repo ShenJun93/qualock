@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import platform
 import re
@@ -14,6 +15,7 @@ class ClaudeResolveError(RuntimeError):
 
 
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+_STABLE_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 _MIN_VALIDATED_VERSION = (2, 1, 260)
 _HELP_OPTION_RE = re.compile(r"(?<!\S)(--?[A-Za-z][A-Za-z0-9-]*)(?=[,\s]|$)")
@@ -96,6 +98,25 @@ class ClaudeResolver:
             raise ClaudeResolveError(f"unexpected Claude version from npm: {version!r}")
         return version
 
+    def stable_versions(self) -> tuple[str, ...]:
+        result = run_process(
+            [self.npm_executable, "view", "@anthropic-ai/claude-code", "versions", "--json"],
+            timeout_seconds=30,
+        )
+        if result.timed_out or result.exit_code != 0:
+            raise ClaudeResolveError(
+                result.stderr.strip() or "failed to resolve Claude versions"
+            )
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ClaudeResolveError("unexpected Claude versions from npm") from exc
+        if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+            raise ClaudeResolveError("unexpected Claude versions from npm")
+
+        stable = {item for item in payload if _STABLE_VERSION_RE.fullmatch(item)}
+        return tuple(sorted(stable, key=_stable_version_key))
+
     def _validate_binary_contract(self, binary: Path, version: str) -> None:
         if _core_version(version) < _MIN_VALIDATED_VERSION:
             raise ClaudeResolveError(
@@ -176,3 +197,11 @@ class ClaudeResolver:
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ClaudeResolveError("Claude binary changed during contract validation")
         return AgentBinary(name="claude", version=version, path=binary, sha256=digest)
+
+
+def _stable_version_key(version: str) -> tuple[int, int, int]:
+    match = _STABLE_VERSION_RE.fullmatch(version)
+    if match is None:
+        raise ValueError(f"not a stable version: {version!r}")
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch)

@@ -325,3 +325,49 @@ def test_missing_binary_after_install_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ClaudeResolveError, match="native binary missing"):
         resolver.resolve("2.1.260")
+
+
+def test_stable_versions_filters_dedupes_and_sorts_numerically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed_command: list[str] = []
+
+    def fake_run(argv: list[str], *, timeout_seconds: int) -> ProcessResult:
+        observed_command.extend(argv)
+        return ProcessResult(
+            0,
+            '["2.1.260","2.1.9","2.1.10","2.1.9","2.1.11-beta.1",'
+            '"2.1.12+build.7","2.2.0-rc.1"]',
+            "",
+            0.01,
+            False,
+        )
+
+    monkeypatch.setattr("qualock.agents.claude_resolver.run_process", fake_run)
+    resolver = ClaudeResolver(tmp_path, npm_executable="npm-test")
+
+    versions = resolver.stable_versions()
+
+    assert versions == ("2.1.9", "2.1.10", "2.1.260")
+    assert observed_command == [
+        "npm-test", "view", "@anthropic-ai/claude-code", "versions", "--json"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        (ProcessResult(None, "", "registry timeout", 30.0, True), "registry timeout"),
+        (ProcessResult(1, "", "registry failed", 0.02, False), "registry failed"),
+        (ProcessResult(0, "not-json", "", 0.01, False), "unexpected Claude versions"),
+        (ProcessResult(0, '{"0":"2.1.260"}', "", 0.01, False), "unexpected Claude versions"),
+        (ProcessResult(0, '["2.1.260",260]', "", 0.01, False), "unexpected Claude versions"),
+    ],
+)
+def test_stable_versions_rejects_bad_registry_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: ProcessResult, message: str
+) -> None:
+    monkeypatch.setattr("qualock.agents.claude_resolver.run_process", lambda *args, **kwargs: result)
+
+    with pytest.raises(ClaudeResolveError, match=message):
+        ClaudeResolver(tmp_path / "cache", machine="x86_64").stable_versions()
