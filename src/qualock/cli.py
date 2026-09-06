@@ -443,7 +443,7 @@ def _render_schedule_outcome(
             [
                 "",
                 "The scheduled job only runs `qualock monitor`.",
-                "It does not update Codex or change your baseline.",
+                "It does not update the configured agent or change your baseline.",
             ]
         )
     console.print("\n".join(lines) + "\n", end="", markup=False, soft_wrap=True)

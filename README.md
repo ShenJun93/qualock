@@ -137,6 +137,11 @@ Or resolve the current npm release to an exact version before qualification:
 qualock check codex@latest
 ```
 
+Release monitoring supports Codex and Claude Code. QuaLock discovers the
+latest published npm release for the configured agent and qualifies it
+against the trusted baseline. It never updates the agent or changes the
+baseline automatically.
+
 Run the release monitor once, or force a matching newer candidate to run again:
 
 ```bash
@@ -146,7 +151,7 @@ qualock monitor --force
 
 The monitor:
 
-- checks npm metadata for the newest Codex version without downloading it first;
+- checks npm metadata for the newest release of the configured agent without downloading it first;
 - does nothing expensive when latest is not newer than the baseline;
 - qualifies a genuinely newer exact version through the same `qualock check` engine;
 - remembers terminal PASS/WARN/BLOCK per fresh baseline so repeated one-shot runs are cheap;
@@ -168,8 +173,9 @@ The default is 09:00 local wall-clock time. Windows uses the current-user Task
 Scheduler, Linux uses `systemd --user`, and macOS uses a LaunchAgent. This needs
 no admin/root access and uses no QuaLock daemon, cron fallback, shell wrapper,
 LaunchDaemon, or arbitrary scheduled command. The OS trigger starts only the
-fixed QuaLock runner, and that runner only executes `qualock monitor`. It never
-updates Codex or changes or rebuilds the baseline.
+fixed QuaLock runner, and that runner only executes the same agent-aware
+`qualock monitor`, so scheduled monitoring supports Codex and Claude Code
+only. It never updates the agent or changes or rebuilds the baseline.
 
 Only `PATH` is captured for sparse scheduler environments; credentials and other
 environment variables are not persisted. Logs live under the per-user
@@ -242,8 +248,9 @@ qualock check antigravity@1.1.28
 `QUALOCK_ANTIGRAVITY_BIN` is only a path override; when it is unset QuaLock falls back to
 `agy` on `PATH`. QuaLock does not download, install, or discover Antigravity releases, so
 both sides of a check must be binaries that already exist locally. Antigravity is
-supported for `baseline`, `check`, and `doctor`. `qualock bisect`, `qualock monitor`, and
-the GitHub PR workflow remain Codex-only.
+supported for `baseline`, `check`, and `doctor`. `qualock monitor` and scheduled
+monitoring are unavailable for Antigravity because QuaLock does not discover
+Antigravity releases. `qualock bisect` and the GitHub PR workflow remain Codex-only.
 
 `qualock doctor` reads the project's `.qualock/config.yaml` and checks prerequisites for
 whichever agent the project is configured for. For a project configured for `codex` or

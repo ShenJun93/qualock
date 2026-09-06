@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from qualock.commands import CommandError
 from qualock.release_monitor.commands import MonitorPreflight
 from qualock.release_monitor.state import project_key
 from qualock.scheduler.backends import (
@@ -185,6 +186,66 @@ def test_enable_orders_preflight_before_native_mutation(
     assert outcome.status is ScheduleStatus.ENABLED
     assert outcome.registration is not None
     assert outcome.registration.path_env == os.defpath
+
+
+def test_enable_accepts_claude_monitor_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    backend = FakeBackend(events, final_state=NativeScheduleState.MATCHING)
+    store = MemoryRegistrationStore(events)
+    monkeypatch.setattr(
+        "qualock.scheduler.commands.monitor_preflight",
+        lambda root: (
+            events.append("preflight")
+            or MonitorPreflight("claude", "2.1.260", "f" * 64)
+        ),
+    )
+
+    outcome = enable_schedule(
+        tmp_path,
+        backend=backend,
+        store=store,
+        executable=existing_python(tmp_path),
+        home=tmp_path,
+        environ={},
+        now=lambda: datetime(2026, 9, 6, tzinfo=UTC),
+    )
+
+    assert outcome.status is ScheduleStatus.ENABLED
+    assert events == ["preflight", "probe", "load", "save", "install", "inspect"]
+
+
+def test_enable_antigravity_preflight_failure_prevents_native_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    backend = FakeBackend(events, final_state=NativeScheduleState.MATCHING)
+    store = MemoryRegistrationStore(events)
+
+    def fail_preflight(root: Path) -> MonitorPreflight:
+        del root
+        raise CommandError(
+            "release monitor is unavailable for Antigravity because "
+            "QuaLock does not discover Antigravity releases"
+        )
+
+    monkeypatch.setattr(
+        "qualock.scheduler.commands.monitor_preflight",
+        fail_preflight,
+    )
+
+    with pytest.raises(CommandError, match="unavailable for Antigravity"):
+        enable_schedule(
+            tmp_path,
+            backend=backend,
+            store=store,
+            executable=existing_python(tmp_path),
+            home=tmp_path,
+            environ={},
+        )
+
+    assert events == []
 
 
 def test_enable_captures_empty_path_and_no_other_environment(tmp_path: Path) -> None:
