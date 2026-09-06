@@ -54,15 +54,37 @@ jobs:
           path: ${{{{ runner.temp }}}}/pr-context.json
           if-no-files-found: error
 
-      - name: Read classification
-        id: classification
+      - name: Plan qualification
+        id: plan
+        env:
+          QUALOCK_CONTEXT: ${{{{ runner.temp }}}}/pr-context.json
+          QUALOCK_PROPOSED_LOCK: ${{{{ runner.temp }}}}/proposed-baseline.lock
+          QUALOCK_REPORT: ${{{{ runner.temp }}}}/pr-report.json
         run: |
-          classification=$(python -c "import json; print(json.load(open('$RUNNER_TEMP/pr-context.json'))['classification'])")
-          echo "value=$classification" >> "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          with open(os.environ["QUALOCK_CONTEXT"], encoding="utf-8") as handle:
+              context = json.load(handle)
+          classification = context["classification"]
+          agent = context.get("agent") or ""
+          ready = (
+              classification == "upgrade"
+              and agent in {{"codex", "claude"}}
+              and Path(os.environ["QUALOCK_PROPOSED_LOCK"]).is_file()
+              and not Path(os.environ["QUALOCK_REPORT"]).is_file()
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"classification={{classification}}\\n")
+              output.write(f"agent={{agent}}\\n")
+              output.write(f"ready={{'true' if ready else 'false'}}\\n")
+          PY
 
       - name: Materialize codex credential
         id: credential
-        if: steps.classification.outputs.value == 'upgrade'
+        if: steps.plan.outputs.ready == 'true' && steps.plan.outputs.agent == 'codex'
         env:
           QUALOCK_CODEX_AUTH_B64: ${{{{ secrets.QUALOCK_CODEX_AUTH_B64 }}}}
         run: |
@@ -76,8 +98,8 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Qualify upgrade
-        if: steps.classification.outputs.value == 'upgrade'
+      - name: Qualify upgrade (codex)
+        if: steps.plan.outputs.ready == 'true' && steps.plan.outputs.agent == 'codex'
         env:
           QUALOCK_CREDENTIAL_AVAILABLE: ${{{{ steps.credential.outputs.available }}}}
         run: |
@@ -86,6 +108,32 @@ jobs:
             --proposed-lock "$RUNNER_TEMP/proposed-baseline.lock" \\
             --report-out "$RUNNER_TEMP/pr-report.json" \\
             --credential-available "$QUALOCK_CREDENTIAL_AVAILABLE"
+
+      - name: Qualify upgrade (claude)
+        if: steps.plan.outputs.ready == 'true' && steps.plan.outputs.agent == 'claude'
+        env:
+          ANTHROPIC_AUTH_TOKEN: ${{{{ secrets.QUALOCK_ANTHROPIC_AUTH_TOKEN }}}}
+          ANTHROPIC_API_KEY: ${{{{ secrets.QUALOCK_ANTHROPIC_API_KEY }}}}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{{{ secrets.QUALOCK_CLAUDE_CODE_OAUTH_TOKEN }}}}
+        run: |
+          set +x
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+            credential_available=true
+          elif [ -n "$ANTHROPIC_API_KEY" ]; then
+            unset ANTHROPIC_AUTH_TOKEN
+            credential_available=true
+          elif [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
+            credential_available=true
+          else
+            unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+            credential_available=false
+          fi
+          qualock github qualify-pr \\
+            --context "$RUNNER_TEMP/pr-context.json" \\
+            --proposed-lock "$RUNNER_TEMP/proposed-baseline.lock" \\
+            --report-out "$RUNNER_TEMP/pr-report.json" \\
+            --credential-available "$credential_available"
 
       - name: Clean up codex credential
         if: always()

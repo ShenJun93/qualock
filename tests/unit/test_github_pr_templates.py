@@ -1,10 +1,21 @@
+import json
+import os
 import re
+import textwrap
 
+import pytest
 import yaml
 
 from qualock.github_pr.templates import PRODUCER_WORKFLOW, REPORTER_WORKFLOW
 
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+MODEL_SECRET_NAMES = (
+    "QUALOCK_CODEX_AUTH_B64",
+    "QUALOCK_ANTHROPIC_AUTH_TOKEN",
+    "QUALOCK_ANTHROPIC_API_KEY",
+    "QUALOCK_CLAUDE_CODE_OAUTH_TOKEN",
+)
 
 FORBIDDEN_SUBSTRINGS = (
     "github.event.pull_request.head.sha }}\n          path:",
@@ -220,3 +231,224 @@ def test_producer_credential_file_chmod_restrictive_after_decode() -> None:
     decode_index = run_script.index("base64 -d")
     chmod_index = run_script.index('chmod 600 "$HOME/.codex/auth.json"')
     assert chmod_index > decode_index
+
+
+def _plan_step(doc: dict[str, object]) -> dict[str, object]:
+    return next(step for step in _steps(doc) if step.get("id") == "plan")
+
+
+def _named_step(doc: dict[str, object], name: str) -> dict[str, object]:
+    return next(step for step in _steps(doc) if step.get("name") == name)
+
+
+def _plan_script(doc: dict[str, object]) -> str:
+    run = _plan_step(doc)["run"]
+    assert isinstance(run, str)
+    lines = run.splitlines()
+    start = next(i for i, line in enumerate(lines) if "<<'PY'" in line) + 1
+    end = next(i for i, line in enumerate(lines) if line.strip() == "PY")
+    return textwrap.dedent("\n".join(lines[start:end]))
+
+
+def _run_plan_script(
+    script: str,
+    *,
+    classification: str,
+    agent: str | None,
+    lock_exists: bool,
+    report_exists: bool,
+    tmp_path,
+) -> dict[str, str]:
+    context = {"classification": classification}
+    if agent is not None:
+        context["agent"] = agent
+    context_path = tmp_path / "pr-context.json"
+    context_path.write_text(json.dumps(context), encoding="utf-8")
+
+    lock_path = tmp_path / "proposed-baseline.lock"
+    if lock_exists:
+        lock_path.write_text("{}", encoding="utf-8")
+
+    report_path = tmp_path / "pr-report.json"
+    if report_exists:
+        report_path.write_text("{}", encoding="utf-8")
+
+    output_path = tmp_path / "github-output"
+    output_path.write_text("", encoding="utf-8")
+
+    env_overrides = {
+        "QUALOCK_CONTEXT": str(context_path),
+        "QUALOCK_PROPOSED_LOCK": str(lock_path),
+        "QUALOCK_REPORT": str(report_path),
+        "GITHUB_OUTPUT": str(output_path),
+    }
+    saved = dict(os.environ)
+    try:
+        os.environ.update(env_overrides)
+        exec(compile(script, "<plan-step>", "exec"), {})  # noqa: S102
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+    lines = output_path.read_text(encoding="utf-8").splitlines()
+    return dict(line.split("=", 1) for line in lines)
+
+
+def test_producer_plan_step_precedes_every_model_secret_reference() -> None:
+    prepare_index = PRODUCER_WORKFLOW.index("qualock github prepare-pr")
+    plan_index = PRODUCER_WORKFLOW.index("id: plan")
+    assert prepare_index < plan_index
+    for name in MODEL_SECRET_NAMES:
+        assert plan_index < PRODUCER_WORKFLOW.index(name)
+
+
+def test_producer_plan_step_reads_only_fixed_context_report_and_lock_paths() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    env = _plan_step(doc)["env"]
+    assert env == {
+        "QUALOCK_CONTEXT": "${{ runner.temp }}/pr-context.json",
+        "QUALOCK_PROPOSED_LOCK": "${{ runner.temp }}/proposed-baseline.lock",
+        "QUALOCK_REPORT": "${{ runner.temp }}/pr-report.json",
+    }
+
+
+def test_producer_plan_step_emits_exactly_bounded_output_keys() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    script = _plan_script(doc)
+    compile(script, "<plan-step>", "exec")
+    assert script.count("output.write(") == 3
+    for key in ("classification", "agent", "ready"):
+        assert f"{key}=" in script
+
+
+@pytest.mark.parametrize(
+    ("classification", "agent", "lock_exists", "report_exists", "expected_ready"),
+    [
+        ("upgrade", "codex", True, False, True),
+        ("upgrade", "claude", True, False, True),
+        ("not_applicable", "codex", True, False, False),
+        ("invalid_scope", "codex", True, False, False),
+        ("upgrade", "unsupported-agent", True, False, False),
+        ("upgrade", None, True, False, False),
+        ("upgrade", "codex", False, False, False),
+        ("upgrade", "codex", True, True, False),
+    ],
+)
+def test_producer_plan_step_ready_matches_reference_formula(
+    tmp_path, classification: str, agent: str | None, lock_exists: bool,
+    report_exists: bool, expected_ready: bool,
+) -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    script = _plan_script(doc)
+    outputs = _run_plan_script(
+        script,
+        classification=classification,
+        agent=agent,
+        lock_exists=lock_exists,
+        report_exists=report_exists,
+        tmp_path=tmp_path,
+    )
+    assert set(outputs) == {"classification", "agent", "ready"}
+    assert outputs["classification"] == classification
+    assert outputs["agent"] == (agent or "")
+    assert outputs["ready"] == ("true" if expected_ready else "false")
+
+
+def test_producer_codex_credential_condition_requires_plan_ready_and_codex() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    credential_step = next(step for step in _steps(doc) if step.get("id") == "credential")
+    assert (
+        credential_step["if"]
+        == "steps.plan.outputs.ready == 'true' && steps.plan.outputs.agent == 'codex'"
+    )
+
+
+def test_producer_codex_qualify_condition_requires_plan_ready_and_codex() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    step = _named_step(doc, "Qualify upgrade (codex)")
+    assert (
+        step["if"] == "steps.plan.outputs.ready == 'true' && steps.plan.outputs.agent == 'codex'"
+    )
+
+
+def test_producer_claude_qualify_condition_requires_plan_ready_and_claude() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    step = _named_step(doc, "Qualify upgrade (claude)")
+    assert (
+        step["if"] == "steps.plan.outputs.ready == 'true' && steps.plan.outputs.agent == 'claude'"
+    )
+
+
+def test_producer_codex_and_claude_qualification_conditions_are_mutually_exclusive() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    codex_if = _named_step(doc, "Qualify upgrade (codex)")["if"]
+    claude_if = _named_step(doc, "Qualify upgrade (claude)")["if"]
+    assert codex_if != claude_if
+    assert "agent == 'codex'" in codex_if
+    assert "agent == 'claude'" in claude_if
+    assert "agent == 'claude'" not in codex_if
+    assert "agent == 'codex'" not in claude_if
+
+
+def test_producer_unsupported_or_null_agent_enters_neither_secret_bearing_path() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    credential_if = next(step for step in _steps(doc) if step.get("id") == "credential")["if"]
+    codex_if = _named_step(doc, "Qualify upgrade (codex)")["if"]
+    claude_if = _named_step(doc, "Qualify upgrade (claude)")["if"]
+    for condition in (credential_if, codex_if, claude_if):
+        assert "steps.plan.outputs.ready == 'true'" in condition
+        assert "steps.plan.outputs.agent ==" in condition
+
+
+def _step_secret_bearing_text(step: dict[str, object]) -> str:
+    parts: list[str] = []
+    run = step.get("run")
+    if isinstance(run, str):
+        parts.append(run)
+    env = step.get("env")
+    if isinstance(env, dict):
+        parts.extend(f"{key}={value}" for key, value in env.items())
+    return "\n".join(parts)
+
+
+@pytest.mark.parametrize(
+    ("secret_name", "step_name"),
+    [
+        ("QUALOCK_CODEX_AUTH_B64", "Materialize codex credential"),
+        ("QUALOCK_ANTHROPIC_AUTH_TOKEN", "Qualify upgrade (claude)"),
+        ("QUALOCK_ANTHROPIC_API_KEY", "Qualify upgrade (claude)"),
+        ("QUALOCK_CLAUDE_CODE_OAUTH_TOKEN", "Qualify upgrade (claude)"),
+    ],
+)
+def test_producer_model_secret_is_isolated_to_a_single_step(
+    secret_name: str, step_name: str
+) -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    target_step = _named_step(doc, step_name)
+    isolated_count = _step_secret_bearing_text(target_step).count(secret_name)
+    assert isolated_count > 0
+    assert PRODUCER_WORKFLOW.count(secret_name) == isolated_count
+
+
+def test_reporter_workflow_contains_no_model_secret_names() -> None:
+    for name in MODEL_SECRET_NAMES:
+        assert name not in REPORTER_WORKFLOW
+
+
+def test_producer_claude_step_never_writes_secret_to_github_output() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    step = _named_step(doc, "Qualify upgrade (claude)")
+    run_script = step["run"]
+    assert isinstance(run_script, str)
+    assert "GITHUB_OUTPUT" not in run_script
+    assert "set +x" in run_script
