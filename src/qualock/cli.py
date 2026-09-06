@@ -774,6 +774,27 @@ def github_setup_command() -> None:
         soft_wrap=True,
     )
     console.print(
+        "\nIf your trusted baseline agent is Claude Code instead of Codex, configure "
+        "one of these repository secrets where practical instead of "
+        "QUALOCK_CODEX_AUTH_B64:\n",
+        markup=False,
+        soft_wrap=True,
+    )
+    console.print(
+        "QUALOCK_ANTHROPIC_AUTH_TOKEN\n"
+        "QUALOCK_ANTHROPIC_API_KEY\n"
+        "QUALOCK_CLAUDE_CODE_OAUTH_TOKEN",
+        markup=False,
+        soft_wrap=True,
+    )
+    console.print(
+        "\nFor subscription-based automation without a long-lived API key, obtain a "
+        "Claude Code OAuth token by running `claude setup-token` and storing the "
+        "result in the QUALOCK_CLAUDE_CODE_OAUTH_TOKEN secret.",
+        markup=False,
+        soft_wrap=True,
+    )
+    console.print(
         "\nQualification results are published to the `qualock/pr` status check. "
         "You may optionally configure branch protection to require it before merging.",
         markup=False,

@@ -253,7 +253,8 @@ both sides of a check must be binaries that already exist locally. Antigravity i
 supported for `baseline`, `check`, and `doctor`. `qualock monitor` and scheduled
 monitoring are unavailable for Antigravity because QuaLock does not discover
 Antigravity releases. `qualock bisect` is available for Codex and Claude Code but
-unavailable for Antigravity; the GitHub PR workflow remains Codex-only.
+unavailable for Antigravity; the GitHub PR workflow supports Codex and Claude
+Code trusted baselines but remains unsupported for Antigravity.
 
 `qualock doctor` reads the project's `.qualock/config.yaml` and checks prerequisites for
 whichever agent the project is configured for. For a project configured for `codex` or
@@ -333,7 +334,7 @@ broadly revalidated certification.
 
 ## Qualify GitHub pull requests
 
-Adopt automated qualification for Codex upgrade PRs:
+Adopt automated qualification for trusted-agent upgrade PRs:
 
 ```bash
 qualock github setup
@@ -342,17 +343,25 @@ qualock github setup
 `qualock github setup` only writes `.github/workflows/qualock-pr.yml` and
 `.github/workflows/qualock-pr-report.yml` into the current project and prints
 setup instructions. It does not push, create a repository secret, or change
-any repository setting. Adoption is five steps, in order:
+any repository setting. The workflow selects Codex or Claude based on the
+agent already pinned in your project's trusted `.qualock/baseline.lock`;
+Antigravity remains unsupported for GitHub PR qualification, so a repository
+whose trusted baseline is Antigravity cannot use this feature. Adoption is
+five steps, in order:
 
 1. run `qualock github setup` locally;
 2. review and commit the generated `.github/workflows/qualock-pr.yml` and
    `.github/workflows/qualock-pr-report.yml`;
-3. create a repository secret named `QUALOCK_CODEX_AUTH_B64` containing the
-   base64-encoded contents of your local `~/.codex/auth.json`;
+3. create the repository secret(s) for your trusted baseline agent: for
+   Codex, `QUALOCK_CODEX_AUTH_B64` containing the base64-encoded contents of
+   your local `~/.codex/auth.json`; for Claude Code, one of
+   `QUALOCK_ANTHROPIC_AUTH_TOKEN`, `QUALOCK_ANTHROPIC_API_KEY`, or
+   `QUALOCK_CLAUDE_CODE_OAUTH_TOKEN` (subscription automation can obtain the
+   OAuth token by running `claude setup-token`);
 4. optionally require the `qualock/pr` status check in branch protection or a
    repository ruleset;
-5. propose future Codex upgrades as a pull request whose only changed path is
-   `.qualock/baseline.lock`.
+5. propose future upgrades of that same trusted agent as a pull request whose
+   only changed path is `.qualock/baseline.lock`.
 
 Once adopted, every pull request gets a `qualock/pr` status check:
 
@@ -360,15 +369,16 @@ Once adopted, every pull request gets a `qualock/pr` status check:
   `qualock/pr` success status, no comment, and costs no agent qualification
   run;
 - a PR that changes only `.qualock/baseline.lock` runs the normal
-  baseline-vs-candidate qualification with Codex and gets a sticky PR comment
-  with the verdict, per-canary results, and a link to the run;
+  baseline-vs-candidate qualification with the trusted Codex or Claude agent
+  and gets a sticky PR comment with the verdict, per-canary results, and a
+  link to the run;
 - a PR that changes `.qualock/baseline.lock` plus any other file is rejected
   with an `INCOMPLETE`/`error` status asking for a dedicated upgrade PR,
   because QuaLock only trusts a proposed baseline lock when it is the sole
   change under review;
 - qualification `PASS` reports a `qualock/pr` success status, `WARN` or
   `BLOCK` report a failure status, and `INCOMPLETE` (including a missing or
-  unavailable Codex credential) reports an error status.
+  unavailable agent credential) reports an error status.
 
 The generated qualification workflow is safe only because it checks out
 trusted base code and treats the PR head as data. Do not modify it to check
@@ -378,13 +388,13 @@ This feature does not qualify arbitrary code changes in a PR, does not merge
 or approve anything automatically, and does not mutate `.qualock/baseline.lock`
 itself; a human must open the upgrade PR from a locally produced lock. It
 targets GitHub-hosted runners triggered from this repository's own workflows,
-not a GitHub App or third-party hosting. It qualifies exact stable Codex
-releases only, not prereleases. Raw agent transcripts are never uploaded;
-only the structured PR context and qualification report artifacts are
-produced, and the sticky comment/status check are the only externally visible
-output. Running the qualification agent on GitHub-hosted runners still costs
-compute and, if applicable, Codex usage, same as running `qualock check`
-locally.
+not a GitHub App or third-party hosting. It qualifies exact stable releases of
+the trusted Codex or Claude agent only, not prereleases. Raw agent transcripts
+are never uploaded; only the structured PR context and qualification report
+artifacts are produced, and the sticky comment/status check are the only
+externally visible output. Running the qualification agent on GitHub-hosted
+runners still costs compute and, if applicable, agent usage, same as running
+`qualock check` locally.
 
 ## Protect a project from AI edits
 
