@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
+import qualock.release_monitor.commands as monitor_commands
 from qualock import cli
 from qualock.agents.releases import ReleaseDiscoveryError
 from qualock.baseline.io import BaselineStaleError
@@ -198,6 +199,49 @@ def test_monitor_input_errors_exit_three(
     assert result.exit_code == 3
 
 
+def test_monitor_outcome_with_unsupported_agent_exits_three(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outcome = MonitorOutcome(
+        action=MonitorAction.NO_NEW_RELEASE,
+        agent_name="gemini",
+        baseline_version="0.151.0",
+        latest_version="0.151.0",
+    )
+    result = invoke_outcome(tmp_path, monkeypatch, outcome)
+    assert result.exit_code == 3
+
+
+def test_monitor_antigravity_capability_failure_exits_three_end_to_end(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        monitor_commands,
+        "load_project",
+        lambda root: (SimpleNamespace(agent=SimpleNamespace(name="antigravity")), []),
+    )
+    monkeypatch.setattr(
+        monitor_commands,
+        "read_baseline_lock",
+        lambda path: SimpleNamespace(
+            agent=SimpleNamespace(name="antigravity", version="1.0.0")
+        ),
+    )
+    monkeypatch.setattr(
+        monitor_commands, "suite_fingerprint", lambda canaries: "suite-now"
+    )
+    monkeypatch.setattr(
+        monitor_commands, "config_fingerprint", lambda config: "config-now"
+    )
+    monkeypatch.setattr(monitor_commands, "assert_suite_fresh", lambda *args: None)
+
+    result = runner.invoke(cli.app, ["monitor"])
+
+    assert result.exit_code == 3
+    assert "release monitor is unavailable for Antigravity" in result.stdout
+
+
 def test_monitor_stale_baseline_exits_four(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
@@ -271,7 +315,9 @@ def test_monitor_check_executor_prints_transition_before_check(monkeypatch) -> N
     monkeypatch.setattr(
         cli,
         "read_baseline_lock",
-        lambda path: SimpleNamespace(agent=SimpleNamespace(version="0.151.0")),
+        lambda path: SimpleNamespace(
+            agent=SimpleNamespace(name="codex", version="0.151.0")
+        ),
     )
     monkeypatch.setattr(
         cli.console,
@@ -326,6 +372,43 @@ def test_monitor_check_executor_prints_claude_transition(monkeypatch) -> None:
         (
             "\nNew Claude Code release found. Qualifying 2.1.261 "
             "against baseline 2.1.260."
+        ),
+        "check",
+    ]
+
+
+def test_monitor_check_executor_labels_baseline_from_lock_not_candidate(
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+    expected = sample_result()
+    monkeypatch.setattr(
+        cli,
+        "read_baseline_lock",
+        lambda path: SimpleNamespace(
+            agent=SimpleNamespace(name="codex", version="0.151.0")
+        ),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message, **kwargs: events.append(message),
+    )
+    monkeypatch.setattr(
+        cli,
+        "execute_check",
+        lambda root, candidate: events.append("check") or expected,
+    )
+
+    result = cli._monitor_check_executor(Path("."), "claude@2.1.261")
+
+    assert result is expected
+    assert events == [
+        "Baseline: Codex 0.151.0",
+        "Latest:   Claude Code 2.1.261",
+        (
+            "\nNew Claude Code release found. Qualifying 2.1.261 "
+            "against baseline 0.151.0."
         ),
         "check",
     ]

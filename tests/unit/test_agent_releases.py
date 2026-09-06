@@ -45,11 +45,11 @@ def test_default_source_maps_claude_and_preserves_cache_root(
     assert observed == [tmp_path]
 
 
-def test_default_source_uses_qualock_user_cache(
+def test_default_source_uses_shared_cache_root_helper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     observed: list[Path] = []
-    monkeypatch.setattr(releases, "user_cache_dir", lambda app: str(tmp_path))
+    monkeypatch.setattr(releases, "default_agent_cache_root", lambda: tmp_path)
 
     class FakeCodex:
         def __init__(self, cache_root: Path) -> None:

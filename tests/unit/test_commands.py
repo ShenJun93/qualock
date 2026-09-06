@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import qualock.commands as commands_module
 from qualock.agents.antigravity import AntigravityAdapter
 from qualock.agents.antigravity_resolver import AntigravityResolver
 from qualock.agents.base import AgentBinary
@@ -147,6 +148,16 @@ def test_default_resolver_antigravity_uses_explicit_override(
 
     assert isinstance(resolver, AntigravityResolver)
     assert resolver.binary_path == override
+
+
+def test_default_resolver_uses_shared_cache_root_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(commands_module, "default_agent_cache_root", lambda: tmp_path)
+
+    resolver = _default_resolver("codex")
+
+    assert resolver.cache_root == tmp_path
 
 
 def test_default_backend_antigravity_uses_linux_host_runner(tmp_path: Path) -> None:

@@ -15,6 +15,10 @@ class LatestReleaseSource(Protocol):
     def latest_version(self) -> str: ...
 
 
+def default_agent_cache_root() -> Path:
+    return Path(user_cache_dir("qualock"))
+
+
 class _CodexLatestReleaseSource:
     def __init__(self, resolver: CodexResolver) -> None:
         self.resolver = resolver
@@ -42,7 +46,7 @@ def default_latest_release_source(
     *,
     cache_root: Path | None = None,
 ) -> LatestReleaseSource:
-    cache = cache_root or Path(user_cache_dir("qualock"))
+    cache = cache_root or default_agent_cache_root()
     if agent_name == "codex":
         return _CodexLatestReleaseSource(CodexResolver(cache))
     if agent_name == "claude":
