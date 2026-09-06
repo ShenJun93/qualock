@@ -2,12 +2,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal
 
 from packaging.version import Version
-from platformdirs import user_cache_dir
 
-from qualock.agents.resolver import CodexResolver
+from qualock.agents.releases import (
+    LatestReleaseSource,
+    default_latest_release_source,
+)
 from qualock.baseline.io import assert_suite_fresh, read_baseline_lock
 from qualock.commands import CommandError, execute_check
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
@@ -16,24 +18,15 @@ from qualock.qualification.models import QualificationResult, Verdict
 from .models import MonitorAction, MonitorOutcome, MonitorState, TerminalVerdict
 from .state import FileMonitorStateStore, MonitorStateStore, baseline_sha256
 
-
-class ReleaseSource(Protocol):
-    def latest_version(self) -> str:
-        raise NotImplementedError
-
-
 CheckExecutor = Callable[[Path, str], QualificationResult]
+MonitorAgent = Literal["codex", "claude"]
 
 
 @dataclass(frozen=True)
 class MonitorPreflight:
-    agent_name: str
+    agent_name: MonitorAgent
     baseline_version: str
     baseline_sha256: str
-
-
-def _default_release_source() -> ReleaseSource:
-    return CodexResolver(Path(user_cache_dir("qualock")))
 
 
 def monitor_preflight(root: Path) -> MonitorPreflight:
@@ -65,12 +58,12 @@ def execute_monitor(
     root: Path,
     *,
     force: bool = False,
-    release_source: ReleaseSource | None = None,
+    release_source: LatestReleaseSource | None = None,
     state_store: MonitorStateStore | None = None,
     check_executor: CheckExecutor = execute_check,
 ) -> MonitorOutcome:
     context = monitor_preflight(root)
-    source = release_source or _default_release_source()
+    source = release_source or default_latest_release_source(context.agent_name)
     latest = source.latest_version()
     baseline_order = Version(context.baseline_version)
     latest_order = Version(latest)
@@ -87,7 +80,11 @@ def execute_monitor(
     state, state_warning = store.load(root)
     matching = (
         state
-        if state is not None and state.baseline_sha256 == context.baseline_sha256
+        if (
+            state is not None
+            and state.baseline_sha256 == context.baseline_sha256
+            and state.agent == context.agent_name
+        )
         else None
     )
 
@@ -112,12 +109,13 @@ def execute_monitor(
                 state_warning=state_warning,
             )
 
-    result = check_executor(root, f"codex@{latest}")
+    result = check_executor(root, f"{context.agent_name}@{latest}")
     state_persisted: bool | None = None
 
     if result.verdict is not Verdict.INCOMPLETE:
         terminal_state = MonitorState(
             baseline_sha256=context.baseline_sha256,
+            agent=context.agent_name,
             candidate_version=latest,
             verdict=TerminalVerdict(result.verdict.value),
             qualification_id=result.qualification_id,

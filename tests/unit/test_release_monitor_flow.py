@@ -205,13 +205,15 @@ def test_malformed_baseline_stops_before_release_or_state_lookup(
 
 
 def patch_fresh_context(
-    monkeypatch: pytest.MonkeyPatch, baseline_version: str = "0.151.0"
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_version: str = "0.151.0",
+    agent_name: str = "codex",
 ) -> None:
     monkeypatch.setattr(
         monitor_commands,
         "monitor_preflight",
         lambda root: SimpleNamespace(
-            agent_name="codex",
+            agent_name=agent_name,
             baseline_version=baseline_version,
             baseline_sha256=FRESH_SHA,
         ),
@@ -267,9 +269,11 @@ def terminal_state(
     candidate: str = "0.152.0",
     verdict: TerminalVerdict = TerminalVerdict.PASS,
     baseline_sha: str = FRESH_SHA,
+    agent: str = "codex",
 ) -> MonitorState:
     return MonitorState(
         baseline_sha256=baseline_sha,
+        agent=agent,
         candidate_version=candidate,
         verdict=verdict,
         qualification_id="check-old",
@@ -317,6 +321,68 @@ def test_new_release_is_frozen_to_exact_candidate(
 
     assert calls == ["codex@0.152.0"]
     assert outcome.action is MonitorAction.CHECKED
+
+
+def test_claude_new_release_qualifies_exact_claude_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="2.1.260", agent_name="claude")
+    seen: list[str] = []
+
+    def check(root: Path, candidate_spec: str) -> QualificationResult:
+        seen.append(candidate_spec)
+        return qualification(Verdict.PASS, candidate="2.1.261")
+
+    outcome = execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("2.1.261"),
+        state_store=MemoryStateStore(),
+        check_executor=check,
+    )
+
+    assert seen == ["claude@2.1.261"]
+    assert outcome.agent_name == "claude"
+
+
+def test_claude_no_new_release_skips_qualification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="2.1.260", agent_name="claude")
+
+    outcome = execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("2.1.260"),
+        state_store=FailIfCalledStateStore(),
+        check_executor=fail_check,
+    )
+
+    assert outcome.action is MonitorAction.NO_NEW_RELEASE
+    assert outcome.agent_name == "claude"
+
+
+def test_default_release_source_uses_trusted_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="2.1.260", agent_name="claude")
+    seen: list[str] = []
+
+    class Source:
+        def latest_version(self) -> str:
+            return "2.1.260"
+
+    monkeypatch.setattr(
+        monitor_commands,
+        "default_latest_release_source",
+        lambda agent_name: seen.append(agent_name) or Source(),
+    )
+
+    execute_monitor(
+        tmp_path,
+        state_store=FailIfCalledStateStore(),
+        check_executor=fail_check,
+    )
+
+    assert seen == ["claude"]
 
 
 @pytest.mark.parametrize(
@@ -406,6 +472,31 @@ def test_baseline_sha_mismatch_ignores_record_and_qualifies(
     assert outcome.action is MonitorAction.CHECKED
 
 
+def test_state_with_wrong_agent_is_not_reused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="2.1.260", agent_name="claude")
+    state = terminal_state(
+        candidate="2.1.261",
+        baseline_sha=FRESH_SHA,
+        agent="codex",
+    )
+    store = MemoryStateStore(state)
+    seen: list[str] = []
+
+    execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("2.1.261"),
+        state_store=store,
+        check_executor=lambda root, candidate: (
+            seen.append(candidate)
+            or qualification(Verdict.PASS, candidate="2.1.261")
+        ),
+    )
+
+    assert seen == ["claude@2.1.261"]
+
+
 def test_force_does_not_bypass_same_or_older_baseline_rule(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -434,6 +525,24 @@ def test_semantically_equal_differently_spelled_candidate_does_not_dedupe(
     )
     assert calls == ["codex@0.152.0"]
     assert outcome.action is MonitorAction.CHECKED
+
+
+def test_codex_candidate_spec_remains_codex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, agent_name="codex")
+    seen: list[str] = []
+
+    execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("0.152.0"),
+        state_store=MemoryStateStore(),
+        check_executor=lambda root, candidate: (
+            seen.append(candidate) or qualification(Verdict.PASS)
+        ),
+    )
+
+    assert seen == ["codex@0.152.0"]
 
 
 @pytest.mark.parametrize(
@@ -470,6 +579,25 @@ def test_terminal_result_is_persisted(
     assert saved.verdict is terminal
     assert saved.qualification_id == "check-test"
     assert saved.completed_at
+
+
+def test_claude_terminal_result_persists_claude_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="2.1.260", agent_name="claude")
+    store = MemoryStateStore()
+
+    execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("2.1.261"),
+        state_store=store,
+        check_executor=lambda root, candidate: qualification(
+            Verdict.PASS, candidate="2.1.261"
+        ),
+    )
+
+    assert len(store.saved) == 1
+    assert store.saved[0].agent == "claude"
 
 
 def test_incomplete_is_not_persisted(
