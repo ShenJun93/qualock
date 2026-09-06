@@ -89,7 +89,12 @@ def test_resolve_rejects_symlink_to_windows_executable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(platform, "system", lambda: "Linux")
-    windows_binary = write_fake_agy(tmp_path, version="1.1.27", name="agy.exe")
+    # A literal .exe file, not write_fake_agy(name="agy.exe"): that helper
+    # delegates to write_python_launcher, which on Windows rewrites the
+    # path through with_suffix(".cmd") and returns agy.cmd instead of an
+    # .exe, so the symlink would no longer point at a Windows executable.
+    windows_binary = tmp_path / "agy.exe"
+    windows_binary.write_text("not executed; suffix check rejects first", encoding="utf-8")
     symlink = tmp_path / "agy"
     symlink.symlink_to(windows_binary)
 
