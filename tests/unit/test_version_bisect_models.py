@@ -10,6 +10,7 @@ def test_models_are_frozen_and_reuse_verdict() -> None:
     step = BisectStep("0.152.0", "check-1", Verdict.PASS)
     outcome = BisectOutcome(
         bisect_id="bisect-test",
+        agent_name="codex",
         baseline_version="0.151.0",
         upper_version="0.152.0",
         steps=(step,),

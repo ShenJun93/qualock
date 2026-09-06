@@ -4,26 +4,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
 
-from platformdirs import user_cache_dir
-
-from qualock.agents.resolver import CodexResolver
+from qualock.agents.releases import StableReleaseCatalog, default_stable_release_catalog
 from qualock.baseline.io import assert_suite_fresh, read_baseline_lock
 from qualock.commands import CommandError, execute_check, parse_agent_spec
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
 from qualock.qualification.models import QualificationResult, Verdict
 
-from .models import BisectOutcome, BisectStep, BisectStop
+from .models import BisectAgent, BisectOutcome, BisectStep, BisectStop
 from .storage import BisectSummaryStore, FileBisectSummaryStore
 
-
-class VersionCatalog(Protocol):
-    def stable_versions(self) -> tuple[str, ...]: ...
-
-
 CheckExecutor = Callable[[Path, str], QualificationResult]
-OnStart = Callable[[str, str, Path], None]
+OnStart = Callable[[BisectAgent, str, str, Path], None]
 OnStep = Callable[[BisectStep], None]
 
 _STABLE_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -31,6 +23,7 @@ _STABLE_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 @dataclass(frozen=True)
 class BisectPreflight:
+    agent_name: BisectAgent
     baseline_version: str
 
 
@@ -47,10 +40,6 @@ def _bisect_id() -> str:
     return f"bisect-{stamp}-{uuid.uuid4().hex[:8]}"
 
 
-def _default_catalog() -> VersionCatalog:
-    return CodexResolver(Path(user_cache_dir("qualock")))
-
-
 def _default_store(root: Path) -> BisectSummaryStore:
     return FileBisectSummaryStore(project_dir(root) / "results")
 
@@ -59,31 +48,49 @@ def bisect_preflight(root: Path) -> BisectPreflight:
     config, canaries = load_project(root)
     lock = read_baseline_lock(project_dir(root) / "baseline.lock")
     assert_suite_fresh(lock, suite_fingerprint(canaries), config_fingerprint(config))
-    if lock.agent.name != "codex":
-        raise CommandError("version bisect supports only a Codex baseline")
+    if lock.agent.name != config.agent.name:
+        raise CommandError(
+            f"config agent {config.agent.name} does not match baseline agent {lock.agent.name}"
+        )
+    agent_name: BisectAgent
+    if lock.agent.name == "codex":
+        agent_name = "codex"
+    elif lock.agent.name == "claude":
+        agent_name = "claude"
+    else:
+        raise CommandError(f"version bisect does not support agent {lock.agent.name!r}")
     _version_key(lock.agent.version)
-    return BisectPreflight(baseline_version=lock.agent.version)
+    return BisectPreflight(agent_name=agent_name, baseline_version=lock.agent.version)
 
 
 def execute_bisect(
     root: Path,
     upper_spec: str,
     *,
-    catalog: VersionCatalog | None = None,
+    catalog: StableReleaseCatalog | None = None,
     summary_store: BisectSummaryStore | None = None,
     check_executor: CheckExecutor = execute_check,
     bisect_id: str | None = None,
     on_start: OnStart | None = None,
     on_step: OnStep | None = None,
 ) -> BisectOutcome:
-    _name, upper_version = parse_agent_spec(upper_spec)
+    upper_name, upper_version = parse_agent_spec(upper_spec)
     _version_key(upper_version)
 
     context = bisect_preflight(root)
 
-    frozen_catalog = tuple((catalog or _default_catalog()).stable_versions())
+    if upper_name != context.agent_name:
+        raise CommandError(
+            f"upper bound agent {upper_name} does not match baseline agent {context.agent_name}"
+        )
+
+    frozen_catalog = tuple(
+        (catalog or default_stable_release_catalog(context.agent_name)).stable_versions()
+    )
     if upper_version not in frozen_catalog:
-        raise CommandError(f"codex@{upper_version} is not a published stable release")
+        raise CommandError(
+            f"{context.agent_name}@{upper_version} is not a published stable release"
+        )
     if _version_key(upper_version) <= _version_key(context.baseline_version):
         raise CommandError("upper bound must be numerically newer than the locked baseline")
 
@@ -107,7 +114,7 @@ def execute_bisect(
         stop=None,
     )
     if on_start is not None:
-        on_start(context.baseline_version, upper_version, run_dir)
+        on_start(context.agent_name, context.baseline_version, upper_version, run_dir)
 
     steps: list[BisectStep] = []
     last_known_good = context.baseline_version
@@ -115,7 +122,7 @@ def execute_bisect(
     stop_reason: BisectStop | None = None
 
     for version in candidates:
-        result = check_executor(root, f"codex@{version}")
+        result = check_executor(root, f"{context.agent_name}@{version}")
         step = BisectStep(
             version=version,
             qualification_id=result.qualification_id,
@@ -155,6 +162,7 @@ def execute_bisect(
         if stop_reason is not None:
             return BisectOutcome(
                 bisect_id=bid,
+                agent_name=context.agent_name,
                 baseline_version=context.baseline_version,
                 upper_version=upper_version,
                 steps=tuple(steps),
@@ -176,6 +184,7 @@ def execute_bisect(
     )
     return BisectOutcome(
         bisect_id=bid,
+        agent_name=context.agent_name,
         baseline_version=context.baseline_version,
         upper_version=upper_version,
         steps=tuple(steps),

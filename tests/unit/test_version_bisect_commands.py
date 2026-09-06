@@ -8,7 +8,7 @@ from qualock.baseline.models import AgentPin, BaselineLock, ModelPin
 from qualock.commands import CommandError
 from qualock.qualification.models import QualificationResult, Verdict
 from qualock.version_bisect.commands import BisectPreflight, execute_bisect
-from qualock.version_bisect.models import BisectStep, BisectStop
+from qualock.version_bisect.models import BisectAgent, BisectStep, BisectStop
 
 
 class FakeCatalog:
@@ -19,6 +19,14 @@ class FakeCatalog:
     def stable_versions(self) -> tuple[str, ...]:
         self.calls += 1
         return self.versions
+
+
+class FailStore:
+    def create(self, **kwargs: object) -> Path:
+        raise AssertionError("store must not be used")
+
+    def save(self, **kwargs: object) -> None:
+        raise AssertionError("store must not be used")
 
 
 class MemoryStore:
@@ -50,11 +58,16 @@ def qualification(candidate: str, verdict: Verdict, qualification_id: str) -> Qu
     )
 
 
-def patch_preflight(monkeypatch: pytest.MonkeyPatch, baseline: str = "0.151.0") -> None:
+def patch_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    agent_name: BisectAgent = "codex",
+    baseline: str = "0.151.0",
+) -> None:
     monkeypatch.setattr(
         bisect_commands,
         "bisect_preflight",
-        lambda root: BisectPreflight(baseline_version=baseline),
+        lambda root: BisectPreflight(agent_name=agent_name, baseline_version=baseline),
     )
 
 
@@ -71,8 +84,18 @@ def baseline_lock(agent: str = "codex", version: str = "0.151.0") -> BaselineLoc
     )
 
 
-def patch_project_loading(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bisect_commands, "load_project", lambda root: (object(), []))
+class FakeAgentConfig:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class FakeConfig:
+    def __init__(self, agent_name: str) -> None:
+        self.agent = FakeAgentConfig(agent_name)
+
+
+def patch_project_loading(monkeypatch: pytest.MonkeyPatch, *, agent_name: str = "codex") -> None:
+    monkeypatch.setattr(bisect_commands, "load_project", lambda root: (FakeConfig(agent_name), []))
     monkeypatch.setattr(bisect_commands, "suite_fingerprint", lambda canaries: "suite-now")
     monkeypatch.setattr(bisect_commands, "config_fingerprint", lambda config: "config-now")
 
@@ -114,30 +137,115 @@ def test_non_stable_baseline_rejected(tmp_path: Path, monkeypatch: pytest.Monkey
         bisect_commands, "read_baseline_lock", lambda path: baseline_lock(version="0.151.0-beta.1")
     )
     monkeypatch.setattr(bisect_commands, "assert_suite_fresh", lambda *args: None)
+    catalog = FakeCatalog(("0.152.0", "0.153.0"))
 
     with pytest.raises(CommandError):
         execute_bisect(
             tmp_path,
             "codex@0.153.0",
-            catalog=FakeCatalog(("0.152.0", "0.153.0")),
-            summary_store=MemoryStore(),
+            catalog=catalog,
+            summary_store=FailStore(),
             check_executor=fail_check,
         )
+    assert catalog.calls == 0
 
 
-def test_non_codex_baseline_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    patch_project_loading(monkeypatch)
+def test_config_lock_agent_mismatch_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_project_loading(monkeypatch, agent_name="claude")
+    monkeypatch.setattr(bisect_commands, "read_baseline_lock", lambda path: baseline_lock(agent="codex"))
+    monkeypatch.setattr(bisect_commands, "assert_suite_fresh", lambda *args: None)
+    catalog = FakeCatalog(("0.152.0", "0.153.0"))
+
+    with pytest.raises(CommandError):
+        execute_bisect(
+            tmp_path,
+            "codex@0.153.0",
+            catalog=catalog,
+            summary_store=FailStore(),
+            check_executor=fail_check,
+        )
+    assert catalog.calls == 0
+
+
+def test_antigravity_baseline_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_project_loading(monkeypatch, agent_name="antigravity")
+    monkeypatch.setattr(
+        bisect_commands,
+        "read_baseline_lock",
+        lambda path: baseline_lock(agent="antigravity", version="1.0.0"),
+    )
+    monkeypatch.setattr(bisect_commands, "assert_suite_fresh", lambda *args: None)
+    catalog = FakeCatalog(("1.0.0", "1.1.0"))
+
+    with pytest.raises(CommandError):
+        execute_bisect(
+            tmp_path,
+            "antigravity@1.1.0",
+            catalog=catalog,
+            summary_store=FailStore(),
+            check_executor=fail_check,
+        )
+    assert catalog.calls == 0
+
+
+def test_unknown_agent_baseline_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_project_loading(monkeypatch, agent_name="other")
     monkeypatch.setattr(bisect_commands, "read_baseline_lock", lambda path: baseline_lock(agent="other"))
     monkeypatch.setattr(bisect_commands, "assert_suite_fresh", lambda *args: None)
+    catalog = FakeCatalog(("0.152.0", "0.153.0"))
 
     with pytest.raises(CommandError):
         execute_bisect(
             tmp_path,
             "codex@0.153.0",
-            catalog=FakeCatalog(("0.152.0", "0.153.0")),
-            summary_store=MemoryStore(),
+            catalog=catalog,
+            summary_store=FailStore(),
             check_executor=fail_check,
         )
+    assert catalog.calls == 0
+
+
+def test_bisect_preflight_accepts_codex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_project_loading(monkeypatch, agent_name="codex")
+    monkeypatch.setattr(
+        bisect_commands, "read_baseline_lock", lambda path: baseline_lock(agent="codex", version="0.151.0")
+    )
+    monkeypatch.setattr(bisect_commands, "assert_suite_fresh", lambda *args: None)
+
+    result = bisect_commands.bisect_preflight(tmp_path)
+
+    assert result == BisectPreflight(agent_name="codex", baseline_version="0.151.0")
+
+
+def test_bisect_preflight_accepts_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_project_loading(monkeypatch, agent_name="claude")
+    monkeypatch.setattr(
+        bisect_commands,
+        "read_baseline_lock",
+        lambda path: baseline_lock(agent="claude", version="2.1.260"),
+    )
+    monkeypatch.setattr(bisect_commands, "assert_suite_fresh", lambda *args: None)
+
+    result = bisect_commands.bisect_preflight(tmp_path)
+
+    assert result == BisectPreflight(agent_name="claude", baseline_version="2.1.260")
+
+
+def test_cross_agent_upper_rejected_before_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_preflight(monkeypatch, agent_name="claude", baseline="2.1.260")
+    catalog = FakeCatalog(("2.1.261", "2.1.263"))
+
+    with pytest.raises(CommandError):
+        execute_bisect(
+            tmp_path,
+            "codex@2.1.261",
+            catalog=catalog,
+            summary_store=FailStore(),
+            check_executor=fail_check,
+        )
+    assert catalog.calls == 0
 
 
 def test_stale_baseline_stops_before_catalog_access(
@@ -183,6 +291,7 @@ def test_pass_prefix_then_block_is_first_bad(tmp_path: Path, monkeypatch: pytest
         bisect_id="bisect-test",
     )
     assert calls == ["codex@0.152.0", "codex@0.153.0"]
+    assert outcome.agent_name == "codex"
     assert outcome.stop_reason is BisectStop.FIRST_BAD_FOUND
     assert outcome.last_known_good == "0.152.0"
     assert outcome.first_bad == "0.153.0"
@@ -214,6 +323,7 @@ def test_warn_or_incomplete_stops_after_first_candidate(
         bisect_id="bisect-test",
     )
     assert calls == ["codex@0.152.0"]
+    assert outcome.agent_name == "codex"
     assert outcome.first_bad is None
     assert outcome.stop_reason is stop
 
@@ -237,9 +347,63 @@ def test_all_pass_scans_full_range_excluding_baseline(
         bisect_id="bisect-test",
     )
     assert calls == ["codex@0.152.0", "codex@0.153.0", "codex@0.154.0"]
+    assert outcome.agent_name == "codex"
     assert outcome.stop_reason is BisectStop.NO_BAD_FOUND
     assert outcome.first_bad is None
     assert outcome.last_known_good == "0.154.0"
+
+
+# --- Step 3: agent-scoped upper bound and candidate execution --------------
+
+
+def test_claude_all_pass_scans_full_range_excluding_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_preflight(monkeypatch, agent_name="claude", baseline="2.1.260")
+    calls: list[str] = []
+
+    def check(root: Path, spec: str) -> QualificationResult:
+        calls.append(spec)
+        return qualification(spec.split("@", 1)[1], Verdict.PASS, "check-1")
+
+    outcome = execute_bisect(
+        tmp_path,
+        "claude@2.1.263",
+        catalog=FakeCatalog(("2.1.260", "2.1.261", "2.1.263")),
+        summary_store=MemoryStore(),
+        check_executor=check,
+        bisect_id="bisect-test",
+    )
+    assert calls == ["claude@2.1.261", "claude@2.1.263"]
+    assert outcome.agent_name == "claude"
+    assert outcome.stop_reason is BisectStop.NO_BAD_FOUND
+    assert outcome.first_bad is None
+    assert outcome.last_known_good == "2.1.263"
+
+
+def test_claude_pass_then_block_stops_at_first_bad(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_preflight(monkeypatch, agent_name="claude", baseline="2.1.260")
+    calls: list[str] = []
+    results = {
+        "claude@2.1.261": qualification("2.1.261", Verdict.PASS, "check-261"),
+        "claude@2.1.263": qualification("2.1.263", Verdict.BLOCK, "check-263"),
+    }
+
+    outcome = execute_bisect(
+        tmp_path,
+        "claude@2.1.263",
+        catalog=FakeCatalog(("2.1.260", "2.1.261", "2.1.263")),
+        summary_store=MemoryStore(),
+        check_executor=lambda root, spec: calls.append(spec) or results[spec],
+        bisect_id="bisect-test",
+    )
+    assert calls == ["claude@2.1.261", "claude@2.1.263"]
+    assert outcome.agent_name == "claude"
+    assert outcome.stop_reason is BisectStop.FIRST_BAD_FOUND
+    assert outcome.last_known_good == "2.1.261"
+    assert outcome.first_bad == "2.1.263"
 
 
 def test_create_and_on_start_precede_first_check_and_step_saves_before_callback(
@@ -261,13 +425,13 @@ def test_create_and_on_start_precede_first_check_and_step_saves_before_callback(
         events.append(f"check:{spec}")
         return qualification(spec.split("@", 1)[1], Verdict.PASS, "check-1")
 
-    def on_start(baseline: str, upper: str, run_dir: Path) -> None:
-        events.append(f"on_start:{baseline}:{upper}")
+    def on_start(agent_name: BisectAgent, baseline: str, upper: str, run_dir: Path) -> None:
+        events.append(f"on_start:{agent_name}:{baseline}:{upper}")
 
     def on_step(step: BisectStep) -> None:
         events.append(f"on_step:{step.version}")
 
-    execute_bisect(
+    outcome = execute_bisect(
         tmp_path,
         "codex@0.152.0",
         catalog=FakeCatalog(("0.150.0", "0.152.0")),
@@ -280,12 +444,13 @@ def test_create_and_on_start_precede_first_check_and_step_saves_before_callback(
 
     assert events == [
         "create",
-        "on_start:0.151.0:0.152.0",
+        "on_start:codex:0.151.0:0.152.0",
         "check:codex@0.152.0",
         "save",
         "on_step:0.152.0",
         "save",
     ]
+    assert outcome.agent_name == "codex"
 
 
 def test_crashing_check_propagates_and_preserves_truthful_prefix(
