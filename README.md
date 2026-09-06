@@ -191,17 +191,19 @@ path-derived, and V1 does not migrate orphan schedules.
 
 ### Find the first bad release
 
-If a later stable Codex release regressed your protected behavior but you do not know
-exactly which version, scan forward from the current baseline:
+If a later stable Codex or Claude Code release regressed your protected behavior but you
+do not know exactly which version, scan forward from the current baseline:
 
 ```bash
 qualock bisect codex@0.160.0
+qualock bisect claude@2.1.263
 ```
 
-The upper bound must be an exact published stable `X.Y.Z` version. Coding-agent quality
-is not assumed to regress monotonically across releases, so V1 scans forward through
-every published stable version between the baseline and the upper bound instead of
-assuming the false monotonic-regression pattern a binary search would require.
+The upper bound must be an exact published stable `X.Y.Z` version for the same agent as
+the trusted project's baseline; a mismatched agent is rejected. Coding-agent quality is
+not assumed to regress monotonically across releases, so V1 scans forward through every
+published stable version between the baseline and the upper bound instead of assuming
+the false monotonic-regression pattern a binary search would require.
 
 Each candidate runs a normal contemporaneous baseline-vs-candidate check, identical to
 `qualock check`. `PASS` continues the scan; `BLOCK` is reported as the first confirmed
@@ -250,7 +252,8 @@ qualock check antigravity@1.1.28
 both sides of a check must be binaries that already exist locally. Antigravity is
 supported for `baseline`, `check`, and `doctor`. `qualock monitor` and scheduled
 monitoring are unavailable for Antigravity because QuaLock does not discover
-Antigravity releases. `qualock bisect` and the GitHub PR workflow remain Codex-only.
+Antigravity releases. `qualock bisect` is available for Codex and Claude Code but
+unavailable for Antigravity; the GitHub PR workflow remains Codex-only.
 
 `qualock doctor` reads the project's `.qualock/config.yaml` and checks prerequisites for
 whichever agent the project is configured for. For a project configured for `codex` or
