@@ -175,6 +175,34 @@ def test_antigravity_fails_before_release_or_state_lookup(
         )
 
 
+def test_unsupported_agent_fails_before_release_or_state_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_project_loading(monkeypatch, "gemini")
+    monkeypatch.setattr(
+        monitor_commands,
+        "read_baseline_lock",
+        lambda path: baseline_lock("gemini"),
+    )
+    monkeypatch.setattr(monitor_commands, "assert_suite_fresh", lambda *args: None)
+
+    with pytest.raises(
+        CommandError,
+        match="release monitor does not support agent 'gemini'",
+    ):
+        execute_monitor(
+            tmp_path,
+            release_source=FailIfCalledReleaseSource(),
+            state_store=FailIfCalledStateStore(),
+        )
+
+
+def test_release_source_alias_is_backward_compatible() -> None:
+    from qualock import release_monitor
+
+    assert release_monitor.ReleaseSource is release_monitor.LatestReleaseSource
+
+
 def test_missing_baseline_stops_before_release_or_state_lookup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

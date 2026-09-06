@@ -118,12 +118,16 @@ def _render_safety_result(
 def _monitor_check_executor(root: Path, candidate_spec: str) -> QualificationResult:
     agent_name, version = parse_agent_spec(candidate_spec)
     lock = read_baseline_lock(project_dir(root) / "baseline.lock")
-    display_name = agent_display_name(agent_name)
-    console.print(f"Baseline: {display_name} {lock.agent.version}", markup=False)
-    console.print(f"Latest:   {display_name} {version}", markup=False)
+    baseline_display_name = agent_display_name(lock.agent.name)
+    candidate_display_name = agent_display_name(agent_name)
+    console.print(
+        f"Baseline: {baseline_display_name} {lock.agent.version}",
+        markup=False,
+    )
+    console.print(f"Latest:   {candidate_display_name} {version}", markup=False)
     console.print(
         (
-            f"\nNew {display_name} release found. Qualifying {version} "
+            f"\nNew {candidate_display_name} release found. Qualifying {version} "
             f"against baseline {lock.agent.version}."
         ),
         markup=False,
@@ -267,6 +271,7 @@ def monitor_command(
             force=force,
             check_executor=_monitor_check_executor,
         )
+        display_name = agent_display_name(outcome.agent_name)
     except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:
         console.print(str(exc), markup=False)
         raise typer.Exit(3) from exc
@@ -280,7 +285,6 @@ def monitor_command(
         console.print(str(exc), markup=False)
         raise typer.Exit(1) from exc
 
-    display_name = agent_display_name(outcome.agent_name)
     if outcome.action is not MonitorAction.CHECKED:
         console.print(
             f"Baseline: {display_name} {outcome.baseline_version}",

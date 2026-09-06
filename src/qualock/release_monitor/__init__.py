@@ -1,5 +1,7 @@
 from qualock.agents.releases import LatestReleaseSource
 
+ReleaseSource = LatestReleaseSource
+
 from .commands import (
     CheckExecutor,
     MonitorPreflight,
@@ -15,6 +17,7 @@ __all__ = [
     "MonitorOutcome",
     "MonitorPreflight",
     "MonitorState",
+    "ReleaseSource",
     "TerminalVerdict",
     "execute_monitor",
     "monitor_preflight",

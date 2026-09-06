@@ -15,6 +15,7 @@ from qualock.agents.base import AgentAdapter, AgentBinary
 from qualock.agents.claude import ClaudeAdapter, select_claude_automation_credential
 from qualock.agents.claude_resolver import ClaudeResolver
 from qualock.agents.codex import CodexAdapter
+from qualock.agents.releases import default_agent_cache_root
 from qualock.agents.resolver import CodexResolver
 from qualock.baseline.io import (
     BaselineStaleError,
@@ -79,7 +80,7 @@ def _qualification_id(prefix: str) -> str:
 
 
 def _default_resolver(agent_name: str) -> Resolver:
-    cache = Path(user_cache_dir("qualock"))
+    cache = default_agent_cache_root()
     if agent_name == "codex":
         return CodexResolver(cache)
     if agent_name == "claude":
