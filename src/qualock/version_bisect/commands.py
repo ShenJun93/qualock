@@ -112,6 +112,7 @@ def execute_bisect(
         last_good=context.baseline_version,
         first_bad=None,
         stop=None,
+        agent=context.agent_name,
     )
     if on_start is not None:
         on_start(context.agent_name, context.baseline_version, upper_version, run_dir)
@@ -155,6 +156,7 @@ def execute_bisect(
             last_good=last_known_good,
             first_bad=first_bad,
             stop=stop_reason,
+            agent=context.agent_name,
         )
         if on_step is not None:
             on_step(step)
@@ -181,6 +183,7 @@ def execute_bisect(
         last_good=last_known_good,
         first_bad=first_bad,
         stop=stop_reason,
+        agent=context.agent_name,
     )
     return BisectOutcome(
         bisect_id=bid,
