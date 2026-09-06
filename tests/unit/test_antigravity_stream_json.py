@@ -368,6 +368,39 @@ def test_outcome_without_active_is_metadata_not_invocation() -> None:
     assert evidence.errors == ["Antigravity tool search_web: blocked"]
 
 
+def test_object_shaped_tool_error_is_recorded() -> None:
+    # Observed shape from real agy 1.1.27: tool_info.error is an object, not a string.
+    evidence = parse_antigravity_stream_json(
+        [
+            init(),
+            tool_update(1, "ACTIVE", "run_command", {"CommandLine": "python3 probe.py"}),
+            tool_update(
+                1,
+                "ERROR",
+                "run_command",
+                {"CommandLine": "python3 probe.py"},
+                error={"type": "TOOL_ERROR", "message": "read-only file system"},
+            ),
+            result(),
+        ]
+    )
+
+    assert evidence.errors == ["Antigravity tool run_command: read-only file system"]
+
+
+def test_error_state_without_usable_error_details_is_still_recorded() -> None:
+    evidence = parse_antigravity_stream_json(
+        [
+            init(),
+            tool_update(1, "ACTIVE", "run_command", {"CommandLine": "python3 probe.py"}),
+            tool_update(1, "ERROR", "run_command", {"CommandLine": "python3 probe.py"}),
+            result(),
+        ]
+    )
+
+    assert evidence.errors == ["Antigravity tool run_command: unspecified error"]
+
+
 @pytest.mark.parametrize(
     ("field", "bad_value"),
     [

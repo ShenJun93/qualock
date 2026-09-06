@@ -18,15 +18,26 @@ def write_fake_agy(
     help_text: str = DEFAULT_HELP_TEXT,
     version_exit_code: int = 0,
     name: str = "agy",
+    help_stream: str = "stdout",
+    environment_log: Path | None = None,
 ) -> Path:
     source = (
+        "import os\n"
         "import sys\n"
         "args = sys.argv[1:]\n"
+    )
+    if environment_log is not None:
+        source += (
+            f"with open({str(environment_log)!r}, 'a', encoding='utf-8') as handle:\n"
+            "    handle.write("
+            "f\"{args[0]}={os.environ.get('AGY_CLI_DISABLE_AUTO_UPDATE')}\\n\")\n"
+        )
+    source += (
         "if args == ['--version']:\n"
         f"    print({version!r})\n"
         f"    raise SystemExit({version_exit_code})\n"
         "if args == ['--help']:\n"
-        f"    print({help_text!r})\n"
+        f"    print({help_text!r}, file=sys.{help_stream})\n"
         "    raise SystemExit(0)\n"
         "raise SystemExit(2)\n"
     )
@@ -142,3 +153,46 @@ def test_resolve_rejects_missing_required_help_flag(
 
     with pytest.raises(AntigravityResolveError, match="missing required CLI flag --sandbox"):
         AntigravityResolver(agy).resolve("1.1.27")
+
+
+def test_resolve_accepts_help_contract_printed_to_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Real agy 1.1.27 writes "Usage of agy:" and its whole flag table to stderr.
+    agy = write_fake_agy(tmp_path, version="1.1.27", help_stream="stderr")
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+    binary = AntigravityResolver(agy).resolve("1.1.27")
+
+    assert binary.version == "1.1.27"
+
+
+def test_resolve_rejects_missing_help_flag_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agy = write_fake_agy(
+        tmp_path,
+        version="1.1.27",
+        help_text="--output-format --model --effort --new-project --disable-slash-commands",
+        help_stream="stderr",
+    )
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+    with pytest.raises(AntigravityResolveError, match="missing required CLI flag --sandbox"):
+        AntigravityResolver(agy).resolve("1.1.27")
+
+
+def test_resolve_disables_auto_update_while_probing_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "env.log"
+    agy = write_fake_agy(tmp_path, version="1.1.27", environment_log=log)
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.delenv("AGY_CLI_DISABLE_AUTO_UPDATE", raising=False)
+
+    AntigravityResolver(agy).resolve("1.1.27")
+
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "--version=true",
+        "--help=true",
+    ]
