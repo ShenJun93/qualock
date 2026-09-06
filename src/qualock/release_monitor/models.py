@@ -26,7 +26,7 @@ class MonitorState(BaseModel):
 
     schema_version: Literal[1] = 1
     baseline_sha256: str
-    agent: Literal["codex"] = "codex"
+    agent: Literal["codex", "claude"] = "codex"
     candidate_version: str
     verdict: TerminalVerdict
     qualification_id: str
@@ -42,6 +42,7 @@ class MonitorState(BaseModel):
 @dataclass(frozen=True)
 class MonitorOutcome:
     action: MonitorAction
+    agent_name: str
     baseline_version: str
     latest_version: str
     qualification_result: QualificationResult | None = None

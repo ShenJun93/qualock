@@ -140,7 +140,7 @@ class MemoryRegistrationStore:
 def successful_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "qualock.scheduler.commands.monitor_preflight",
-        lambda root: MonitorPreflight("0.151.0", "f" * 64),
+        lambda root: MonitorPreflight("codex", "0.151.0", "f" * 64),
     )
 
 
@@ -170,7 +170,7 @@ def test_enable_orders_preflight_before_native_mutation(
     store = MemoryRegistrationStore(events)
     monkeypatch.setattr(
         "qualock.scheduler.commands.monitor_preflight",
-        lambda root: events.append("preflight") or MonitorPreflight("0.151.0", "f" * 64),
+        lambda root: events.append("preflight") or MonitorPreflight("codex", "0.151.0", "f" * 64),
     )
     outcome = enable_schedule(
         tmp_path,

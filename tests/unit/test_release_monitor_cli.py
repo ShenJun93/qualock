@@ -38,6 +38,7 @@ def monitor_outcome(
 ) -> MonitorOutcome:
     return MonitorOutcome(
         action=action,
+        agent_name="codex",
         baseline_version="0.151.0",
         latest_version="0.152.0",
         qualification_result=result,
@@ -55,6 +56,7 @@ def invoke_outcome(tmp_path: Path, monkeypatch, outcome: MonitorOutcome, *args: 
 def test_monitor_no_new_release_exits_zero(tmp_path: Path, monkeypatch) -> None:
     outcome = MonitorOutcome(
         action=MonitorAction.NO_NEW_RELEASE,
+        agent_name="codex",
         baseline_version="0.151.0",
         latest_version="0.151.0",
     )
@@ -71,6 +73,7 @@ def test_monitor_baseline_newer_than_npm_reports_no_downgrade(
 ) -> None:
     outcome = MonitorOutcome(
         action=MonitorAction.NO_NEW_RELEASE,
+        agent_name="codex",
         baseline_version="0.152.0",
         latest_version="0.151.0",
     )
