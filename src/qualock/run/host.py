@@ -72,6 +72,7 @@ class LinuxHostRunner:
 
         config_target = self.home / ".gemini" / "config"
         app_data_target = self.home / ".gemini" / "antigravity-cli"
+        git_dir = str((workspace / ".git").resolve())
         argv = [
             self.bwrap_executable,
             "--unshare-user",
@@ -95,8 +96,11 @@ class LinuxHostRunner:
             str(invocation.oauth_token_path),
             str(app_data_target / _OAUTH_TOKEN_NAME),
             "--ro-bind",
-            str((workspace / ".git").resolve()),
+            git_dir,
             f"{_WORKSPACE_MOUNT}/.git",
+            "--ro-bind",
+            git_dir,
+            git_dir,
             "--dev",
             "/dev",
             "--chdir",
