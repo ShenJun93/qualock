@@ -47,6 +47,7 @@ def test_process_can_stream_explicit_stdin() -> None:
     assert result.stderr == ""
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX-only: os.getpgrp/os.killpg have no Windows equivalent")
 def test_process_tree_timeout_kills_long_lived_descendant(tmp_path: Path) -> None:
     process_info = tmp_path / "process-info"
     script = (
