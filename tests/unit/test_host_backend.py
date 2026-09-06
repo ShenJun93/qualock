@@ -236,11 +236,8 @@ def backend(
     adapter: FakeAdapter | None = None,
     source: FakeSource | None = None,
     integrity_policy: IntegrityPolicy | None = None,
-    platform_system: str | None = None,
+    platform_system: str = "Linux",
 ) -> LinuxHostQualificationBackend:
-    extra: dict[str, object] = {}
-    if platform_system is not None:
-        extra["platform_system"] = platform_system
     return LinuxHostQualificationBackend(
         source_manager=source or FakeSource(),
         host_runner=runner,
@@ -249,7 +246,7 @@ def backend(
         reasoning_effort="high",
         work_root=tmp_path / "work",
         integrity_policy=integrity_policy or IntegrityPolicy(),
-        **extra,  # type: ignore[arg-type]
+        platform_system=platform_system,
     )
 
 
@@ -514,7 +511,17 @@ def test_platform_check_defaults_to_the_running_platform(
 ) -> None:
     monkeypatch.setattr(host_backend.platform, "system", lambda: "Windows")
     source = FakeSource()
-    service = backend(tmp_path, FakeHostRunner(), source=source)
+    # Constructed directly, bypassing the ``backend`` helper, so the production
+    # default of ``platform.system()`` stays covered.
+    service = LinuxHostQualificationBackend(
+        source_manager=source,
+        host_runner=FakeHostRunner(),
+        agent_adapter=FakeAdapter(),
+        model="gemini-3-pro",
+        reasoning_effort="high",
+        work_root=tmp_path / "work",
+        integrity_policy=IntegrityPolicy(),
+    )
 
     with pytest.raises(UnsupportedRuntimeError):
         service.prepare(canary(tmp_path), "q1")
