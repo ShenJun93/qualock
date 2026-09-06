@@ -41,6 +41,51 @@ class _ClaudeLatestReleaseSource:
             raise ReleaseDiscoveryError(str(exc)) from exc
 
 
+class StableReleaseCatalog(Protocol):
+    def stable_versions(self) -> tuple[str, ...]: ...
+
+
+class _CodexStableReleaseCatalog:
+    def __init__(self, resolver: CodexResolver) -> None:
+        self.resolver = resolver
+
+    def stable_versions(self) -> tuple[str, ...]:
+        try:
+            return self.resolver.stable_versions()
+        except CodexResolveError as exc:
+            raise ReleaseDiscoveryError(str(exc)) from exc
+
+
+class _ClaudeStableReleaseCatalog:
+    def __init__(self, resolver: ClaudeResolver) -> None:
+        self.resolver = resolver
+
+    def stable_versions(self) -> tuple[str, ...]:
+        try:
+            return self.resolver.stable_versions()
+        except ClaudeResolveError as exc:
+            raise ReleaseDiscoveryError(str(exc)) from exc
+
+
+def default_stable_release_catalog(
+    agent_name: str,
+    *,
+    cache_root: Path | None = None,
+) -> StableReleaseCatalog:
+    cache = cache_root or default_agent_cache_root()
+    if agent_name == "codex":
+        return _CodexStableReleaseCatalog(CodexResolver(cache))
+    if agent_name == "claude":
+        return _ClaudeStableReleaseCatalog(ClaudeResolver(cache))
+    if agent_name == "antigravity":
+        raise ReleaseDiscoveryError(
+            "release discovery is unavailable for Antigravity"
+        )
+    raise ReleaseDiscoveryError(
+        f"release discovery is unavailable for agent {agent_name!r}"
+    )
+
+
 def default_latest_release_source(
     agent_name: str,
     *,
