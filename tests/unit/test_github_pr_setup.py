@@ -4,9 +4,11 @@ from pathlib import Path
 import pytest
 
 from qualock.github_pr.setup import (
+    _LEGACY_PRODUCER_SHA256,
     GitHubSetupConflictError,
     GitHubSetupOutcome,
     GitHubSetupStatus,
+    _text_sha256,
     install_github_workflows,
 )
 from qualock.github_pr.templates import PRODUCER_WORKFLOW, REPORTER_WORKFLOW
@@ -112,6 +114,13 @@ jobs:
 
 PRODUCER_PATH = Path(".github/workflows/qualock-pr.yml")
 REPORTER_PATH = Path(".github/workflows/qualock-pr-report.yml")
+
+
+def test_legacy_fixture_matches_locked_normalized_sha() -> None:
+    assert _text_sha256(LEGACY_PRODUCER_WORKFLOW) == (
+        "29648454f323b8816f43ccdc4069c00d14c5c720e10fd9a58f4475a5b1c1ce69"
+    )
+    assert _text_sha256(LEGACY_PRODUCER_WORKFLOW) == _LEGACY_PRODUCER_SHA256
 
 
 def test_setup_creates_exactly_two_workflows(tmp_path: Path) -> None:
