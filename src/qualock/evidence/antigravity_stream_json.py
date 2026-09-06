@@ -106,10 +106,21 @@ def _record_tool_invocation(
     return None
 
 
-def _record_tool_error(evidence: AgentEvidence, tool_name: str, tool_info: dict[str, Any]) -> None:
-    error = tool_info.get("error")
+def _tool_error_detail(error: Any) -> str:
     if isinstance(error, str) and error:
-        evidence.errors.append(f"Antigravity tool {tool_name}: {error}")
+        return error
+    # agy 1.1.27 reports tool failures as {"type": ..., "message": ...} objects.
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str) and message:
+            return message
+    return "unspecified error"
+
+
+def _record_tool_error(evidence: AgentEvidence, tool_name: str, tool_info: dict[str, Any]) -> None:
+    evidence.errors.append(
+        f"Antigravity tool {tool_name}: {_tool_error_detail(tool_info.get('error'))}"
+    )
 
 
 def _record_step_update(

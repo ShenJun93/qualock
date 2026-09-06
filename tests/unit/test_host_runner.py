@@ -86,6 +86,8 @@ def test_build_agent_argv_has_exact_private_mount_contract(tmp_path: Path) -> No
         "--ro-bind",
         str((workspace / ".git").resolve()),
         str((workspace / ".git").resolve()),
+        "--proc",
+        "/proc",
         "--dev",
         "/dev",
         "--chdir",
@@ -136,6 +138,28 @@ def test_build_agent_argv_mounts_host_root_read_only_with_explicit_writable_moun
     assert ("/", "/") in _bindings(argv, "--ro-bind")
     assert argv[argv.index("--tmpfs") : argv.index("--tmpfs") + 2] == ["--tmpfs", "/tmp"]
     assert argv.index("--tmpfs") < argv.index("--dir") < argv.index("--chdir")
+
+
+def test_build_agent_argv_mounts_private_procfs_over_the_read_only_root(
+    tmp_path: Path,
+) -> None:
+    # The agent's own terminal sandbox re-execs itself into a nested user
+    # namespace, which requires writing /proc/self/{setgroups,uid_map,gid_map}.
+    # `--ro-bind / /` makes the inherited /proc read-only, so those writes fail
+    # EROFS and the nested sandbox never starts.  A private procfs must be
+    # mounted over the read-only root without making the root itself writable.
+    workspace = Path("/home/qualock/.qualock/work/attempt")
+    invocation = fake_invocation(tmp_path)
+
+    argv = LinuxHostRunner(home=tmp_path / "home").build_agent_argv(
+        workspace=workspace,
+        invocation=invocation,
+    )
+
+    assert argv[argv.index("--proc") : argv.index("--proc") + 2] == ["--proc", "/proc"]
+    assert argv.index("--ro-bind") < argv.index("--proc") < argv.index("--chdir")
+    assert ("/proc", "/proc") not in _bindings(argv, "--bind")
+    assert ("/", "/") not in _bindings(argv, "--bind")
 
 
 def test_build_agent_argv_protects_git_through_original_workspace_path(tmp_path: Path) -> None:

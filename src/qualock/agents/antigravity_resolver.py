@@ -1,4 +1,5 @@
 import hashlib
+import os
 import platform
 import shutil
 from pathlib import Path
@@ -10,6 +11,14 @@ from .base import AgentBinary
 
 class AntigravityResolveError(RuntimeError):
     pass
+
+
+def _probe_environment() -> dict[str, str]:
+    # Antigravity ships a background self-updater; a resolved binary must not
+    # mutate between the version probe and the SHA-256 pin.
+    environment = dict(os.environ)
+    environment["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
+    return environment
 
 
 _REQUIRED_CLI_FLAGS = (
@@ -48,7 +57,10 @@ class AntigravityResolver:
         if not resolved_path.is_file():
             raise AntigravityResolveError(f"Antigravity binary not found: {binary_path}")
 
-        version_result = run_process([str(resolved_path), "--version"], timeout_seconds=10)
+        environment = _probe_environment()
+        version_result = run_process(
+            [str(resolved_path), "--version"], env=environment, timeout_seconds=10
+        )
         if version_result.timed_out or version_result.exit_code != 0:
             raise AntigravityResolveError(
                 version_result.stderr.strip() or "failed to inspect Antigravity version"
@@ -62,12 +74,16 @@ class AntigravityResolver:
                 f"Antigravity binary reports version {reported!r}, requested {version}"
             )
 
-        help_result = run_process([str(resolved_path), "--help"], timeout_seconds=10)
+        help_result = run_process(
+            [str(resolved_path), "--help"], env=environment, timeout_seconds=10
+        )
         if help_result.timed_out or help_result.exit_code != 0:
             raise AntigravityResolveError(
                 help_result.stderr.strip() or "failed to inspect Antigravity CLI contract"
             )
-        help_text = help_result.stdout
+        # agy 1.1.27 prints its whole "Usage of agy:" flag table to stderr, so the
+        # CLI contract must be checked against both streams.
+        help_text = help_result.stdout + help_result.stderr
         for flag in _REQUIRED_CLI_FLAGS:
             if flag not in help_text:
                 raise AntigravityResolveError(f"Antigravity binary missing required CLI flag {flag}")

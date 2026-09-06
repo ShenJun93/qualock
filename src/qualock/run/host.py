@@ -101,6 +101,13 @@ class LinuxHostRunner:
             "--ro-bind",
             git_dir,
             git_dir,
+            # The read-only host root also makes the inherited /proc read-only,
+            # which breaks the nested user namespace Antigravity's own terminal
+            # sandbox re-execs into: writing /proc/self/{setgroups,uid,gid}_map
+            # fails EROFS.  A private procfs restores those writes without
+            # making any host path writable.
+            "--proc",
+            "/proc",
             "--dev",
             "/dev",
             "--chdir",
