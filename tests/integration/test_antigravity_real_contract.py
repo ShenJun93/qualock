@@ -102,13 +102,15 @@ print({json.dumps(marker)} + json.dumps(report, separators=(",", ":")))
 
 
 def _run_command_done_outputs(steps: list[dict[str, Any]]) -> list[str]:
-    """tool_info.output for every run_command step that reached DONE, in order.
+    """String tool_info.output for every run_command step that reached DONE, in order.
 
     Deliberately excludes ACTIVE/ERROR steps: a run_command step stuck in ACTIVE
     forever (a PID/supervisor hang) must read as "no DONE output", not be silently
-    treated the same as a completed one.
+    treated the same as a completed one. A DONE step whose output is absent or
+    non-string is also excluded here; see `_run_command_done_without_output` for
+    detecting that case distinctly, rather than folding it into "never reached DONE".
     """
-    outputs = []
+    outputs: list[str] = []
     for step in steps:
         if step.get("tool_name") != "run_command" or step.get("state") != "DONE":
             continue
@@ -118,22 +120,67 @@ def _run_command_done_outputs(steps: list[dict[str, Any]]) -> list[str]:
     return outputs
 
 
+def _run_command_done_without_output(steps: list[dict[str, Any]]) -> bool:
+    """True when a run_command step reached DONE but had no usable string output.
+
+    Kept separate from `_run_command_done_outputs` so that bucket is distinguishable
+    from "run_command never reached DONE at all" (a PID/supervisor hang): the two
+    failure modes have different likely causes and should not share one message.
+    """
+    for step in steps:
+        if step.get("tool_name") != "run_command" or step.get("state") != "DONE":
+            continue
+        tool_info = step.get("tool_info")
+        output = tool_info.get("output") if isinstance(tool_info, dict) else None
+        if not isinstance(output, str):
+            return True
+    return False
+
+
+def _select_probe_output(outputs: list[str], *, marker: str = PROBE_MARKER) -> str:
+    """Select the run_command DONE output that carries the probe marker.
+
+    Selecting by marker presence rather than position (e.g. the last DONE output)
+    means a harmless run_command executed after the probe — a verification `ls`,
+    a `cat` — cannot cause a false "marker not found" failure. More than one
+    marker-bearing output fails closed as ambiguous rather than silently picking
+    one, since a duplicated/spoofed marker output cannot be told apart from the
+    real probe.
+    """
+    marked = [output for output in outputs if marker in output]
+    if not marked:
+        raise AssertionError(f"no run_command DONE output contained probe marker {marker!r}")
+    if len(marked) > 1:
+        raise AssertionError(
+            f"probe marker {marker!r} appeared in {len(marked)} run_command DONE outputs; ambiguous"
+        )
+    return marked[0]
+
+
 def _extract_probe(output: str, *, marker: str = PROBE_MARKER) -> dict[str, Any]:
     """Extract and validate the sanitized probe JSON printed after `marker`.
 
     Raised failures are distinct from a missing-DONE-output failure so a probe
     that ran but was cut off or corrupted cannot be confused with run_command
-    never completing at all.
+    never completing at all. Uses `JSONDecoder.raw_decode` rather than taking only
+    the first line after the marker, so benign whitespace/line-wrapping inside the
+    JSON object is tolerated; trailing non-whitespace content after the object
+    (extra prose, a shell prompt) is still rejected rather than silently dropped.
     """
-    index = output.find(marker)
-    if index == -1:
+    occurrences = output.count(marker)
+    if occurrences == 0:
         raise AssertionError(f"probe marker {marker!r} not found in run_command output")
-    remainder = output[index + len(marker) :].splitlines()
-    payload = remainder[0] if remainder else ""
+    if occurrences > 1:
+        raise AssertionError(
+            f"probe marker {marker!r} occurs {occurrences} times in run_command output; ambiguous"
+        )
+    remainder = output[output.find(marker) + len(marker) :].lstrip()
     try:
-        decoded = json.loads(payload)
+        decoded, end = json.JSONDecoder().raw_decode(remainder)
     except json.JSONDecodeError as exc:
         raise AssertionError(f"probe marker payload was not valid JSON: {exc}") from exc
+    if remainder[end:].strip():
+        raise AssertionError("probe marker payload has trailing non-whitespace content")
     if not isinstance(decoded, dict):
         # AssertionError (not TypeError) so callers can uniformly catch probe
         # rejection the same way as the missing-marker/malformed-JSON cases above.
@@ -188,6 +235,82 @@ def test_extract_probe_rejects_output_missing_the_marker() -> None:
 def test_extract_probe_rejects_malformed_json_after_the_marker() -> None:
     with pytest.raises(AssertionError, match="JSON"):
         _extract_probe(PROBE_MARKER + "{not valid json")
+
+
+def test_extract_probe_rejects_multiple_markers_in_one_output() -> None:
+    payload = {"cwd": WORKSPACE_MOUNT}
+    doubled = PROBE_MARKER + json.dumps(payload) + PROBE_MARKER + json.dumps(payload)
+    with pytest.raises(AssertionError, match="ambiguous"):
+        _extract_probe(doubled)
+
+
+def test_extract_probe_rejects_non_dict_json_payload() -> None:
+    with pytest.raises(AssertionError, match="JSON object"):
+        _extract_probe(PROBE_MARKER + json.dumps(["not", "a", "dict"]))
+
+
+def test_extract_probe_rejects_trailing_non_whitespace_after_json() -> None:
+    payload = {"cwd": WORKSPACE_MOUNT}
+    output = PROBE_MARKER + json.dumps(payload, separators=(",", ":")) + " extra prose"
+    with pytest.raises(AssertionError, match="trailing"):
+        _extract_probe(output)
+
+
+def test_extract_probe_tolerates_line_wrapped_json() -> None:
+    payload = {"cwd": WORKSPACE_MOUNT, "outbound_tcp": "blocked"}
+    wrapped = json.dumps(payload, indent=2)
+    output = PROBE_MARKER + wrapped + "\n"
+    assert _extract_probe(output) == payload
+
+
+def test_select_probe_output_ignores_unrelated_later_done_output() -> None:
+    payload = {"cwd": WORKSPACE_MOUNT}
+    marked = PROBE_MARKER + json.dumps(payload, separators=(",", ":"))
+    unrelated = "total 0\ndrwxr-xr-x 2 user user 40 Jan  1 00:00 .\n"
+    assert _select_probe_output([marked, unrelated]) == marked
+    assert _select_probe_output([unrelated, marked]) == marked
+
+
+def test_select_probe_output_rejects_ambiguous_multiple_marked_outputs() -> None:
+    payload = {"cwd": WORKSPACE_MOUNT}
+    marked = PROBE_MARKER + json.dumps(payload, separators=(",", ":"))
+    with pytest.raises(AssertionError, match="ambiguous"):
+        _select_probe_output([marked, marked])
+
+
+def test_select_probe_output_rejects_when_no_output_carries_the_marker() -> None:
+    with pytest.raises(AssertionError, match="no run_command DONE output"):
+        _select_probe_output(["total 0\n", "hello world\n"])
+
+
+def test_run_command_done_outputs_excludes_error_steps() -> None:
+    payload = {"cwd": WORKSPACE_MOUNT}
+    marked = PROBE_MARKER + json.dumps(payload, separators=(",", ":"))
+    error_step = {
+        "tool_name": "run_command",
+        "state": "ERROR",
+        "tool_info": {"name": "run_command", "parameters": {}, "output": marked},
+    }
+    done = _done_run_command_step(marked)
+    assert _run_command_done_outputs([error_step, done]) == [marked]
+
+
+def test_run_command_done_without_output_true_for_hollow_done_step() -> None:
+    hollow = {
+        "tool_name": "run_command",
+        "state": "DONE",
+        "tool_info": {"name": "run_command", "parameters": {}},
+    }
+    assert _run_command_done_without_output([hollow]) is True
+
+
+def test_run_command_done_without_output_false_when_no_done_step() -> None:
+    active = {
+        "tool_name": "run_command",
+        "state": "ACTIVE",
+        "tool_info": {"name": "run_command", "parameters": {}},
+    }
+    assert _run_command_done_without_output([active]) is False
 
 
 def _contract_prompt(*, view_token: str, home_sentinel: Path) -> str:
@@ -367,9 +490,26 @@ def test_real_antigravity_linux_host_contract(tmp_path: Path) -> None:
         events = _stream_events(state.stdout)
         steps = _tool_steps(events)
         run_command_done_outputs = _run_command_done_outputs(steps)
-        probe: dict[str, Any] = (
-            _extract_probe(run_command_done_outputs[-1]) if run_command_done_outputs else {}
-        )
+
+        # Probe acquisition failures are captured as a reason string rather than
+        # raised here, so a marker/JSON parsing failure cannot abort the test before
+        # the sanitized summary and optional NDJSON stream dump below are written.
+        # The distinct reasons are asserted only at the step-6 gate further down,
+        # once those artifacts already exist on disk.
+        probe: dict[str, Any] = {}
+        probe_error: str | None = None
+        if not run_command_done_outputs:
+            probe_error = (
+                "run_command reached DONE without usable string tool_info.output"
+                if _run_command_done_without_output(steps)
+                else "run_command never reached DONE; sandboxed probe result is "
+                "unavailable (possible PID/supervisor hang)"
+            )
+        else:
+            try:
+                probe = _extract_probe(_select_probe_output(run_command_done_outputs))
+            except AssertionError as exc:
+                probe_error = str(exc)
 
         _write_summary(
             {
@@ -384,6 +524,7 @@ def test_real_antigravity_linux_host_contract(tmp_path: Path) -> None:
                     for step in steps
                 ],
                 "probe": probe,
+                "probe_error": probe_error,
             }
         )
         stream_destination = os.environ.get("QUALOCK_ANTIGRAVITY_CONTRACT_STREAM")
@@ -425,10 +566,7 @@ def test_real_antigravity_linux_host_contract(tmp_path: Path) -> None:
             step for step in steps
             if step.get("tool_name") == "run_command" and step.get("state") == "ERROR"
         ], "run_command errored; the Antigravity terminal sandbox did not start"
-        assert probe, (
-            "run_command never reached DONE; sandboxed probe result is unavailable "
-            "(possible PID/supervisor hang)"
-        )
+        assert probe, probe_error
         assert probe["cwd"] == WORKSPACE_MOUNT
 
         # 7. HOME sentinel and host /tmp sentinel are both invisible to that shell.
