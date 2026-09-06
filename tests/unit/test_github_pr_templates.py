@@ -459,9 +459,9 @@ def _run_claude_precedence(
     oauth_token: str,
 ) -> dict[str, str]:
     probe = script + (
-        'printf \'AUTH=%s\\n\' "${ANTHROPIC_AUTH_TOKEN:-<unset>}"\n'
-        'printf \'API=%s\\n\' "${ANTHROPIC_API_KEY:-<unset>}"\n'
-        'printf \'OAUTH=%s\\n\' "${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}"\n'
+        'printf \'AUTH=%s\\n\' "${ANTHROPIC_AUTH_TOKEN-<unset>}"\n'
+        'printf \'API=%s\\n\' "${ANTHROPIC_API_KEY-<unset>}"\n'
+        'printf \'OAUTH=%s\\n\' "${CLAUDE_CODE_OAUTH_TOKEN-<unset>}"\n'
         'printf \'AVAILABLE=%s\\n\' "$credential_available"\n'
     )
     env = dict(os.environ)
@@ -481,10 +481,10 @@ def _run_claude_precedence(
             "AUTH": "auth-val", "API": "<unset>", "OAUTH": "<unset>", "AVAILABLE": "true",
         }),
         ("", "api-val", "oauth-val", {
-            "AUTH": "<unset>", "API": "api-val", "OAUTH": "<unset>", "AVAILABLE": "true",
+            "AUTH": "", "API": "api-val", "OAUTH": "<unset>", "AVAILABLE": "true",
         }),
         ("", "", "oauth-val", {
-            "AUTH": "<unset>", "API": "<unset>", "OAUTH": "oauth-val", "AVAILABLE": "true",
+            "AUTH": "", "API": "", "OAUTH": "oauth-val", "AVAILABLE": "true",
         }),
         ("", "", "", {
             "AUTH": "<unset>", "API": "<unset>", "OAUTH": "<unset>", "AVAILABLE": "false",
