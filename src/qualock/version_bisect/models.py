@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from enum import Enum
+from typing import Literal
 
 from qualock.qualification.models import Verdict
+
+BisectAgent = Literal["codex", "claude"]
 
 
 class BisectStop(str, Enum):
@@ -21,6 +24,7 @@ class BisectStep:
 @dataclass(frozen=True)
 class BisectOutcome:
     bisect_id: str
+    agent_name: BisectAgent
     baseline_version: str
     upper_version: str
     steps: tuple[BisectStep, ...]
