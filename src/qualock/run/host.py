@@ -76,7 +76,7 @@ class LinuxHostRunner:
         argv = [
             self.bwrap_executable,
             "--unshare-user",
-            "--bind",
+            "--ro-bind",
             "/",
             "/",
             "--tmpfs",
