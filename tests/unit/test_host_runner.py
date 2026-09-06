@@ -61,6 +61,7 @@ def test_build_agent_argv_has_exact_private_mount_contract(tmp_path: Path) -> No
     assert argv == [
         "bwrap",
         "--unshare-user",
+        "--unshare-pid",
         "--ro-bind",
         "/",
         "/",
@@ -127,7 +128,7 @@ def test_build_agent_argv_mounts_host_root_read_only_with_explicit_writable_moun
         invocation=invocation,
     )
 
-    assert argv[1:5] == ["--unshare-user", "--ro-bind", "/", "/"]
+    assert argv[1:6] == ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/"]
     read_write = _bindings(argv, "--bind")
     assert read_write == {
         (str(workspace.resolve()), "/tmp/qualock-workspace"),
@@ -160,6 +161,31 @@ def test_build_agent_argv_mounts_private_procfs_over_the_read_only_root(
     assert argv.index("--ro-bind") < argv.index("--proc") < argv.index("--chdir")
     assert ("/proc", "/proc") not in _bindings(argv, "--bind")
     assert ("/", "/") not in _bindings(argv, "--bind")
+
+
+def test_build_agent_argv_isolates_the_pid_namespace_over_the_private_procfs(
+    tmp_path: Path,
+) -> None:
+    # The private procfs that lets the agent's nested user namespace start also
+    # makes same-uid host `/proc/<pid>` controls (for example `oom_score_adj`)
+    # writable while the PID namespace is shared.  Unsharing PIDs removes that
+    # surface and makes the sandbox root the namespace init, so process-tree
+    # cleanup reaps every descendant structurally.
+    workspace = Path("/home/qualock/.qualock/work/attempt")
+    invocation = fake_invocation(tmp_path)
+
+    argv = LinuxHostRunner(home=tmp_path / "home").build_agent_argv(
+        workspace=workspace,
+        invocation=invocation,
+    )
+
+    assert "--unshare-pid" in argv
+    # The procfs must be mounted after the unshare so it reflects the new
+    # namespace rather than the host's process table.
+    assert argv.index("--unshare-pid") < argv.index("--proc")
+    assert argv[argv.index("--proc") : argv.index("--proc") + 2] == ["--proc", "/proc"]
+    assert "--unshare-net" not in argv
+    assert "--share-net" not in argv
 
 
 def test_build_agent_argv_protects_git_through_original_workspace_path(tmp_path: Path) -> None:
