@@ -18,6 +18,21 @@ def test_writes_report_json_markdown_and_qualification_metadata(tmp_path: Path) 
     assert report_payload["executions"][0]["attempts"][0]["usage"]["observed"] is True
     assert "agent_display_name" not in report_payload
     assert "agent_display_name" not in qualification_payload
+    assert set(qualification_payload) == {
+        "qualification_id",
+        "baseline_version",
+        "candidate_version",
+        "run_order",
+        "verdict",
+        "max_attempts",
+        "max_tokens",
+        "attempts_used",
+        "observed_tokens",
+    }
+    assert qualification_payload["max_attempts"] is None
+    assert qualification_payload["max_tokens"] is None
+    assert qualification_payload["attempts_used"] == 0
+    assert qualification_payload["observed_tokens"] is None
 
 
 def test_refuses_to_overwrite_existing_qualification(tmp_path: Path) -> None:

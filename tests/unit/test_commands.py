@@ -277,6 +277,8 @@ def test_unstable_baseline_persists_attempt_evidence(tmp_path: Path) -> None:
     assert len(payload["canaries"]["sample"]) == 3
     assert payload["canaries"]["sample"][0]["success"] is False
     assert payload["canaries"]["sample"][0]["valid"] is True
+    assert payload["canaries"]["sample"][0]["usage"]["cache_write_input_tokens"] == 0
+    assert payload["canaries"]["sample"][0]["usage"]["observed"] is True
 
 
 def test_check_reruns_pinned_baseline_and_candidate_and_writes_report(tmp_path: Path) -> None:
@@ -352,9 +354,17 @@ def test_check_forwards_attempt_budget_and_writes_incomplete_report(tmp_path: Pa
         "candidate_version",
         "run_order",
         "verdict",
+        "max_attempts",
+        "max_tokens",
+        "attempts_used",
+        "observed_tokens",
     }
     assert qualification["run_order"] == []
     assert qualification["verdict"] == "incomplete"
+    assert qualification["max_attempts"] == 5
+    assert qualification["max_tokens"] is None
+    assert qualification["attempts_used"] == 0
+    assert qualification["observed_tokens"] == 0
 
 
 def test_check_rejects_nonpositive_attempt_budget_before_resolution(tmp_path: Path) -> None:
@@ -374,6 +384,64 @@ def test_check_rejects_nonpositive_attempt_budget_before_resolution(tmp_path: Pa
     assert resolver.calls == []
     assert backend.prepared == []
     assert backend.calls == []
+
+
+def test_check_rejects_nonpositive_token_budget_before_resolution(tmp_path: Path) -> None:
+    resolver = FakeResolver()
+    backend = FakeBackend()
+
+    for bad in (0, -5):
+        with pytest.raises(CommandError, match="max tokens must be greater than zero"):
+            execute_check(
+                tmp_path,
+                "codex@0.151.0",
+                resolver=resolver,
+                backend=backend,
+                max_tokens=bad,
+            )
+
+    assert resolver.calls == []
+    assert backend.prepared == []
+    assert backend.calls == []
+
+
+def test_check_forwards_both_budgets_to_executor_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    baseline_backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=baseline_backend,
+        qualification_id="baseline-both",
+        created_at="2026-09-05T00:00:00Z",
+    )
+    check_backend = FakeBackend()
+
+    captured: dict[str, object] = {}
+    real_run = commands_module.QualificationExecutor.run
+
+    def fake_run(self, *args, **kwargs):
+        captured["max_attempts"] = kwargs.get("max_attempts")
+        captured["max_tokens"] = kwargs.get("max_tokens")
+        return real_run(self, *args, **kwargs)
+
+    monkeypatch.setattr(commands_module.QualificationExecutor, "run", fake_run)
+
+    execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=check_backend,
+        qualification_id="check-both",
+        max_attempts=5,
+        max_tokens=1000,
+    )
+
+    assert captured == {"max_attempts": 5, "max_tokens": 1000}
 
 
 def test_check_candidate_agent_must_match_config_before_resolution(tmp_path: Path) -> None:
