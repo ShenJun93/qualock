@@ -37,3 +37,38 @@ class ReportLoadFailure:
 class HistorySummary:
     loaded: tuple[LoadedReport, ...]
     ignored: tuple[ReportLoadFailure, ...]
+
+
+@dataclass(frozen=True)
+class CanaryEffectiveness:
+    canary_id: str
+    eligible_samples: int
+    detections: int
+    detection_rate: float | None
+
+
+@dataclass(frozen=True)
+class CanaryEstimate:
+    canary_id: str
+    runtime_samples_ms: tuple[int, ...]
+    token_samples: tuple[int, ...]
+    runtime_median_ms: float | None
+    token_median: float | None
+
+
+@dataclass(frozen=True)
+class SuiteEstimate:
+    runtime_ms: float | None
+    tokens: float | None
+    missing_runtime_canaries: tuple[str, ...]
+    missing_token_canaries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class HistoryAnalysis:
+    loaded_reports: int
+    ignored_reports: tuple[ReportLoadFailure, ...]
+    ranked: tuple[CanaryEffectiveness, ...]
+    not_enough_history: tuple[CanaryEffectiveness, ...]
+    per_canary_estimates: tuple[CanaryEstimate, ...]
+    suite_estimate: SuiteEstimate
