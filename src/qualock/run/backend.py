@@ -4,7 +4,7 @@ from pathlib import Path
 
 from qualock.agents.base import AgentAdapter, AgentBinary
 from qualock.canary.models import CanarySpec
-from qualock.evidence.models import AgentEvidenceError
+from qualock.evidence.models import AgentEvidence, AgentEvidenceError
 from qualock.qualification.models import AttemptResult, Usage
 from qualock.source.git import GitSourceManager
 
@@ -12,6 +12,17 @@ from .docker import DockerRunner
 from .integrity import IntegrityPathError, protected_path_violations
 from .models import PreparedTarget
 from .schedule import Side
+
+
+def _usage_from_evidence(evidence: AgentEvidence) -> Usage:
+    return Usage(
+        input_tokens=evidence.input_tokens,
+        cached_input_tokens=evidence.cached_input_tokens,
+        cache_write_input_tokens=evidence.cache_write_input_tokens,
+        output_tokens=evidence.output_tokens,
+        reasoning_output_tokens=evidence.reasoning_output_tokens,
+        observed=evidence.usage_observed,
+    )
 
 
 @dataclass(frozen=True)
@@ -153,12 +164,7 @@ class DockerQualificationBackend:
                     success=False,
                     valid=False,
                     duration_ms=state.elapsed_ms,
-                    usage=Usage(
-                        input_tokens=evidence.input_tokens,
-                        cached_input_tokens=evidence.cached_input_tokens,
-                        output_tokens=evidence.output_tokens,
-                        reasoning_output_tokens=evidence.reasoning_output_tokens,
-                    ),
+                    usage=_usage_from_evidence(evidence),
                     invalid_reason="; ".join(reasons),
                     events_jsonl=state.stdout,
                     protected_path_violations=violations,
@@ -177,12 +183,7 @@ class DockerQualificationBackend:
                 success=success,
                 valid=True,
                 duration_ms=state.elapsed_ms,
-                usage=Usage(
-                    input_tokens=evidence.input_tokens,
-                    cached_input_tokens=evidence.cached_input_tokens,
-                    output_tokens=evidence.output_tokens,
-                    reasoning_output_tokens=evidence.reasoning_output_tokens,
-                ),
+                usage=_usage_from_evidence(evidence),
                 events_jsonl=state.stdout,
                 protected_path_violations=violations,
             )

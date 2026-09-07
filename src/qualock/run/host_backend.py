@@ -18,6 +18,18 @@ from .integrity import IntegrityPathError, protected_path_violations
 from .models import PreparedTarget
 from .schedule import Side
 
+
+def _usage_from_evidence(evidence: AgentEvidence) -> Usage:
+    return Usage(
+        input_tokens=evidence.input_tokens,
+        cached_input_tokens=evidence.cached_input_tokens,
+        cache_write_input_tokens=evidence.cache_write_input_tokens,
+        output_tokens=evidence.output_tokens,
+        reasoning_output_tokens=evidence.reasoning_output_tokens,
+        observed=evidence.usage_observed,
+    )
+
+
 _ATTEMPTS_DIRNAME = "attempts"
 _PREPARED_DIRNAME = "prepared"
 _WORKSPACE_DIRNAME = "workspace"
@@ -247,12 +259,7 @@ class LinuxHostQualificationBackend:
             success=success,
             valid=invalid_reason is None,
             duration_ms=state.elapsed_ms,
-            usage=Usage(
-                input_tokens=evidence.input_tokens,
-                cached_input_tokens=evidence.cached_input_tokens,
-                output_tokens=evidence.output_tokens,
-                reasoning_output_tokens=evidence.reasoning_output_tokens,
-            ),
+            usage=_usage_from_evidence(evidence),
             invalid_reason=invalid_reason,
             events_jsonl=state.stdout,
             protected_path_violations=violations,
