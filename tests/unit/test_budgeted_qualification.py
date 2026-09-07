@@ -37,7 +37,7 @@ class RecordingBackend:
             success=success,
             valid=True,
             duration_ms=10,
-            usage=Usage(input_tokens=1, output_tokens=1),
+            usage=Usage(input_tokens=1, output_tokens=1, observed=True),
         )
 
 
@@ -89,6 +89,7 @@ def test_unconstrained_budget_preserves_existing_order(
         suite,
         qualification_id="q-fixed",
         max_attempts=max_attempts,
+        max_tokens=None,
     )
 
     expected_calls = [
@@ -99,6 +100,10 @@ def test_unconstrained_budget_preserves_existing_order(
     assert backend.calls == expected_calls
     assert [item.canary_id for item in result.executions] == [item.id for item in suite]
     assert result.run_order == tuple(expected_calls)
+    assert result.max_attempts == max_attempts
+    assert result.max_tokens is None
+    assert result.attempts_used == len(expected_calls)
+    assert result.observed_tokens == len(expected_calls) * 2
 
 
 def test_constrained_budget_runs_critical_first_but_returns_original_order(tmp_path: Path) -> None:
@@ -116,6 +121,7 @@ def test_constrained_budget_runs_critical_first_but_returns_original_order(tmp_p
         suite,
         qualification_id="q-budget",
         max_attempts=6,
+        max_tokens=None,
     )
 
     expected_critical_calls = [
@@ -131,6 +137,10 @@ def test_constrained_budget_runs_critical_first_but_returns_original_order(tmp_p
         "normal-b",
     ]
     assert result.verdict is Verdict.INCOMPLETE
+    assert result.max_attempts == 6
+    assert result.max_tokens is None
+    assert result.attempts_used == len(expected_critical_calls)
+    assert result.observed_tokens == len(expected_critical_calls) * 2
 
     first, critical, last = result.executions
     for skipped in (first, last):
@@ -162,12 +172,17 @@ def test_budget_never_starts_a_partial_canary(tmp_path: Path) -> None:
         suite,
         qualification_id="q-seven",
         max_attempts=7,
+        max_tokens=None,
     )
 
     assert backend.prepared == ["critical"]
     assert len(backend.calls) == 6
     assert result.executions[1].attempts == ()
     assert result.verdict is Verdict.INCOMPLETE
+    assert result.max_attempts == 7
+    assert result.max_tokens is None
+    assert result.attempts_used == 6
+    assert result.observed_tokens == 12
 
 
 def test_budget_smaller_than_one_canary_runs_nothing(tmp_path: Path) -> None:
@@ -184,6 +199,7 @@ def test_budget_smaller_than_one_canary_runs_nothing(tmp_path: Path) -> None:
         suite,
         qualification_id="q-small",
         max_attempts=5,
+        max_tokens=None,
     )
 
     assert backend.prepared == []
@@ -191,6 +207,10 @@ def test_budget_smaller_than_one_canary_runs_nothing(tmp_path: Path) -> None:
     assert result.run_order == ()
     assert all(item.verdict is Verdict.INCOMPLETE for item in result.executions)
     assert result.verdict is Verdict.INCOMPLETE
+    assert result.max_attempts == 5
+    assert result.max_tokens is None
+    assert result.attempts_used == 0
+    assert result.observed_tokens == 0
 
 
 def test_observed_critical_block_plus_skipped_canary_is_still_incomplete(tmp_path: Path) -> None:
@@ -207,11 +227,14 @@ def test_observed_critical_block_plus_skipped_canary_is_still_incomplete(tmp_pat
         suite,
         qualification_id="q-block",
         max_attempts=6,
+        max_tokens=None,
     )
 
     assert result.executions[0].verdict is Verdict.BLOCK
     assert result.executions[1].verdict is Verdict.INCOMPLETE
     assert result.verdict is Verdict.INCOMPLETE
+    assert result.attempts_used == 6
+    assert result.observed_tokens == 12
 
 
 def test_constrained_priority_is_stable_with_multiple_critical_canaries(tmp_path: Path) -> None:
@@ -230,6 +253,7 @@ def test_constrained_priority_is_stable_with_multiple_critical_canaries(tmp_path
         suite,
         qualification_id="q-stable-priority",
         max_attempts=12,
+        max_tokens=None,
     )
 
     assert backend.prepared == ["critical-a", "critical-b"]
@@ -242,6 +266,10 @@ def test_constrained_priority_is_stable_with_multiple_critical_canaries(tmp_path
     assert result.executions[0].verdict is Verdict.INCOMPLETE
     assert result.executions[2].verdict is Verdict.INCOMPLETE
     assert result.verdict is Verdict.INCOMPLETE
+    assert result.max_attempts == 12
+    assert result.max_tokens is None
+    assert result.attempts_used == 12
+    assert result.observed_tokens == 24
 
 
 @pytest.mark.parametrize("bad_max_attempts", [0, -1])
