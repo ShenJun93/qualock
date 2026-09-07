@@ -7,6 +7,7 @@ from qualock.evidence.antigravity_stream_json import (
     parse_antigravity_stream_json,
 )
 from qualock.evidence.models import AgentEvidenceError, CommandEvent
+from qualock.qualification.models import Usage
 
 _MISSING = object()
 
@@ -127,8 +128,38 @@ def test_parses_success_usage_and_tool_invocations() -> None:
     assert evidence.commands == [CommandEvent(command="python3 probe.py", exit_code=None)]
     assert evidence.input_tokens == 10
     assert evidence.cached_input_tokens == 3
+    assert evidence.cache_write_input_tokens == 0
     assert evidence.output_tokens == 2
     assert evidence.reasoning_output_tokens == 1
+    assert evidence.usage_observed is True
+
+
+def test_usage_constructs_canonical_total_without_provider_double_counting() -> None:
+    evidence = parse_antigravity_stream_json(
+        [
+            init(),
+            result(
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "thinking_tokens": 1,
+                    "cache_read_tokens": 3,
+                    "total_tokens": 999,
+                }
+            ),
+        ]
+    )
+
+    usage = Usage(
+        input_tokens=evidence.input_tokens,
+        cached_input_tokens=evidence.cached_input_tokens,
+        cache_write_input_tokens=evidence.cache_write_input_tokens,
+        output_tokens=evidence.output_tokens,
+        reasoning_output_tokens=evidence.reasoning_output_tokens,
+        observed=evidence.usage_observed,
+    )
+
+    assert usage.total_tokens == 12
 
 
 def test_does_not_infer_shell_exit_code_from_done_state_or_assistant_prose() -> None:
@@ -339,6 +370,116 @@ def test_result_total_tokens_is_optional() -> None:
     assert evidence.output_tokens == 2
     assert evidence.reasoning_output_tokens == 1
     assert evidence.cached_input_tokens == 3
+
+
+@pytest.mark.parametrize("bad_total", ["12", True, -1])
+def test_result_total_tokens_is_validated_when_present(bad_total: object) -> None:
+    with pytest.raises(AntigravityEvidenceError, match="total_tokens"):
+        parse_antigravity_stream_json(
+            [
+                init(),
+                result(
+                    usage={
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "thinking_tokens": 1,
+                        "cache_read_tokens": 3,
+                        "total_tokens": bad_total,
+                    }
+                ),
+            ]
+        )
+
+
+def test_result_total_tokens_need_not_equal_canonical_total() -> None:
+    evidence = parse_antigravity_stream_json(
+        [
+            init(),
+            result(
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "thinking_tokens": 1,
+                    "cache_read_tokens": 3,
+                    "total_tokens": 1,
+                }
+            ),
+        ]
+    )
+
+    assert evidence.input_tokens == 10
+    assert evidence.output_tokens == 2
+
+
+def test_result_usage_requires_thinking_tokens() -> None:
+    with pytest.raises(AntigravityEvidenceError, match="thinking_tokens"):
+        parse_antigravity_stream_json(
+            [
+                init(),
+                result(
+                    usage={
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "cache_read_tokens": 3,
+                    }
+                ),
+            ]
+        )
+
+
+def test_result_usage_requires_cache_read_tokens() -> None:
+    with pytest.raises(AntigravityEvidenceError, match="cache_read_tokens"):
+        parse_antigravity_stream_json(
+            [
+                init(),
+                result(
+                    usage={
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "thinking_tokens": 1,
+                    }
+                ),
+            ]
+        )
+
+
+def test_usage_normalization_does_not_retain_sensitive_terminal_data() -> None:
+    raw_terminal = line(
+        {
+            "event": "result",
+            "result": {
+                "conversation_id": "c1",
+                "status": "SUCCESS",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "thinking_tokens": 1,
+                    "cache_read_tokens": 3,
+                    "total_tokens": 12,
+                },
+                "stdout": "stdout-secret",
+                "stderr": "stderr-secret",
+                "credentials": "credential-secret",
+            },
+        }
+    )
+
+    evidence = parse_antigravity_stream_json([init(), raw_terminal])
+    usage_summary = repr(
+        {
+            "input_tokens": evidence.input_tokens,
+            "cached_input_tokens": evidence.cached_input_tokens,
+            "cache_write_input_tokens": evidence.cache_write_input_tokens,
+            "output_tokens": evidence.output_tokens,
+            "reasoning_output_tokens": evidence.reasoning_output_tokens,
+            "usage_observed": evidence.usage_observed,
+        }
+    )
+
+    assert raw_terminal not in usage_summary
+    assert "stdout-secret" not in usage_summary
+    assert "stderr-secret" not in usage_summary
+    assert "credential-secret" not in usage_summary
 
 
 def test_outcome_without_active_is_metadata_not_invocation() -> None:
