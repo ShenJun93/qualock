@@ -12,6 +12,9 @@ class HistoricalAttempt:
     input_tokens: int | None
     output_tokens: int | None
     usage_observed: bool = False
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
 
 
 @dataclass(frozen=True)
