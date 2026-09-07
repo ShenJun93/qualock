@@ -49,10 +49,37 @@ def _record_tool_use(evidence: AgentEvidence, item: dict[str, Any]) -> int | Non
 
 
 def _required_usage_value(usage: dict[str, Any], key: str) -> int:
+    """Return a non-negative, non-boolean integer or raise ClaudeEvidenceError."""
     value = usage.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ClaudeEvidenceError(f"Claude result usage {key} must be an integer")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ClaudeEvidenceError(
+            f"Claude result usage {key} must be a non-negative integer"
+        )
     return value
+
+
+def _optional_usage_value(
+    usage: dict[str, Any],
+    key: str,
+    *,
+    default: int = 0,
+) -> int:
+    """Return default only when absent; reject invalid present values."""
+    if key not in usage:
+        return default
+    return _required_usage_value(usage, key)
+
+
+def _optional_thinking_tokens(usage: dict[str, Any]) -> int:
+    """Validate output_tokens_details and its optional thinking_tokens."""
+    if "output_tokens_details" not in usage:
+        return 0
+    details = usage["output_tokens_details"]
+    if not isinstance(details, dict):
+        raise ClaudeEvidenceError(
+            "Claude result usage output_tokens_details must be an object"
+        )
+    return _optional_usage_value(details, "thinking_tokens")
 
 
 def _record_result(evidence: AgentEvidence, event: dict[str, Any]) -> None:
@@ -63,9 +90,15 @@ def _record_result(evidence: AgentEvidence, event: dict[str, Any]) -> None:
     usage = event.get("usage")
     if not isinstance(usage, dict):
         raise ClaudeEvidenceError("Claude result usage must be an object")
-    evidence.input_tokens = _required_usage_value(usage, "input_tokens")
-    evidence.cached_input_tokens = _required_usage_value(usage, "cache_read_input_tokens")
+    raw_input = _required_usage_value(usage, "input_tokens")
+    cache_read = _required_usage_value(usage, "cache_read_input_tokens")
+    cache_creation = _optional_usage_value(usage, "cache_creation_input_tokens")
+    evidence.input_tokens = raw_input + cache_read + cache_creation
+    evidence.cached_input_tokens = cache_read
+    evidence.cache_write_input_tokens = cache_creation
     evidence.output_tokens = _required_usage_value(usage, "output_tokens")
+    evidence.reasoning_output_tokens = _optional_thinking_tokens(usage)
+    evidence.usage_observed = True
 
     if subtype != "success":
         evidence.errors.append(f"Claude result: {subtype}")
