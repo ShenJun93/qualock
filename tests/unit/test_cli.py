@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,12 @@ from qualock.qualification.models import Verdict
 from tests.unit.test_report import sample_result
 
 runner = CliRunner()
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
 
 
 def test_init_creates_project_structure(tmp_path: Path, monkeypatch) -> None:
@@ -490,13 +497,14 @@ def test_check_rejects_nonpositive_max_tokens_before_execution(
 
 def test_check_max_tokens_help_describes_threshold_not_hard_cap() -> None:
     result = runner.invoke(app, ["check", "--help"])
+    stdout = _strip_ansi(result.stdout)
 
     assert result.exit_code == 0
-    assert "--max-tokens" in result.stdout
-    assert "threshold" in result.stdout.lower()
-    assert "between complete canaries" in result.stdout.lower()
-    assert "not a hard cap" in result.stdout.lower()
-    assert "billing limit" in result.stdout.lower()
+    assert "--max-tokens" in stdout
+    assert "threshold" in stdout.lower()
+    assert "between complete canaries" in stdout.lower()
+    assert "not a hard cap" in stdout.lower()
+    assert "billing limit" in stdout.lower()
 
 
 def test_monitor_checked_output_has_no_usage_line(tmp_path: Path, monkeypatch) -> None:
