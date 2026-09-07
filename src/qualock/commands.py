@@ -231,9 +231,12 @@ def execute_check(
     backend: QualificationBackend | None = None,
     qualification_id: str | None = None,
     max_attempts: int | None = None,
+    max_tokens: int | None = None,
 ) -> QualificationResult:
     if max_attempts is not None and max_attempts <= 0:
         raise CommandError("max attempts must be greater than zero")
+    if max_tokens is not None and max_tokens <= 0:
+        raise CommandError("max tokens must be greater than zero")
     agent_name, candidate_version = parse_agent_spec(candidate_spec)
     config, canaries = load_project(root)
     if agent_name != config.agent.name:
@@ -266,6 +269,7 @@ def execute_check(
         canaries,
         qualification_id=qid,
         max_attempts=max_attempts,
+        max_tokens=max_tokens,
     )
     write_qualification_artifacts(
         project_dir(root) / "results",

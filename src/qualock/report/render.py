@@ -22,6 +22,18 @@ def render_json(result: QualificationResult) -> dict[str, Any]:
     return cast(dict[str, Any], _encode(asdict(result)))
 
 
+def render_usage_line(result: QualificationResult) -> str:
+    tokens_part = (
+        "unavailable"
+        if result.observed_tokens is None
+        else f"{result.observed_tokens:,}"
+    )
+    line = f"Observed model tokens: {tokens_part}"
+    if result.max_tokens is not None:
+        line += f" (threshold {result.max_tokens:,}; checked between complete canaries)"
+    return line
+
+
 def render_markdown(
     result: QualificationResult, *, agent_display_name: str
 ) -> str:
@@ -42,6 +54,11 @@ def render_markdown(
             f"{execution.verdict.value.upper()} |"
         )
     lines.extend(["", f"## Verdict: {result.verdict.value.upper()}"])
+    lines.append("")
+    lines.append(f"Attempts used: {result.attempts_used}")
+    if result.max_attempts is not None:
+        lines.append(f"Max attempts: {result.max_attempts}")
+    lines.append(render_usage_line(result))
     if result.reasons:
         lines.append("")
         lines.extend(f"- {reason}" for reason in result.reasons)
@@ -70,12 +87,21 @@ def render_terminal(
         )
     console.print(table)
     console.print(f"Quality  {result.verdict.value.upper()}")
+    console.print(f"Attempts used: {result.attempts_used}")
+    if result.max_attempts is not None:
+        console.print(f"Max attempts: {result.max_attempts}")
+    console.print(render_usage_line(result))
     for reason in result.reasons:
         console.print(f"- {reason}")
     return console.export_text()
 
 
-def render_safety_terminal(summary: SafetySummary, evidence_path: str) -> str:
+def render_safety_terminal(
+    summary: SafetySummary,
+    evidence_path: str,
+    *,
+    usage_line: str | None = None,
+) -> str:
     workflow_labels = {
         Verdict.PASS: "OK",
         Verdict.WARN: "REVIEW",
@@ -99,14 +125,8 @@ def render_safety_terminal(summary: SafetySummary, evidence_path: str) -> str:
             f"{workflow.baseline_successes}/{workflow.baseline_valid} -> "
             f"{workflow.candidate_successes}/{workflow.candidate_valid}"
         )
-    lines.extend(
-        [
-            "",
-            "Recommendation:",
-            summary.recommendation,
-            "",
-            f"Technical evidence: {evidence_path}",
-            "",
-        ]
-    )
+    lines.extend(["", "Recommendation:", summary.recommendation])
+    if usage_line is not None:
+        lines.extend(["", usage_line])
+    lines.extend(["", f"Technical evidence: {evidence_path}", ""])
     return "\n".join(lines)

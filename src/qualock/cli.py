@@ -2,7 +2,7 @@ import os
 import platform
 import shutil
 from pathlib import Path
-from typing import Annotated, Literal, NoReturn
+from typing import Annotated, Literal, NoReturn, TypedDict
 
 import typer
 from packaging.version import Version
@@ -74,7 +74,7 @@ from qualock.project_watch.snapshot import ProjectWatchSnapshotError
 from qualock.qualification.models import QualificationResult, Verdict
 from qualock.release_monitor.commands import execute_monitor
 from qualock.release_monitor.models import MonitorAction
-from qualock.report.render import render_safety_terminal, render_terminal
+from qualock.report.render import render_safety_terminal, render_terminal, render_usage_line
 from qualock.report.safety import build_safety_summary
 from qualock.run.docker import DockerRunner
 from qualock.scheduler.backends import (
@@ -99,8 +99,17 @@ app.add_typer(github_app, name="github")
 console = Console()
 
 
+class _CheckBudgets(TypedDict, total=False):
+    max_attempts: int
+    max_tokens: int
+
+
 def _render_safety_result(
-    root: Path, result: QualificationResult, display_name: str
+    root: Path,
+    result: QualificationResult,
+    display_name: str,
+    *,
+    include_usage: bool = False,
 ) -> None:
     try:
         _config, canaries = load_project(root)
@@ -111,7 +120,12 @@ def _render_safety_result(
         result, display_names, agent_display_name=display_name
     )
     evidence_path = f".qualock/results/{result.qualification_id}/"
-    console.print(render_safety_terminal(summary, evidence_path), end="", markup=False)
+    usage_line = render_usage_line(result) if include_usage else None
+    console.print(
+        render_safety_terminal(summary, evidence_path, usage_line=usage_line),
+        end="",
+        markup=False,
+    )
 
 
 def _monitor_check_executor(root: Path, candidate_spec: str) -> QualificationResult:
@@ -218,16 +232,29 @@ def check_command(
             "result incomplete."
         ),
     ),
+    max_tokens: int | None = typer.Option(
+        None,
+        "--max-tokens",
+        help=(
+            "Threshold for observed model tokens, checked between complete "
+            "canaries (not a hard cap or billing limit). Skipped canaries make "
+            "the result incomplete."
+        ),
+    ),
 ) -> None:
     root = Path.cwd()
     try:
         if max_attempts is not None and max_attempts <= 0:
             raise CommandError("max attempts must be greater than zero")
+        if max_tokens is not None and max_tokens <= 0:
+            raise CommandError("max tokens must be greater than zero")
         agent_name, _version = parse_agent_spec(candidate)
-        if max_attempts is None:
-            result = execute_check(root, candidate)
-        else:
-            result = execute_check(root, candidate, max_attempts=max_attempts)
+        budgets: _CheckBudgets = {}
+        if max_attempts is not None:
+            budgets["max_attempts"] = max_attempts
+        if max_tokens is not None:
+            budgets["max_tokens"] = max_tokens
+        result = execute_check(root, candidate, **budgets)
     except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:
         console.print(str(exc))
         raise typer.Exit(3) from exc
@@ -244,7 +271,7 @@ def check_command(
             render_terminal(result, agent_display_name=display_name), end=""
         )
     else:
-        _render_safety_result(root, result, display_name)
+        _render_safety_result(root, result, display_name, include_usage=True)
 
     if result.verdict is Verdict.BLOCK:
         raise typer.Exit(2)

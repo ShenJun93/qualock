@@ -58,6 +58,7 @@ def test_check_easy_output_is_exactly_preserved(tmp_path: Path, monkeypatch) -> 
         "Recommendation:\n"
         "Keep using Codex 0.150.0 for now. Do not update to Codex 0.151.0 until the \n"
         "regression is understood.\n\n"
+        "Observed model tokens: unavailable\n\n"
         "Technical evidence: .qualock/results/q1/\n"
     )
 
@@ -422,3 +423,98 @@ def test_budget_limited_incomplete_keeps_exit_4(tmp_path: Path, monkeypatch) -> 
 
     assert result.exit_code == 4
     assert "CHECK COULD NOT FINISH" in result.stdout
+
+
+def test_check_max_tokens_is_forwarded(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, int] = {}
+
+    def fake_execute_check(root: Path, candidate: str, *, max_tokens: int):
+        captured["max_tokens"] = max_tokens
+        return sample_result()
+
+    monkeypatch.setattr("qualock.cli.execute_check", fake_execute_check)
+
+    result = runner.invoke(
+        app,
+        ["check", "codex@0.151.0", "--max-tokens", "50000"],
+    )
+
+    assert captured == {"max_tokens": 50000}
+    assert result.exit_code == 2
+
+
+def test_check_both_budgets_are_forwarded(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, int] = {}
+
+    def fake_execute_check(root: Path, candidate: str, *, max_attempts: int, max_tokens: int):
+        captured["max_attempts"] = max_attempts
+        captured["max_tokens"] = max_tokens
+        return sample_result()
+
+    monkeypatch.setattr("qualock.cli.execute_check", fake_execute_check)
+
+    result = runner.invoke(
+        app,
+        ["check", "codex@0.151.0", "--max-attempts", "6", "--max-tokens", "50000"],
+    )
+
+    assert captured == {"max_attempts": 6, "max_tokens": 50000}
+    assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("bad", ["0", "-5"])
+def test_check_rejects_nonpositive_max_tokens_before_execution(
+    tmp_path: Path, monkeypatch, bad: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    called = False
+
+    def fake_execute_check(*args, **kwargs):
+        nonlocal called
+        called = True
+        return sample_result()
+
+    monkeypatch.setattr("qualock.cli.execute_check", fake_execute_check)
+
+    result = runner.invoke(
+        app,
+        ["check", "codex@0.151.0", "--max-tokens", bad],
+    )
+
+    assert result.exit_code == 3
+    assert "max tokens must be greater than zero" in result.stdout
+    assert called is False
+
+
+def test_check_max_tokens_help_describes_threshold_not_hard_cap() -> None:
+    result = runner.invoke(app, ["check", "--help"])
+
+    assert result.exit_code == 0
+    assert "--max-tokens" in result.stdout
+    assert "threshold" in result.stdout.lower()
+    assert "between complete canaries" in result.stdout.lower()
+    assert "not a hard cap" in result.stdout.lower()
+    assert "billing limit" in result.stdout.lower()
+
+
+def test_monitor_checked_output_has_no_usage_line(tmp_path: Path, monkeypatch) -> None:
+    from qualock.release_monitor.models import MonitorAction, MonitorOutcome
+
+    monkeypatch.chdir(tmp_path)
+    outcome = MonitorOutcome(
+        action=MonitorAction.CHECKED,
+        agent_name="codex",
+        baseline_version="0.150.0",
+        latest_version="0.151.0",
+        qualification_result=sample_result(),
+    )
+    monkeypatch.setattr("qualock.cli.execute_monitor", lambda root, **kwargs: outcome)
+
+    result = runner.invoke(app, ["monitor"])
+
+    assert result.exit_code == 2
+    assert "QuaLock Safety Check" in result.stdout
+    assert "Observed model tokens" not in result.stdout
+    assert "Technical evidence: .qualock/results/q1/\n" in result.stdout
