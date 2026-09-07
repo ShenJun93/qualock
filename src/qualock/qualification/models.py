@@ -13,8 +13,14 @@ class Verdict(str, Enum):
 class Usage:
     input_tokens: int = 0
     cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
+    observed: bool = False
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
 
 
 @dataclass(frozen=True)
@@ -82,3 +88,7 @@ class QualificationResult:
     executions: tuple[CanaryExecution, ...]
     reasons: tuple[str, ...]
     run_order: tuple[tuple[str, str, int], ...]
+    max_attempts: int | None = None
+    max_tokens: int | None = None
+    attempts_used: int = 0
+    observed_tokens: int | None = None

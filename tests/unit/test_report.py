@@ -10,11 +10,25 @@ from qualock.report.render import render_json, render_markdown, render_terminal
 
 def sample_result() -> QualificationResult:
     baseline_attempts = tuple(
-        AttemptResult(side="baseline", repetition=i, success=True, valid=True, duration_ms=1000, usage=Usage(input_tokens=10, output_tokens=2))
+        AttemptResult(
+            side="baseline",
+            repetition=i,
+            success=True,
+            valid=True,
+            duration_ms=1000,
+            usage=Usage(input_tokens=10, output_tokens=2, observed=True),
+        )
         for i in range(1, 4)
     )
     candidate_attempts = tuple(
-        AttemptResult(side="candidate", repetition=i, success=False, valid=True, duration_ms=900, usage=Usage(input_tokens=11, output_tokens=2))
+        AttemptResult(
+            side="candidate",
+            repetition=i,
+            success=False,
+            valid=True,
+            duration_ms=900,
+            usage=Usage(input_tokens=11, output_tokens=2, observed=True),
+        )
         for i in range(1, 4)
     )
     execution = CanaryExecution(

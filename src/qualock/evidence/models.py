@@ -21,7 +21,9 @@ class AgentEvidence:
     mcp_calls: int = 0
     input_tokens: int = 0
     cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
+    usage_observed: bool = False
     errors: list[str] = field(default_factory=list)
     unknown_events: list[dict[str, Any]] = field(default_factory=list)
