@@ -347,6 +347,45 @@ def test_structurally_invalid_report_does_not_reserve_qualification_id(
     )
 
 
+def test_valid_project_protection_envelope_is_silently_skipped(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    write_report(
+        results,
+        "pp-dir",
+        {"kind": "project_protection", "result": {"ok": True}},
+    )
+    write_report(results, "q-dir", report("q-id"))
+
+    summary = scan_results(results)
+
+    assert tuple(item.qualification_id for item in summary.loaded) == ("q-id",)
+    assert summary.ignored == ()
+
+
+def test_malformed_project_protection_like_report_is_still_ignored(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    write_report(results, "q-dir", {"kind": "project_protection", "result": "not-an-object"})
+
+    assert scan_results(results).ignored == (
+        ReportLoadFailure(results / "q-dir", "missing or invalid qualification_id"),
+    )
+
+
+def test_non_utf8_report_is_ignored_with_fixed_reason_and_siblings_still_load(
+    tmp_path: Path,
+) -> None:
+    results = tmp_path / "results"
+    write_report(results, "a-good", report("q-good"))
+    bad_dir = results / "b-bad"
+    bad_dir.mkdir()
+    (bad_dir / "report.json").write_bytes(b"\xff\xfe\x00not valid utf-8")
+
+    summary = scan_results(results)
+
+    assert tuple(item.qualification_id for item in summary.loaded) == ("q-good",)
+    assert summary.ignored == (ReportLoadFailure(bad_dir, "unreadable file"),)
+
+
 def test_scan_preserves_report_bytes_and_mtimes(tmp_path: Path) -> None:
     results = tmp_path / "results"
     paths = (
