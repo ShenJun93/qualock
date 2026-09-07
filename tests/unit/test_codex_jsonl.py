@@ -43,9 +43,6 @@ def test_codex_usage_accumulates_trustworthy_completed_turns() -> None:
         (',"usage":[]', 0, 0),
         (',"usage":{"output_tokens":3}', 0, 3),
         (',"usage":{"input_tokens":2}', 2, 0),
-        (',"usage":{"input_tokens":true,"output_tokens":false}', 0, 0),
-        (',"usage":{"input_tokens":"2","output_tokens":"3"}', 0, 0),
-        (',"usage":{"input_tokens":-2,"output_tokens":-3}', -2, -3),
     ],
 )
 def test_codex_usage_malformed_required_totals_make_attempt_unobserved(
@@ -62,6 +59,49 @@ def test_codex_usage_malformed_required_totals_make_attempt_unobserved(
 
     assert evidence.input_tokens == 10 + input_tokens
     assert evidence.output_tokens == 20 + output_tokens
+    assert evidence.usage_observed is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_input_tokens", "expected_output_tokens"),
+    [
+        ("input_tokens", "true", 0, 3),
+        ("input_tokens", '"2"', 0, 3),
+        ("input_tokens", "-2", -2, 3),
+        ("output_tokens", "false", 2, 0),
+        ("output_tokens", '"3"', 2, 0),
+        ("output_tokens", "-3", 2, -3),
+    ],
+)
+def test_codex_usage_validates_each_required_total_independently(
+    field: str,
+    value: str,
+    expected_input_tokens: int,
+    expected_output_tokens: int,
+) -> None:
+    usage = {"input_tokens": "2", "output_tokens": "3"}
+    usage[field] = value
+    evidence = parse_codex_jsonl([
+        '{"type":"turn.completed","usage":'
+        f'{{"input_tokens":{usage["input_tokens"]},'
+        f'"output_tokens":{usage["output_tokens"]}}}}}'
+    ])
+
+    assert evidence.input_tokens == expected_input_tokens
+    assert evidence.output_tokens == expected_output_tokens
+    assert evidence.usage_observed is False
+
+
+def test_codex_usage_later_valid_turn_cannot_restore_trust() -> None:
+    evidence = parse_codex_jsonl([
+        '{"type":"turn.completed","usage":{"input_tokens":-2,"output_tokens":3}}',
+        '{"type":"turn.completed","usage":{"input_tokens":5,"cached_input_tokens":4,"output_tokens":7,"reasoning_output_tokens":2}}',
+    ])
+
+    assert evidence.input_tokens == 3
+    assert evidence.cached_input_tokens == 4
+    assert evidence.output_tokens == 10
+    assert evidence.reasoning_output_tokens == 2
     assert evidence.usage_observed is False
 
 
