@@ -16,8 +16,11 @@
 ## Next, only after v0.1 validation
 
 - Additional coding-agent adapters.
-- Historical canary effectiveness ranking and runtime token-usage estimates (#41), pending.
 - Provider-specific monetary cost estimates (#42), pending, advisory only, outside qualification pass/fail policy.
+
+## Delivered
+
+- Historical canary effectiveness ranking and runtime/token-usage estimates (#41).
 
 ## Commercial layer
 
