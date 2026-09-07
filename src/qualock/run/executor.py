@@ -46,31 +46,39 @@ class QualificationExecutor:
         *,
         qualification_id: str,
         max_attempts: int | None = None,
+        max_tokens: int | None = None,
     ) -> QualificationResult:
         if max_attempts is not None and max_attempts < 1:
             raise ValueError("max_attempts must be greater than zero")
+        if max_tokens is not None and max_tokens < 1:
+            raise ValueError("max_tokens must be greater than zero")
 
         indexed_suite = tuple(enumerate(suite))
         attempts_per_canary = self.repetitions * 2
         full_suite_attempts = len(indexed_suite) * attempts_per_canary
-        constrained = max_attempts is not None and max_attempts < full_suite_attempts
+        attempt_constrained = max_attempts is not None and max_attempts < full_suite_attempts
+        prioritize_critical = attempt_constrained or max_tokens is not None
 
-        if constrained:
+        if prioritize_critical:
             execution_order = tuple(pair for pair in indexed_suite if pair[1].critical) + tuple(
                 pair for pair in indexed_suite if not pair[1].critical
             )
-            remaining_attempts = max_attempts
         else:
             execution_order = indexed_suite
-            remaining_attempts = None
+
+        remaining_attempts = max_attempts if attempt_constrained else None
 
         executions_by_index: dict[int, CanaryExecution] = {}
         comparisons_by_index: dict[int, CanaryComparison] = {}
         run_order: list[tuple[str, str, int]] = []
 
+        attempts_used = 0
+        observed_tokens: int | None = 0
+        completed_canaries = 0
+
         for index, canary in execution_order:
             if (
-                constrained
+                attempt_constrained
                 and remaining_attempts is not None
                 and remaining_attempts < attempts_per_canary
             ):
@@ -80,6 +88,21 @@ class QualificationExecutor:
                     repetitions=self.repetitions,
                     max_attempts=max_attempts,
                     attempts_per_canary=attempts_per_canary,
+                )
+                comparisons_by_index[index] = comparison
+                executions_by_index[index] = execution
+                continue
+
+            if (
+                max_tokens is not None
+                and completed_canaries > 0
+                and (observed_tokens is None or observed_tokens >= max_tokens)
+            ):
+                comparison, execution = _token_budget_skipped_canary(
+                    canary,
+                    repetitions=self.repetitions,
+                    max_tokens=max_tokens,
+                    observed_tokens=observed_tokens,
                 )
                 comparisons_by_index[index] = comparison
                 executions_by_index[index] = execution
@@ -98,6 +121,13 @@ class QualificationExecutor:
                 )
                 attempts.append(attempt)
                 run_order.append((canary.id, slot.side.value, slot.repetition))
+
+                attempts_used += 1
+                if observed_tokens is not None:
+                    if attempt.usage.observed:
+                        observed_tokens += attempt.usage.total_tokens
+                    else:
+                        observed_tokens = None
 
             baseline_attempts = [item for item in attempts if item.side == Side.BASELINE.value]
             candidate_attempts = [item for item in attempts if item.side == Side.CANDIDATE.value]
@@ -134,6 +164,8 @@ class QualificationExecutor:
                 reason=comparison.reason,
             )
 
+            completed_canaries += 1
+
             if remaining_attempts is not None:
                 remaining_attempts -= attempts_per_canary
 
@@ -148,6 +180,10 @@ class QualificationExecutor:
             executions=executions,
             reasons=suite_verdict.reasons,
             run_order=tuple(run_order),
+            max_attempts=max_attempts,
+            max_tokens=max_tokens,
+            attempts_used=attempts_used,
+            observed_tokens=observed_tokens,
         )
 
 
@@ -163,6 +199,35 @@ def _budget_skipped_canary(
         f"(max_attempts={max_attempts}, "
         f"complete_canary_attempts={attempts_per_canary})"
     )
+    return _skipped_canary(canary, repetitions=repetitions, reason=reason)
+
+
+def _token_budget_skipped_canary(
+    canary: CanarySpec,
+    *,
+    repetitions: int,
+    max_tokens: int,
+    observed_tokens: int | None,
+) -> tuple[CanaryComparison, CanaryExecution]:
+    if observed_tokens is None:
+        reason = (
+            "INCOMPLETE: skipped because token usage was unavailable "
+            f"for one or more attempts (max_tokens={max_tokens})"
+        )
+    else:
+        reason = (
+            "INCOMPLETE: skipped by token budget "
+            f"(max_tokens={max_tokens}, observed_tokens={observed_tokens})"
+        )
+    return _skipped_canary(canary, repetitions=repetitions, reason=reason)
+
+
+def _skipped_canary(
+    canary: CanarySpec,
+    *,
+    repetitions: int,
+    reason: str,
+) -> tuple[CanaryComparison, CanaryExecution]:
     comparison = CanaryComparison(
         canary_id=canary.id,
         baseline=CanaryAggregate(valid_runs=0, successes=0, expected_runs=repetitions),
