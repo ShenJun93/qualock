@@ -105,6 +105,14 @@ qualock check codex@0.151.0 --max-attempts 6
 
 QuaLock only starts a canary when the remaining budget can run its complete baseline/candidate paired schedule. When the cap prevents any configured canary from running, that canary is reported as `INCOMPLETE`, so the overall result is also `INCOMPLETE`. A budgeted check never turns missing evidence into a cheaper PASS or BLOCK. Omit the flag for the full qualification used by release monitoring and automated workflows.
 
+To cap model token usage for local `qualock check`, use a token budget:
+
+```bash
+qualock check codex@0.151.0 --max-tokens 50000
+```
+
+`--max-tokens` is a threshold checked between complete canaries, not a hard cap and not a billing limit: once a canary starts, all of its configured attempts run to completion, so total observed usage may overshoot the threshold by up to the cost of the last complete canary that was allowed to run. If token usage is unknown for any attempt run so far, the check fails closed and skips every remaining canary rather than guessing. Any canary skipped by `--max-tokens` makes the overall result `INCOMPLETE`, the same completeness contract `--max-attempts` uses. The two budgets compose: you can set both `--max-attempts` and `--max-tokens` on the same check, and either one stopping the run is enough to stop it. `--max-tokens` applies only to local `qualock check`; it has no effect on baseline creation, `qualock monitor`, `qualock bisect`, GitHub pull-request qualification, or the scheduler.
+
 The default output is written for the person deciding whether to update:
 
 ```text
