@@ -1,7 +1,7 @@
 # Historical Canary Effectiveness + Runtime/Token Estimates (Read-Only, Local Artifacts Only)
 
 - **Batch:** #41
-- **Status:** Proposed (design only; no implementation in this batch)
+- **Status:** Delivered (implemented; see README.md § "Historical qualification insights")
 - **Branch:** `feat/history-estimates`
 - **Base:** `f6410c610642b4e271a9932172326006f37cfaa6`
 - **Related:** `docs/superpowers/specs/2026-09-07-token-aware-qualification-budget-design.md` (Batch #40, source of `Usage.observed`/`total_tokens`/`attempts_used`/`observed_tokens` this batch reads), `docs/superpowers/specs/2026-09-04-budgeted-qualification-design.md` (Batch #32, source of `max_attempts`/skipped-canary semantics this batch must recognize and exclude)

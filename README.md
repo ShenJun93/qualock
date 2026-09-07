@@ -230,6 +230,16 @@ View the latest local report:
 qualock report
 ```
 
+### Historical qualification insights
+
+Once you have accumulated qualification history under `.qualock/results/`, see how currently configured canaries have actually performed:
+
+```bash
+qualock history
+```
+
+`qualock history` re-scans existing local `report.json` artifacts read-only; it never writes, migrates, or deletes anything. It ranks currently configured canaries by how often they have historically detected a candidate regression, and reports an estimated model-attempt runtime and estimated model tokens per canary and for the current suite. The estimated model-attempt runtime excludes setup, preparation, and CLI overhead — it is the sum of durations for individual baseline/candidate model attempts only, not an end-to-end or wall-clock measurement. The estimated model tokens figure for each canary is the median of that canary's trustworthy historical normalized token samples, and the current-suite estimate is the sum of those per-canary medians when every currently configured canary has token history; it is not a price, cost, billing figure, or a hard cap. Both estimates are advisory only, and canaries with too little history are reported separately rather than assigned a fabricated rank.
+
 ## Antigravity on Linux (local binary pin)
 
 Codex, Claude Code, and Gemini CLI qualify inside Docker. Antigravity CLI cannot: its
