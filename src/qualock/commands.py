@@ -26,6 +26,9 @@ from qualock.baseline.io import (
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
 from qualock.config.models import QualockConfig
 from qualock.evidence.storage import write_baseline_artifacts, write_qualification_artifacts
+from qualock.history.analysis import analyze_history
+from qualock.history.loader import scan_results
+from qualock.history.models import HistoryAnalysis
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
 from qualock.qualification.models import AttemptResult, QualificationResult
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
@@ -277,3 +280,11 @@ def execute_check(
         agent_display_name=agent_display_name(agent_name),
     )
     return result
+
+
+def execute_history(root: Path) -> HistoryAnalysis:
+    _config, canaries = load_project(root)
+    if not canaries:
+        raise CommandError("no canaries found")
+    summary = scan_results(project_dir(root) / "results")
+    return analyze_history(summary, [canary.id for canary in canaries])
