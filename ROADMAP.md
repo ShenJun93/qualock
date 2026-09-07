@@ -11,11 +11,13 @@
 - Forward version scan for the first confirmed bad stable coding-agent release.
 - GitHub pull-request qualification reports.
 - Attempt-budgeted local qualification with critical-first canary selection and fail-closed incomplete results.
+- Provider-neutral, token-denominated local qualification budgeting for `qualock check`, composable with the attempt-count budget.
 
 ## Next, only after v0.1 validation
 
 - Additional coding-agent adapters.
-- Token-denominated budgets, historical canary effectiveness ranking, and provider-specific cost estimates on top of the delivered attempt-count budget.
+- Historical canary effectiveness ranking and runtime token-usage estimates (#41), pending.
+- Provider-specific monetary cost estimates (#42), pending, advisory only, outside qualification pass/fail policy.
 
 ## Commercial layer
 
