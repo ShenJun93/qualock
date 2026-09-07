@@ -11,6 +11,7 @@ from qualock.history.models import (
     ReportLoadFailure,
     SuiteEstimate,
 )
+from qualock.history.render import render_history_text
 
 __all__ = [
     "CanaryEffectiveness",
@@ -23,5 +24,6 @@ __all__ = [
     "ReportLoadFailure",
     "SuiteEstimate",
     "analyze_history",
+    "render_history_text",
     "scan_results",
 ]
