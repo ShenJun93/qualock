@@ -82,9 +82,11 @@ def test_codex_usage_validates_each_required_total_independently(
     usage = {"input_tokens": "2", "output_tokens": "3"}
     usage[field] = value
     evidence = parse_codex_jsonl([
-        '{"type":"turn.completed","usage":'
-        f'{{"input_tokens":{usage["input_tokens"]},'
-        f'"output_tokens":{usage["output_tokens"]}}}}}'
+        (
+            '{"type":"turn.completed","usage":'
+            f'{{"input_tokens":{usage["input_tokens"]},'
+            f'"output_tokens":{usage["output_tokens"]}}}}}'
+        )
     ])
 
     assert evidence.input_tokens == expected_input_tokens
