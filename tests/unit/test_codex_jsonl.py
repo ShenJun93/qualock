@@ -4,6 +4,7 @@ import pytest
 
 from qualock.evidence.codex_jsonl import CodexEvidenceError, parse_codex_jsonl
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
+from qualock.qualification.models import Usage
 
 
 def test_parses_usage_commands_file_changes_and_integrity_signals() -> None:
@@ -21,14 +22,103 @@ def test_parses_usage_commands_file_changes_and_integrity_signals() -> None:
     assert len(evidence.unknown_events) == 1
 
 
-def test_accumulates_usage_across_completed_turns() -> None:
+def test_codex_usage_accumulates_trustworthy_completed_turns() -> None:
     lines = [
-        '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens":3}}',
-        '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":7}}',
+        '{"type":"turn.completed","usage":{"input_tokens":2,"cached_input_tokens":1,"output_tokens":3,"reasoning_output_tokens":2}}',
+        '{"type":"turn.completed","usage":{"input_tokens":5,"cached_input_tokens":4,"output_tokens":7,"reasoning_output_tokens":3}}',
     ]
     evidence = parse_codex_jsonl(lines)
     assert evidence.input_tokens == 7
+    assert evidence.cached_input_tokens == 5
+    assert evidence.cache_write_input_tokens == 0
     assert evidence.output_tokens == 10
+    assert evidence.reasoning_output_tokens == 5
+    assert evidence.usage_observed is True
+
+
+@pytest.mark.parametrize(
+    ("usage_fragment", "input_tokens", "output_tokens"),
+    [
+        ("", 0, 0),
+        (',"usage":[]', 0, 0),
+        (',"usage":{"output_tokens":3}', 0, 3),
+        (',"usage":{"input_tokens":2}', 2, 0),
+        (',"usage":{"input_tokens":true,"output_tokens":false}', 0, 0),
+        (',"usage":{"input_tokens":"2","output_tokens":"3"}', 0, 0),
+        (',"usage":{"input_tokens":-2,"output_tokens":-3}', -2, -3),
+    ],
+)
+def test_codex_usage_malformed_required_totals_make_attempt_unobserved(
+    usage_fragment: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    lines = [
+        '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":20}}',
+        f'{{"type":"turn.completed"{usage_fragment}}}',
+    ]
+
+    evidence = parse_codex_jsonl(lines)
+
+    assert evidence.input_tokens == 10 + input_tokens
+    assert evidence.output_tokens == 20 + output_tokens
+    assert evidence.usage_observed is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cached_input_tokens", "true"),
+        ("cached_input_tokens", '"4"'),
+        ("cached_input_tokens", "-4"),
+        ("reasoning_output_tokens", "true"),
+        ("reasoning_output_tokens", '"4"'),
+        ("reasoning_output_tokens", "-4"),
+    ],
+)
+def test_codex_usage_malformed_optional_details_normalize_to_zero(
+    field: str, value: str
+) -> None:
+    evidence = parse_codex_jsonl([
+        f'{{"type":"turn.completed","usage":{{"input_tokens":2,"output_tokens":3,"{field}":{value}}}}}'
+    ])
+
+    assert evidence.cached_input_tokens == 0
+    assert evidence.reasoning_output_tokens == 0
+    assert evidence.usage_observed is True
+
+
+def test_codex_usage_constructs_canonical_usage_without_double_counting() -> None:
+    evidence = parse_codex_jsonl([
+        '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":5}}'
+    ])
+
+    usage = Usage(
+        input_tokens=evidence.input_tokens,
+        cached_input_tokens=evidence.cached_input_tokens,
+        cache_write_input_tokens=evidence.cache_write_input_tokens,
+        output_tokens=evidence.output_tokens,
+        reasoning_output_tokens=evidence.reasoning_output_tokens,
+        observed=evidence.usage_observed,
+    )
+    assert usage.total_tokens == evidence.input_tokens + evidence.output_tokens
+
+
+def test_codex_usage_does_not_retain_sensitive_wire_data() -> None:
+    raw_line = (
+        '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens":3},'
+        '"stdout":"stdout-secret","stderr":"stderr-secret",'
+        '"transcript":"token-bearing-secret","credentials":"credential-secret"}'
+    )
+
+    evidence = parse_codex_jsonl([raw_line])
+    retained = repr(vars(evidence))
+
+    assert raw_line not in retained
+    assert "stdout-secret" not in retained
+    assert "stderr-secret" not in retained
+    assert "token-bearing-secret" not in retained
+    assert "credential-secret" not in retained
 
 
 def test_malformed_json_is_invalid_evidence() -> None:
@@ -47,6 +137,7 @@ def test_codex_parser_returns_normalized_agent_evidence() -> None:
     evidence = parse_codex_jsonl(['{"type":"turn.completed","usage":{"input_tokens":2}}'])
     assert isinstance(evidence, AgentEvidence)
     assert evidence.input_tokens == 2
+    assert evidence.usage_observed is False
 
 
 def test_codex_parse_error_is_generic_agent_evidence_error() -> None:
