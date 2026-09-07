@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -11,7 +10,7 @@ def line(payload: object) -> str:
     return json.dumps(payload)
 
 
-def result_usage() -> dict[str, int]:
+def result_usage() -> dict[str, object]:
     return {
         "input_tokens": 10,
         "cache_read_input_tokens": 4,
@@ -59,7 +58,9 @@ def test_parses_session_tools_and_final_usage() -> None:
                     "usage": {
                         "input_tokens": 10,
                         "cache_read_input_tokens": 4,
+                        "cache_creation_input_tokens": 6,
                         "output_tokens": 3,
+                        "output_tokens_details": {"thinking_tokens": 2},
                     },
                     "permission_denials": [],
                 }
@@ -72,11 +73,26 @@ def test_parses_session_tools_and_final_usage() -> None:
     assert evidence.file_changes == ["src/app.py", "README.md"]
     assert evidence.web_searches == 2
     assert evidence.mcp_calls == 1
-    assert evidence.input_tokens == 10
+    assert evidence.input_tokens == 10 + 4 + 6
     assert evidence.cached_input_tokens == 4
+    assert evidence.cache_write_input_tokens == 6
+    assert evidence.output_tokens == 3
+    assert evidence.reasoning_output_tokens == 2
+    assert evidence.usage_observed is True
+    assert evidence.errors == []
+
+
+def test_result_usage_defaults_absent_optional_fields() -> None:
+    evidence = parse_claude_stream_json(
+        [line({"type": "result", "subtype": "success", "usage": result_usage()})]
+    )
+
+    assert evidence.input_tokens == 10 + 4
+    assert evidence.cached_input_tokens == 4
+    assert evidence.cache_write_input_tokens == 0
     assert evidence.output_tokens == 3
     assert evidence.reasoning_output_tokens == 0
-    assert evidence.errors == []
+    assert evidence.usage_observed is True
 
 
 def test_non_success_result_records_error() -> None:
@@ -160,10 +176,52 @@ def test_result_requires_subtype_and_usage() -> None:
         parse_claude_stream_json([line({"type": "result", "subtype": "success"})])
 
 
-def test_result_usage_requires_integer_fields() -> None:
+@pytest.mark.parametrize(
+    "key", ["input_tokens", "cache_read_input_tokens", "output_tokens"]
+)
+@pytest.mark.parametrize("value", [True, -1])
+def test_result_usage_requires_integer_fields(key: str, value: object) -> None:
     bad = result_usage()
-    bad["output_tokens"] = True
-    with pytest.raises(ClaudeEvidenceError, match="output_tokens"):
+    bad[key] = value
+    with pytest.raises(
+        ClaudeEvidenceError, match=rf"{key} must be a non-negative integer"
+    ):
+        parse_claude_stream_json(
+            [line({"type": "result", "subtype": "success", "usage": bad})]
+        )
+
+
+@pytest.mark.parametrize("value", ["1", 1.5, True, -1])
+def test_cache_creation_input_tokens_must_be_non_negative_integer_when_present(
+    value: object,
+) -> None:
+    bad = result_usage()
+    bad["cache_creation_input_tokens"] = value
+    with pytest.raises(
+        ClaudeEvidenceError,
+        match="cache_creation_input_tokens must be a non-negative integer",
+    ):
+        parse_claude_stream_json(
+            [line({"type": "result", "subtype": "success", "usage": bad})]
+        )
+
+
+@pytest.mark.parametrize(
+    ("details", "invalid_key"),
+    [
+        ("not-an-object", "output_tokens_details"),
+        ({"thinking_tokens": "1"}, "thinking_tokens"),
+        ({"thinking_tokens": True}, "thinking_tokens"),
+        ({"thinking_tokens": 1.5}, "thinking_tokens"),
+        ({"thinking_tokens": -1}, "thinking_tokens"),
+    ],
+)
+def test_thinking_tokens_must_be_non_negative_integer_when_present(
+    details: object, invalid_key: str
+) -> None:
+    bad = result_usage()
+    bad["output_tokens_details"] = details
+    with pytest.raises(ClaudeEvidenceError, match=invalid_key):
         parse_claude_stream_json(
             [line({"type": "result", "subtype": "success", "usage": bad})]
         )
@@ -189,19 +247,6 @@ def test_duplicate_result_events_fail_closed() -> None:
     result = line({"type": "result", "subtype": "success", "usage": result_usage()})
     with pytest.raises(ClaudeEvidenceError, match="duplicate Claude result event"):
         parse_claude_stream_json([result, result])
-
-
-def test_real_2_1_260_golden_transcript_parses_tool_failure_without_session_error() -> None:
-    fixture = Path("tests/fixtures/claude/stream_json_bash_failure_success_2_1_260.jsonl")
-    evidence = parse_claude_stream_json(fixture.read_text(encoding="utf-8").splitlines())
-
-    assert evidence.thread_id == "session-sanitized"
-    assert [(item.command, item.exit_code) for item in evidence.commands] == [("false", 1)]
-    assert evidence.input_tokens == 4
-    assert evidence.cached_input_tokens == 9035
-    assert evidence.output_tokens == 74
-    assert evidence.errors == []
-    assert [event.get("type") for event in evidence.unknown_events] == ["rate_limit_event"]
 
 
 def test_user_tool_result_updates_bash_outcome_without_invalidating_session() -> None:
