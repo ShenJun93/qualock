@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterable
+from typing import TypeGuard
 
 from .models import AgentEvidence, AgentEvidenceError, CommandEvent
 
@@ -96,7 +97,7 @@ def _int_value(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _trusted_required_total(value: object) -> bool:
+def _trusted_required_total(value: object) -> TypeGuard[int]:
     return (
         isinstance(value, int)
         and not isinstance(value, bool)
