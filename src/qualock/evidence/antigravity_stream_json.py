@@ -197,6 +197,8 @@ def _record_result(
     evidence.cached_input_tokens = _required_usage_value(usage, "cache_read_tokens")
     if "total_tokens" in usage:
         _required_usage_value(usage, "total_tokens")
+    evidence.cache_write_input_tokens = 0
+    evidence.usage_observed = True
 
 
 def parse_antigravity_stream_json(lines: Iterable[str]) -> AgentEvidence:
