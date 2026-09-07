@@ -338,7 +338,7 @@ All of the following must pass before this feature may be marked delivered in `R
 
 - Full test suite (all items in §11) green.
 - Ruff clean.
-- Strict mypy clean.
+- Strict mypy introduces no new errors beyond the base branch's three pre-existing missing-PyYAML-stub `import-untyped` errors in `src/qualock/config/io.py`, `src/qualock/canary/loader.py`, and `src/qualock/project_setup/config.py`. Do not install stubs or dependencies in Batch #40; any additional mypy error is blocking.
 - `compileall` clean.
 - Exact-head verification: record and review the committed HEAD SHA that all final local gates ran against.
 - `git diff --check 4138d21a58eabe0236c3e6d6d7309ca638148248..HEAD` clean on that exact HEAD — no whitespace errors or conflict markers in the Batch #40 diff.
