@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import textwrap
 
@@ -451,9 +452,49 @@ def _claude_precedence_script(doc: dict[str, object]) -> str:
     return run[: run.index("qualock github qualify-pr")]
 
 
+def _resolve_usable_bash() -> str | None:
+    """Find a POSIX-capable bash, the way GitHub Actions resolves `shell: bash`.
+
+    A bare PATH lookup for "bash" is not reliable on Windows: `C:\\Windows\\
+    System32\\bash.exe` is a WSL launcher shim that exits non-zero when no
+    Linux distribution is installed, even though a working Git Bash is
+    usually also present. Probe candidates with a trivial script instead of
+    trusting whichever one PATH happens to resolve first.
+    """
+    candidates = []
+    if os.name == "nt":
+        candidates.append(r"C:\Program Files\Git\bin\bash.exe")
+    on_path = shutil.which("bash")
+    if on_path:
+        candidates.append(on_path)
+    for candidate in candidates:
+        try:
+            probe = subprocess.run(
+                [candidate, "-c", "printf ok"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except OSError:
+            continue
+        if probe.returncode == 0 and probe.stdout == "ok":
+            return candidate
+    return None
+
+
+@pytest.fixture(scope="module")
+def usable_bash() -> str:
+    bash = _resolve_usable_bash()
+    if bash is None:
+        pytest.skip("no usable POSIX bash found on this host")
+    return bash
+
+
 def _run_claude_precedence(
     script: str,
     *,
+    bash: str,
     auth_token: str,
     api_key: str,
     oauth_token: str,
@@ -469,7 +510,7 @@ def _run_claude_precedence(
     env["ANTHROPIC_API_KEY"] = api_key
     env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
     result = subprocess.run(
-        ["bash", "-c", probe], env=env, capture_output=True, text=True, check=True
+        [bash, "-c", probe], env=env, capture_output=True, text=True, check=True
     )
     return dict(line.split("=", 1) for line in result.stdout.splitlines())
 
@@ -492,13 +533,13 @@ def _run_claude_precedence(
     ],
 )
 def test_producer_claude_credential_precedence_unsets_lower_priority_variables(
-    auth_token: str, api_key: str, oauth_token: str, expected: dict[str, str]
+    usable_bash: str, auth_token: str, api_key: str, oauth_token: str, expected: dict[str, str]
 ) -> None:
     doc = parsed(PRODUCER_WORKFLOW)
     assert isinstance(doc, dict)
     script = _claude_precedence_script(doc)
     outputs = _run_claude_precedence(
-        script, auth_token=auth_token, api_key=api_key, oauth_token=oauth_token
+        script, bash=usable_bash, auth_token=auth_token, api_key=api_key, oauth_token=oauth_token
     )
     assert outputs == expected
 
