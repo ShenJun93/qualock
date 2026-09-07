@@ -98,7 +98,7 @@ def scan_results(results_dir: Path) -> HistorySummary:
 
         try:
             text = report_path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             ignored.append(ReportLoadFailure(qualification_dir, _FAILURE_UNREADABLE))
             continue
 
@@ -110,6 +110,13 @@ def scan_results(results_dir: Path) -> HistorySummary:
 
         if not isinstance(payload, dict):
             ignored.append(ReportLoadFailure(qualification_dir, _FAILURE_NOT_OBJECT))
+            continue
+
+        if (
+            set(payload.keys()) == {"kind", "result"}
+            and isinstance(payload.get("kind"), str)
+            and isinstance(payload.get("result"), dict)
+        ):
             continue
 
         qualification_id = payload.get("qualification_id")
