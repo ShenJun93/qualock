@@ -9,6 +9,8 @@ class CodexEvidenceError(AgentEvidenceError):
 
 def parse_codex_jsonl(lines: Iterable[str]) -> AgentEvidence:
     evidence = AgentEvidence()
+    completed_turns = 0
+    usage_trustworthy = True
     for line_no, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line:
@@ -62,14 +64,23 @@ def parse_codex_jsonl(lines: Iterable[str]) -> AgentEvidence:
             else:
                 evidence.unknown_events.append(event)
         elif event_type == "turn.completed":
+            completed_turns += 1
             usage = event.get("usage")
             if isinstance(usage, dict):
+                if not _trusted_required_total(
+                    usage.get("input_tokens")
+                ) or not _trusted_required_total(usage.get("output_tokens")):
+                    usage_trustworthy = False
                 evidence.input_tokens += _int_value(usage.get("input_tokens"))
-                evidence.cached_input_tokens += _int_value(usage.get("cached_input_tokens"))
+                evidence.cached_input_tokens += _optional_detail_value(
+                    usage.get("cached_input_tokens")
+                )
                 evidence.output_tokens += _int_value(usage.get("output_tokens"))
-                evidence.reasoning_output_tokens += _int_value(
+                evidence.reasoning_output_tokens += _optional_detail_value(
                     usage.get("reasoning_output_tokens")
                 )
+            else:
+                usage_trustworthy = False
         elif event_type in {"error", "turn.failed"}:
             message = event.get("message") or event.get("error")
             evidence.errors.append(str(message))
@@ -77,8 +88,21 @@ def parse_codex_jsonl(lines: Iterable[str]) -> AgentEvidence:
             pass
         else:
             evidence.unknown_events.append(event)
+    evidence.usage_observed = completed_turns > 0 and usage_trustworthy
     return evidence
 
 
 def _int_value(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _trusted_required_total(value: object) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+    )
+
+
+def _optional_detail_value(value: object) -> int:
+    return value if _trusted_required_total(value) else 0
