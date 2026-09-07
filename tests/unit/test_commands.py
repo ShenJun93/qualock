@@ -62,7 +62,7 @@ class FakeBackend:
             success=binary.version in self.success_versions,
             valid=True,
             duration_ms=100,
-            usage=Usage(input_tokens=10, output_tokens=1),
+            usage=Usage(input_tokens=10, output_tokens=1, observed=True),
         )
 
 

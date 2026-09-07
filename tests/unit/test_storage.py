@@ -15,6 +15,7 @@ def test_writes_report_json_markdown_and_qualification_metadata(tmp_path: Path) 
     report_payload = json.loads((root / "report.json").read_text(encoding="utf-8"))
     qualification_payload = json.loads((root / "qualification.json").read_text(encoding="utf-8"))
     assert report_payload["verdict"] == "block"
+    assert report_payload["executions"][0]["attempts"][0]["usage"]["observed"] is True
     assert "agent_display_name" not in report_payload
     assert "agent_display_name" not in qualification_payload
 
