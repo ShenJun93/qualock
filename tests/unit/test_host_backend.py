@@ -9,6 +9,7 @@ from qualock.agents.antigravity import AntigravityInvocation
 from qualock.agents.base import AgentBinary
 from qualock.canary.models import CanarySpec, RuntimeSpec
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
+from qualock.qualification.models import Usage
 from qualock.run import host_backend
 from qualock.run.backend import IntegrityPolicy, UnsupportedRuntimeError
 from qualock.run.host import HostAgentState, HostCommandError
@@ -43,7 +44,14 @@ class FakeAdapter:
         parse_error: str | None = None,
         invocation_error: Exception | None = None,
     ) -> None:
-        self.evidence = evidence or AgentEvidence(input_tokens=12, output_tokens=3)
+        self.evidence = evidence or AgentEvidence(
+            input_tokens=20,
+            cached_input_tokens=7,
+            cache_write_input_tokens=5,
+            output_tokens=9,
+            reasoning_output_tokens=3,
+            usage_observed=True,
+        )
         self.parse_error = parse_error
         self.invocation_error = invocation_error
         self.invocation_kwargs: dict[str, object] = {}
@@ -562,7 +570,7 @@ def test_successful_attempt_grades_only_after_evidence_and_integrity_checks(
     tmp_path: Path,
 ) -> None:
     runner = FakeHostRunner()
-    adapter = FakeAdapter(evidence=AgentEvidence(input_tokens=12, output_tokens=3))
+    adapter = FakeAdapter()
     service = backend(tmp_path, runner, adapter=adapter)
 
     result = run_once(tmp_path, service)
@@ -572,8 +580,15 @@ def test_successful_attempt_grades_only_after_evidence_and_integrity_checks(
     assert result.side == Side.BASELINE.value
     assert result.repetition == 1
     assert result.duration_ms == 123
-    assert result.usage.input_tokens == 12
-    assert result.usage.output_tokens == 3
+    assert result.usage == Usage(
+        input_tokens=20,
+        cached_input_tokens=7,
+        cache_write_input_tokens=5,
+        output_tokens=9,
+        reasoning_output_tokens=3,
+        observed=True,
+    )
+    assert result.usage.total_tokens == 29
     assert result.events_jsonl == "opaque agent output"
     assert runner.trace == ["agent", "inspect", "grader"]
     call = runner.grader_calls[0]
@@ -705,6 +720,53 @@ def test_path_escaping_change_invalidates_attempt_before_grader(tmp_path: Path) 
     assert result.valid is False
     assert "escapes repository" in (result.invalid_reason or "")
     assert runner.grader_calls == []
+    assert result.usage == Usage()
+    assert result.usage.observed is False
+
+
+def test_early_invalid_attempts_retain_default_unobserved_usage(tmp_path: Path) -> None:
+    runner = FakeHostRunner()
+    service = backend(tmp_path, runner, adapter=FakeAdapter(parse_error="bad evidence"))
+    result = run_once(tmp_path, service)
+
+    assert result.valid is False
+    assert result.usage == Usage()
+    assert result.usage.observed is False
+
+
+def test_timeout_and_protected_path_after_successful_parse_carry_evidence_usage(
+    tmp_path: Path,
+) -> None:
+    runner = FakeHostRunner(exit_code=None)
+    result = run_once(tmp_path, backend(tmp_path, runner))
+
+    assert result.valid is False
+    assert result.invalid_reason == "agent timed out"
+    assert result.usage == Usage(
+        input_tokens=20,
+        cached_input_tokens=7,
+        cache_write_input_tokens=5,
+        output_tokens=9,
+        reasoning_output_tokens=3,
+        observed=True,
+    )
+
+    protected_root = tmp_path / "protected"
+    protected_root.mkdir()
+    protected_runner = FakeHostRunner(changed_paths=("tests/test_hidden.py",))
+    protected_result = run_once(
+        protected_root, backend(protected_root, protected_runner), side=Side.CANDIDATE
+    )
+    assert protected_result.valid is False
+    assert protected_result.usage == Usage(
+        input_tokens=20,
+        cached_input_tokens=7,
+        cache_write_input_tokens=5,
+        output_tokens=9,
+        reasoning_output_tokens=3,
+        observed=True,
+    )
+    assert protected_result.usage.total_tokens == 29
 
 
 def test_git_inspection_failure_invalidates_attempt_before_grader(tmp_path: Path) -> None:

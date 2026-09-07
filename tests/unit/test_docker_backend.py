@@ -14,6 +14,7 @@ from qualock.agents.base import (
 from qualock.canary.models import CanarySpec, RuntimeSpec
 from qualock.evidence.claude_stream_json import parse_claude_stream_json
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
+from qualock.qualification.models import Usage
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy, UnsupportedRuntimeError
 from qualock.run.models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedTarget
 from qualock.run.schedule import Side
@@ -34,7 +35,14 @@ class FakeAdapter:
         invocation: AgentInvocation | None = None,
         runtime_dependencies: tuple[AgentRuntimeDependency, ...] = (),
     ) -> None:
-        self.evidence = evidence or AgentEvidence(input_tokens=12, output_tokens=3)
+        self.evidence = evidence or AgentEvidence(
+            input_tokens=20,
+            cached_input_tokens=7,
+            cache_write_input_tokens=5,
+            output_tokens=9,
+            reasoning_output_tokens=3,
+            usage_observed=True,
+        )
         self.parse_error = parse_error
         self._invocation = invocation
         self.runtime_dependencies = runtime_dependencies
@@ -230,18 +238,78 @@ def run_once(tmp_path: Path, service: DockerQualificationBackend, *, side: Side 
 
 def test_normalized_agent_evidence_is_graded_and_usage_is_recorded(tmp_path: Path) -> None:
     docker = FakeDocker(stdout="this is intentionally not Codex JSONL")
-    service = backend(
-        tmp_path,
-        docker,
-        adapter=FakeAdapter(evidence=AgentEvidence(input_tokens=12, output_tokens=3)),
-    )
+    service = backend(tmp_path, docker)
     result = run_once(tmp_path, service)
     assert result.valid is True
     assert result.success is True
     assert result.duration_ms == 123
-    assert result.usage.input_tokens == 12
-    assert result.usage.output_tokens == 3
+    assert result.usage == Usage(
+        input_tokens=20,
+        cached_input_tokens=7,
+        cache_write_input_tokens=5,
+        output_tokens=9,
+        reasoning_output_tokens=3,
+        observed=True,
+    )
+    assert result.usage.total_tokens == 29
     assert docker.grader_calls == 1
+
+
+def test_invalid_attempt_after_successful_parse_preserves_usage_exactly(
+    tmp_path: Path,
+) -> None:
+    docker = FakeDocker(changed_paths=("tests/test_hidden.py",))
+    service = backend(tmp_path, docker)
+    result = run_once(tmp_path, service, side=Side.CANDIDATE)
+
+    assert result.valid is False
+    assert result.usage == Usage(
+        input_tokens=20,
+        cached_input_tokens=7,
+        cache_write_input_tokens=5,
+        output_tokens=9,
+        reasoning_output_tokens=3,
+        observed=True,
+    )
+    assert result.usage.total_tokens == 29
+    assert docker.grader_calls == 0
+
+
+def test_early_invalid_attempts_retain_default_unobserved_usage(tmp_path: Path) -> None:
+    docker = FakeDocker()
+    service = backend(tmp_path, docker, adapter=FakeAdapter(parse_error="bad evidence"))
+    result = run_once(tmp_path, service)
+
+    assert result.valid is False
+    assert result.usage == Usage()
+    assert result.usage.observed is False
+
+    escaping_root = tmp_path / "escaping"
+    escaping_root.mkdir()
+    docker_escaping = FakeDocker(changed_paths=("../outside.py",))
+    escaping_result = run_once(escaping_root, backend(escaping_root, docker_escaping))
+    assert escaping_result.valid is False
+    assert "escapes repository" in (escaping_result.invalid_reason or "")
+    assert escaping_result.usage == Usage()
+    assert escaping_result.usage.observed is False
+
+
+def test_timeout_and_reported_errors_after_successful_parse_carry_evidence_usage(
+    tmp_path: Path,
+) -> None:
+    docker = FakeDocker(exit_code=None)
+    result = run_once(tmp_path, backend(tmp_path, docker))
+
+    assert result.valid is False
+    assert result.invalid_reason == "agent timed out"
+    assert result.usage == Usage(
+        input_tokens=20,
+        cached_input_tokens=7,
+        cache_write_input_tokens=5,
+        output_tokens=9,
+        reasoning_output_tokens=3,
+        observed=True,
+    )
 
 
 def test_real_claude_tool_failure_does_not_invalidate_successful_attempt(tmp_path: Path) -> None:
