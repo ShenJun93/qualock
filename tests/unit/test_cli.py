@@ -5,7 +5,16 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
+from qualock.canary.loader import CanaryLoadError
 from qualock.cli import app
+from qualock.commands import CommandError
+from qualock.config.io import ConfigError, write_default_config
+from qualock.history.models import (
+    CanaryEffectiveness,
+    CanaryEstimate,
+    HistoryAnalysis,
+    SuiteEstimate,
+)
 from qualock.qualification.models import Verdict
 from tests.unit.test_report import sample_result
 
@@ -526,3 +535,127 @@ def test_monitor_checked_output_has_no_usage_line(tmp_path: Path, monkeypatch) -
     assert "QuaLock Safety Check" in result.stdout
     assert "Observed model tokens" not in result.stdout
     assert "Technical evidence: .qualock/results/q1/\n" in result.stdout
+
+
+def _write_valid_history_project(root: Path) -> None:
+    ub = root / ".qualock"
+    (ub / "canaries").mkdir(parents=True)
+    config_path = ub / "config.yaml"
+    write_default_config(config_path)
+    grader = ub / "canaries/grader.patch"
+    grader.write_text("patch", encoding="utf-8")
+    (ub / "canaries/sample.yaml").write_text(
+        f"""schema_version: 1
+id: sample
+name: Sample
+repository:
+  url: https://example.invalid/repo.git
+  base_sha: {"a" * 40}
+runtime:
+  image: python:3.12-slim
+task: Fix it.
+setup: []
+agent:
+  timeout_seconds: 60
+grader:
+  patch: grader.patch
+  command:
+    - pytest -q
+constraints:
+  protected_paths:
+    - tests/**
+critical: true
+""",
+        encoding="utf-8",
+    )
+
+
+def test_history_zero_history_exits_zero(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    analysis = HistoryAnalysis(
+        loaded_reports=0,
+        ignored_reports=(),
+        ranked=(),
+        not_enough_history=(CanaryEffectiveness("sample", 0, 0, None),),
+        per_canary_estimates=(CanaryEstimate("sample", (), (), None, None),),
+        suite_estimate=SuiteEstimate(None, None, ("sample",), ("sample",)),
+    )
+    monkeypatch.setattr("qualock.cli.execute_history", lambda root: analysis)
+    result = runner.invoke(app, ["history"])
+    assert result.exit_code == 0
+    assert "No qualification history found yet" in result.stdout
+    assert "Estimated model-attempt runtime" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConfigError("bad config"),
+        CanaryLoadError("bad canary"),
+        CommandError("no canaries found"),
+        ValueError("bad input"),
+    ],
+)
+def test_history_configuration_failures_exit_3(tmp_path: Path, monkeypatch, exc: Exception) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qualock.cli.execute_history", lambda root: (_ for _ in ()).throw(exc))
+    result = runner.invoke(app, ["history"])
+    assert result.exit_code == 3
+    assert str(exc) in result.stdout
+
+
+def test_history_unexpected_error_exits_1(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "qualock.cli.execute_history",
+        lambda root: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    result = runner.invoke(app, ["history"])
+    assert result.exit_code == 1
+    assert "boom" in result.stdout
+
+
+def test_history_rejects_extra_arguments() -> None:
+    result = runner.invoke(app, ["history", "extra"])
+    assert result.exit_code != 0
+
+
+def test_history_real_cold_start_does_not_create_results_dir(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_valid_history_project(tmp_path)
+    results = tmp_path / ".qualock/results"
+    assert not results.exists()
+
+    result = runner.invoke(app, ["history"])
+
+    assert result.exit_code == 0
+    assert "No qualification history found yet" in result.stdout
+    assert not results.exists()
+
+
+def test_history_real_invocation_preserves_artifact_bytes_and_mtimes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from qualock.evidence.storage import write_qualification_artifacts
+
+    monkeypatch.chdir(tmp_path)
+    _write_valid_history_project(tmp_path)
+    results = tmp_path / ".qualock/results"
+    write_qualification_artifacts(
+        results, sample_result(), agent_display_name="Codex"
+    )
+
+    before = {
+        p.relative_to(results): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in results.rglob("*")
+        if p.is_file()
+    }
+    result = runner.invoke(app, ["history"])
+    after = {
+        p.relative_to(results): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in results.rglob("*")
+        if p.is_file()
+    }
+
+    assert result.exit_code == 0
+    assert after == before
