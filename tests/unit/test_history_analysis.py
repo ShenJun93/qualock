@@ -21,6 +21,9 @@ def hist_attempt(
     input_tokens: int | None = 10,
     output_tokens: int | None = 5,
     usage_observed: bool = True,
+    cached_input_tokens: int | None = None,
+    cache_write_input_tokens: int | None = None,
+    reasoning_output_tokens: int | None = None,
 ) -> HistoricalAttempt:
     return HistoricalAttempt(
         side=side,
@@ -31,6 +34,9 @@ def hist_attempt(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         usage_observed=usage_observed,
+        cached_input_tokens=cached_input_tokens,
+        cache_write_input_tokens=cache_write_input_tokens,
+        reasoning_output_tokens=reasoning_output_tokens,
     )
 
 
@@ -228,7 +234,7 @@ def test_unstable_baseline_loses_effectiveness_only() -> None:
     assert estimate.token_samples == (30,)
 
 
-def test_cache_and_reasoning_absence_from_model_cannot_affect_token_totals() -> None:
+def test_cache_and_reasoning_fields_default_to_none_and_cannot_affect_token_totals() -> None:
     execution = paired(
         "canary-a",
         hist_attempt(side="baseline", repetition=1, input_tokens=1000, output_tokens=2000),
@@ -240,9 +246,40 @@ def test_cache_and_reasoning_absence_from_model_cannot_affect_token_totals() -> 
 
     estimate = analysis.per_canary_estimates[0]
     assert estimate.token_samples == (6000,)
-    assert not hasattr(execution.attempts[0], "cached_input_tokens")
-    assert not hasattr(execution.attempts[0], "cache_write_input_tokens")
-    assert not hasattr(execution.attempts[0], "reasoning_output_tokens")
+    assert execution.attempts[0].cached_input_tokens is None
+    assert execution.attempts[0].cache_write_input_tokens is None
+    assert execution.attempts[0].reasoning_output_tokens is None
+
+
+def test_wildly_different_cache_and_reasoning_values_do_not_change_41_results() -> None:
+    execution = paired(
+        "canary-a",
+        hist_attempt(
+            side="baseline",
+            repetition=1,
+            input_tokens=1000,
+            output_tokens=2000,
+            cached_input_tokens=999_999,
+            cache_write_input_tokens=888_888,
+            reasoning_output_tokens=777_777,
+        ),
+        hist_attempt(
+            side="candidate",
+            repetition=1,
+            input_tokens=1000,
+            output_tokens=2000,
+            cached_input_tokens=0,
+            cache_write_input_tokens=1,
+            reasoning_output_tokens=2,
+        ),
+    )
+    summary = summary_of(loaded("q-1", execution))
+
+    analysis = analyze_history(summary, ["canary-a"])
+
+    estimate = analysis.per_canary_estimates[0]
+    assert estimate.token_samples == (6000,)
+    assert estimate.runtime_samples_ms == (200,)
 
 
 # ---------------------------------------------------------------------------

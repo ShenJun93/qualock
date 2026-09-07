@@ -386,6 +386,104 @@ def test_non_utf8_report_is_ignored_with_fixed_reason_and_siblings_still_load(
     assert summary.ignored == (ReportLoadFailure(bad_dir, "unreadable file"),)
 
 
+def test_historical_attempt_new_fields_default_to_none_with_old_argument_set() -> None:
+    attempt_result = HistoricalAttempt(
+        side="baseline",
+        repetition=1,
+        success=True,
+        valid=True,
+        duration_ms=100,
+        input_tokens=10,
+        output_tokens=5,
+        usage_observed=True,
+    )
+
+    assert attempt_result.cached_input_tokens is None
+    assert attempt_result.cache_write_input_tokens is None
+    assert attempt_result.reasoning_output_tokens is None
+
+
+def test_new_usage_detail_fields_normalize_from_usage_object(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    write_report(
+        results,
+        "q-dir",
+        report(
+            "q-id",
+            [
+                attempt(
+                    usage={
+                        "observed": True,
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "cached_input_tokens": 4,
+                        "cache_write_input_tokens": 2,
+                        "reasoning_output_tokens": 3,
+                    }
+                )
+            ],
+        ),
+    )
+
+    attempt_result = scan_results(results).loaded[0].executions[0].attempts[0]
+    assert attempt_result.cached_input_tokens == 4
+    assert attempt_result.cache_write_input_tokens == 2
+    assert attempt_result.reasoning_output_tokens == 3
+
+
+def test_new_usage_detail_fields_normalize_independently_and_reject_bools(
+    tmp_path: Path,
+) -> None:
+    results = tmp_path / "results"
+    write_report(
+        results,
+        "q-dir",
+        report(
+            "q-id",
+            [
+                attempt(
+                    usage={
+                        "observed": True,
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "cached_input_tokens": True,
+                        "cache_write_input_tokens": "2",
+                        "reasoning_output_tokens": 3,
+                    }
+                )
+            ],
+        ),
+    )
+
+    attempt_result = scan_results(results).loaded[0].executions[0].attempts[0]
+    assert attempt_result.cached_input_tokens is None
+    assert attempt_result.cache_write_input_tokens is None
+    assert attempt_result.reasoning_output_tokens == 3
+
+
+def test_missing_usage_detail_keys_and_malformed_usage_yield_none_for_all_three(
+    tmp_path: Path,
+) -> None:
+    results = tmp_path / "results"
+    write_report(
+        results,
+        "q-dir",
+        report(
+            "q-id",
+            [
+                attempt(usage={"observed": True, "input_tokens": 10, "output_tokens": 5}),
+                attempt(usage="not-an-object"),
+            ],
+        ),
+    )
+
+    attempts = scan_results(results).loaded[0].executions[0].attempts
+    for attempt_result in attempts:
+        assert attempt_result.cached_input_tokens is None
+        assert attempt_result.cache_write_input_tokens is None
+        assert attempt_result.reasoning_output_tokens is None
+
+
 def test_scan_preserves_report_bytes_and_mtimes(tmp_path: Path) -> None:
     results = tmp_path / "results"
     paths = (

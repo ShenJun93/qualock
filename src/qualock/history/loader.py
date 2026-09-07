@@ -43,6 +43,9 @@ def _normalize_attempt(raw: object) -> HistoricalAttempt:
             input_tokens=None,
             output_tokens=None,
             usage_observed=False,
+            cached_input_tokens=None,
+            cache_write_input_tokens=None,
+            reasoning_output_tokens=None,
         )
 
     usage = raw.get("usage")
@@ -50,10 +53,16 @@ def _normalize_attempt(raw: object) -> HistoricalAttempt:
         usage_observed = usage.get("observed") is True
         input_tokens = _normalize_int(usage.get("input_tokens"))
         output_tokens = _normalize_int(usage.get("output_tokens"))
+        cached_input_tokens = _normalize_int(usage.get("cached_input_tokens"))
+        cache_write_input_tokens = _normalize_int(usage.get("cache_write_input_tokens"))
+        reasoning_output_tokens = _normalize_int(usage.get("reasoning_output_tokens"))
     else:
         usage_observed = False
         input_tokens = None
         output_tokens = None
+        cached_input_tokens = None
+        cache_write_input_tokens = None
+        reasoning_output_tokens = None
 
     return HistoricalAttempt(
         side=_normalize_str(raw.get("side")),
@@ -64,6 +73,9 @@ def _normalize_attempt(raw: object) -> HistoricalAttempt:
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         usage_observed=usage_observed,
+        cached_input_tokens=cached_input_tokens,
+        cache_write_input_tokens=cache_write_input_tokens,
+        reasoning_output_tokens=reasoning_output_tokens,
     )
 
 
