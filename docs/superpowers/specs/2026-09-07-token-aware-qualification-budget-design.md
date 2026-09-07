@@ -19,8 +19,8 @@ No monetary pricing, credit/subscription estimation, historical ranking, persist
 ## 2. Goals
 
 - Give operators a provider-neutral signal for how many tokens a qualification run actually consumed, without requiring provider-specific pricing knowledge.
-- Let operators cap local qualification cost risk using a token threshold, with semantics that are honest about being a checkpoint, not a hard limit.
-- Preserve exact backward compatibility for callers who do not use `max_tokens`, including byte-for-byte behavior of `max_attempts`-only runs.
+- Let operators constrain local qualification token exposure using a threshold, with semantics that are honest about being a checkpoint, not a hard limit.
+- Preserve Batch #32 behavioral compatibility for callers who do not use `max_tokens`; Batch #40 intentionally expands usage/accounting artifacts and therefore does not claim byte-identical serialization.
 - Keep the token accounting model simple enough to reason about across three structurally different provider usage reporting schemes, without inventing per-provider pricing tables.
 
 ## 3. Non-Goals (Batch #40 Boundary)
@@ -56,7 +56,7 @@ Unless a change is *directly* necessitated by this batch's goals, the following 
 - Run backends and the qualification executor
 - `commands.py`, `cli.py`
 - `evidence/storage.py`
-- `report/render.py` (safety-relevant changes only, e.g. avoiding leaking raw provider payloads — no rendering redesign)
+- `report/render.py`, limited to surfacing the new usage/accounting fields. Existing `report.json` payload content such as `events_jsonl` is otherwise unchanged; Invariant E2 constrains only newly-added usage metadata.
 - `README.md` / `ROADMAP.md`, updated only after implementation, exact-head verification, CI, and independent review land
 
 ## 4. Canonical Qualification `Usage` Model
@@ -72,7 +72,7 @@ The canonical `Usage` model gains a precise, provider-neutral shape. Every field
 | `cache_write_input_tokens` | Cache-**write**/cache-creation subset/detail of `input_tokens` | Subset of `input_tokens`, informational |
 | `output_tokens` | Normalized **total** output token volume for the attempt | Superset; includes reasoning subset |
 | `reasoning_output_tokens` | Reasoning/thinking subset/detail of `output_tokens` | Subset of `output_tokens`, informational |
-| `observed` | `bool`, true only when trustworthy runtime/terminal usage was actually observed | Governs whether counters may be trusted, including for budgeting |
+| `observed` | `bool`, true only when trustworthy runtime/terminal usage was actually observed | Defaults to `False`; governs whether counters may be trusted, including for budgeting |
 
 **Invariant U1 (non-negativity):** All observed counters (`input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens`) MUST be non-negative integers. No parser may clamp, silently coerce, or accept a negative usage counter. Existing strict parser contracts remain strict: malformed required Claude or Antigravity terminal usage raises the provider's existing evidence error. Codex's intentionally permissive event parser may preserve ordinary qualification behavior by marking usage unobserved instead of converting malformed usage into a new policy failure. In every path that reaches an `AttemptResult`, negative or otherwise untrustworthy usage MUST NOT appear as `observed=True`.
 
@@ -84,7 +84,7 @@ total_tokens = input_tokens + output_tokens
 
 is the **only** definition of `total_tokens`. `cached_input_tokens`, `cache_write_input_tokens`, and `reasoning_output_tokens` are strictly informational subsets/details and MUST NEVER be added again into `total_tokens`. This is the single most important invariant in this batch, because every provider reports subset/detail fields differently, and it is the primary source of double-counting bugs if violated.
 
-**Invariant U3 (observed is truthful, never fabricated):** `observed=True` may be set **only** when the parser/backend has direct evidence that the total input/output counters are trustworthy (i.e., came from a real terminal/runtime usage report, not inferred, not defaulted, not partially reconstructed). If execution still produces an `AttemptResult` while usage could not be established, that attempt uses `observed=False` with zeroed/default detail counters — **never** `observed=True` with a fabricated zero. Provider parsers that already fail closed on malformed required terminal usage continue to raise instead; this batch does not weaken those strict contracts. A fabricated zero is indistinguishable from "genuinely used zero tokens" and would corrupt both reporting and budgeting.
+**Invariant U3 (observed is truthful, never fabricated):** `observed=True` may be set **only** when the parser/backend has direct evidence that the total input/output counters are trustworthy (i.e., came from a real terminal/runtime usage report, not inferred, not defaulted, not partially reconstructed). `Usage.observed` defaults to `False`, so `AttemptResult.usage` created through `field(default_factory=Usage)` can never fabricate an observed zero. If execution still produces an `AttemptResult` while usage could not be established, that attempt uses `observed=False` with zeroed/default counters — **never** `observed=True` with a fabricated zero. Provider parsers that fail closed on malformed required terminal usage continue to raise instead. A fabricated zero is indistinguishable from "genuinely used zero tokens" and would corrupt both reporting and budgeting. All in-tree `Usage(...)` construction is keyword-based; this batch does not introduce reliance on positional field order.
 
 ### 4.2 Why Subset/Detail Fields Exist
 
@@ -101,7 +101,7 @@ Each parser/backend is responsible for translating its provider's native usage v
 - `reasoning_output_tokens` is captured as a subset/detail of `output_tokens`, consistent with current behavior.
 - The parser continues to accumulate usage across `turn.completed` events for the run, as it does today — this batch does not change the accumulation strategy, only the shape of what is accumulated.
 - `cache_write_input_tokens` capture is **optional**: if the Codex event stream for a given session does not surface a cache-write figure, the field is simply absent/zero and does not affect `observed`.
-- `observed` is set to `True` only when the required input/output totals for the turn(s) are trustworthy (i.e., present and well-formed on the terminal/accumulated usage event). Malformed or partial usage on an otherwise-successful ordinary (non-budgeted) qualification run **must not** introduce a new policy failure that would not have occurred before this batch — ordinary qualification pass/fail is governed by `qualification/policy.py`, which this batch does not touch, and usage parsing failures must degrade to `observed=False` rather than raise or fail the check.
+- Codex remains intentionally permissive for usage metadata so ordinary qualification does not gain a new policy failure. `observed=True` requires at least one `turn.completed` usage object and trustworthy required totals on **every** accumulated usage object. If any such object has `input_tokens` or `output_tokens` missing, non-integer, boolean, or negative, usage for the whole attempt is `observed=False` and the parser does not raise solely for that usage defect. Missing/malformed optional subset fields (`cached_input_tokens`, optional cache-write detail, `reasoning_output_tokens`) are treated as detail `0` and do not by themselves clear `observed`. Counters attached to an `observed=False` attempt are never used for token sums or admission.
 - Token-budget admission, however, **must not** treat unobserved Codex usage as zero. See §7.5 (unknown-usage handling) — this is enforced at the executor level regardless of which provider produced the gap.
 
 ### 5.2 Claude
@@ -117,7 +117,8 @@ Usage.output_tokens         = raw.output_tokens
 
 - `raw.cache_creation_input_tokens` is **optional** and defaults to `0` for compatibility with Claude responses/events that predate or omit cache-creation reporting. Its absence does not affect `observed` as long as `raw.input_tokens` and `raw.output_tokens` are present and trustworthy.
 - Optional `output_tokens_details.thinking_tokens`, when present, populates `reasoning_output_tokens` as a subset/detail of `output_tokens`. Its absence leaves `reasoning_output_tokens` at `0`/absent and does not affect `observed`.
-- `observed=True` is set when a valid terminal result's usage block is present (i.e., the message/result usage the parser already treats as authoritative today), consistent with the strict/terminal-only observation philosophy shared with the other two providers.
+- `observed=True` is set when a valid terminal result's usage block is present and all required counters are valid. Claude is deliberately strict for terminal usage: a negative required `input_tokens`, `cache_read_input_tokens`, `output_tokens`, or present `cache_creation_input_tokens`/reasoning-detail counter raises `ClaudeEvidenceError`, just as malformed required terminal fields already do. This is an explicit strictness increase for negative integers and is pinned by tests rather than left to implementer choice.
+- This changes `AgentEvidence.input_tokens` semantics for Claude only: it becomes the inclusive normalized input total. The locked 2.1.260 transcript therefore re-pins from raw input `4` to normalized `18202` (`4 + 9035 + 9163`), with `cached_input_tokens=9035` and `cache_write_input_tokens=9163`.
 
 **Rationale:** Claude's three-way split is the one provider shape in this batch where the "total" must be *constructed* rather than read directly. Building that construction into the canonical model definition (§4.1, Invariant U2) rather than leaving it as parser-specific arithmetic is what prevents this from silently becoming a double-count if a future maintainer adds a fourth Claude counter.
 
@@ -130,7 +131,7 @@ Usage.output_tokens         = raw.output_tokens
 - `output_tokens` is taken as reported.
 - `reasoning_output_tokens = thinking` as reported, when present.
 - `observed=True` only after the existing strict terminal validation succeeds, unchanged from current behavior.
-- **Important boundary:** if Antigravity's own wire protocol reports a `total_tokens`-shaped field, it MAY be validated for internal consistency (e.g., sanity-checking against the parser's own component sum) but it is **never** treated as *the* cross-provider `total_tokens`. The canonical `total_tokens` is always computed per Invariant U2, not read from any provider payload.
+- **Important boundary:** Antigravity's provider `total_tokens` field keeps its existing validation only: when present it must be a non-negative integer. Batch #40 MUST NOT cross-check that provider field against component sums, derive canonical totals from it, or add any new failure mode based on assumptions about its semantics. The canonical `total_tokens` is always computed per Invariant U2.
 
 ### 5.4 Cross-Provider Consistency Table
 
@@ -146,9 +147,9 @@ Usage.output_tokens         = raw.output_tokens
 
 ## 6. Evidence Layer
 
-- `AgentEvidence` mirrors the new fields relevant to this batch: cache-write detail and a `usage_observed` flag, matching the canonical `Usage.cache_write_input_tokens` and `Usage.observed` respectively.
+- `AgentEvidence` mirrors the new fields relevant to this batch: cache-write detail and a `usage_observed` flag, matching the canonical `Usage.cache_write_input_tokens` and `Usage.observed` respectively. For Claude only, `AgentEvidence.input_tokens` intentionally changes from raw ordinary input to the inclusive normalized input total defined in §5.2.
 - Run backends propagate parser-produced usage into the canonical qualification `Usage` unchanged in value — backends perform no additional arithmetic on usage; all normalization happens in the parser layer (§5).
-- **Invariant E1:** any parse or runtime failure that prevents establishing usage for an attempt leaves `AgentEvidence.usage_observed = False` (and correspondingly `Usage.observed = False` once propagated). It is never acceptable to emit a fake zero usage value to "fill in" a gap — this applies symmetrically to evidence and qualification layers, echoing Invariant U3.
+- **Invariant E1:** when a parser/runtime path still returns evidence despite being unable to establish trustworthy usage, it leaves `AgentEvidence.usage_observed = False` (and correspondingly `Usage.observed = False` once propagated). Existing strict provider parser errors remain errors and may instead make the attempt invalid through the existing backend path. It is never acceptable to emit a fake observed-zero usage value to "fill in" a gap.
 - **Invariant E2 (no sensitive leakage):** summary metadata attached to evidence for token-usage purposes MUST NOT include raw stdout/stderr content or credentials. Token usage is a small set of integers plus a boolean; there is no legitimate reason for usage-summary metadata to carry provider transcript or secret material, and this batch must not introduce a code path where it does (e.g., via a "debug dump usage context" convenience field).
 
 ## 7. Token-Denominated Local Qualification Budget
@@ -157,7 +158,7 @@ Usage.output_tokens         = raw.output_tokens
 
 - `execute_check` (the local qualification executor entry point) gains an optional parameter `max_tokens: int | None`.
 - CLI: `qualock check` gains a `--max-tokens` flag, mirroring `--max-attempts` in naming, validation style, and help conventions for consistency.
-- Validation: `max_tokens` MUST be a positive integer. A value `<= 0` is a `CommandError` at the command layer, surfaced as **CLI exit code 3**, matching the existing `--max-attempts` validation contract.
+- Validation: `max_tokens` MUST be a positive integer. Both direct `execute_check` validation and CLI validation reject `<= 0` as `CommandError`; the CLI surfaces it as **exit code 3**, mirroring the existing two-layer `--max-attempts` contract.
 
 ### 7.2 What "Checked Between Complete Canaries" Means
 
@@ -167,18 +168,20 @@ This is the central semantic commitment of this batch and MUST be stated verbati
 
 Concretely:
 
-- **Invariant B1 (no partial canary):** No configured attempt within an already-started canary is ever skipped because of `max_tokens` (or `max_attempts` — see the Batch #32 spec for that invariant, which is preserved unchanged). A canary is atomic with respect to both budgets.
-- **Invariant B2 (checkpoint, not cap):** Budget admission is evaluated **only** at canary boundaries, i.e., before starting the *next* canary, never mid-canary.
+- **Invariant B1 (no partial canary):** Once a canary has passed admission and started, no configured attempt within it is skipped because of `max_tokens` or `max_attempts`. A canary is atomic after admission. This does not require the first canary to start when the existing attempt-budget gate cannot fund one complete canary.
+- **Invariant B2 (checkpoint, not cap):** Token-budget admission is evaluated **only** at boundaries after a complete canary, never mid-canary and never before the first canary. The existing attempt-budget gate remains a pre-canary admission check, including before canary one.
 - **Invariant B3 (overshoot is expected and must be described honestly):** Because the check happens between canaries, actual observed total token usage for the run may exceed `max_tokens` by up to the cost of the last complete canary that was allowed to run. This is expected behavior, not a bug. Documentation, help text, and rendered output MUST NOT describe `max_tokens` using language implying a hard cap or a billing limit (e.g., must avoid words like "limit enforced exactly," "will not exceed," "billing cap"). Acceptable framing: "threshold checked between complete canaries."
 
 ### 7.3 Admission Order at a Canary Boundary
 
-Before starting each canary after the first, the executor evaluates admission in this fixed order:
+Before starting **every** canary, including the first, the executor evaluates the existing attempt-budget admission gate first. Token-budget admission is then evaluated only for canaries after the first, because no prior observed usage exists before canary one:
 
-1. **Attempt-budget admission first** (existing `max_attempts` logic from Batch #32, unchanged). If attempt budget alone would stop the run, it does, exactly as before this batch — this governs the interaction and ordering rule below.
-2. **Token-budget admission second**, evaluated only if attempt-budget admission did not already stop the run:
-   - If token accounting is *known* (see §7.5) for all attempts run so far, and cumulative observed usage `>= max_tokens`, the next canary is skipped (budget reached or exceeded).
-   - If token accounting is *unknown* for any started attempt so far (i.e., some started attempt has `observed=False`), the run **fails closed**: the next canary is skipped, because the executor cannot honestly claim the budget has *not* been exceeded.
+1. **Attempt-budget admission first** (existing `max_attempts` logic from Batch #32, unchanged), before every canary. If fewer than one complete canary's attempts remain, that canary is skipped exactly as today; a small attempt budget may therefore run nothing.
+2. **Token-budget admission second**, only when `max_tokens` is active and at least one canary has already completed:
+   - If token accounting is known for all attempts run so far and cumulative observed usage `>= max_tokens`, the next canary is skipped.
+   - If token accounting is unknown for any started attempt so far, the run fails closed and the next canary is skipped.
+
+When both gates would stop the same canary, the attempt-budget reason wins because that gate is evaluated first.
 
 **Invariant B4 (fail-closed on unknown usage):** Unknown usage is never treated as "0 tokens used, keep going." An executor that cannot verify usage for a started attempt must treat that as budget-exhausted-or-unknown for the purpose of deciding whether to admit the next canary, and stop rather than guess.
 
@@ -190,13 +193,15 @@ Before starting each canary after the first, the executor evaluates admission in
 
 Given token budgeting is active (`max_tokens is not None`):
 
-1. Run the current canary to completion (all its configured attempts) — this happens unconditionally per Invariant B1, before any token check is consulted.
-2. Determine whether **all** attempts started up to and including this canary have `observed=True` usage.
-   - If yes: cumulative `observed_tokens` is a trustworthy sum; proceed to compare against `max_tokens` as in §7.3.
-   - If no (at least one started attempt has `observed=False`): the executor **stops admitting further canaries**, records a bounded, specific reason (e.g., "token usage unavailable for one or more attempts; cannot verify budget") — not a generic error, and not silence — and the result is `INCOMPLETE` per Invariant B5.
-3. In both stopping cases, no attempt beyond the current (already-completed) canary is started.
+1. Before each canary, run the existing attempt-budget admission check. If it refuses the canary, record the existing attempt-budget skip reason and do not evaluate token admission for that canary.
+2. Before canary one, skip token admission because no attempt has run yet. If attempt admission passes, run canary one completely.
+3. Before each later canary, inspect **all** attempts already started:
+   - If any has `observed=False`, skip this and every remaining canary fail-closed with `INCOMPLETE: skipped because token usage was unavailable for one or more attempts (max_tokens=N)`.
+   - Otherwise cumulative `observed_tokens` is exact. If it is `>= max_tokens`, skip this and every remaining canary with `INCOMPLETE: skipped by token budget (max_tokens=N, observed_tokens=M)`.
+   - Otherwise admit the canary and run all configured paired/interleaved attempts to completion.
+4. After an admitted canary completes, update accounting; the next token decision occurs only at the next canary boundary.
 
-**Invariant B6 (reason must be bounded and specific):** The stop reason recorded for a token-budget-unavailable stop must be a fixed, recognizable reason string/category distinct from "attempt budget reached" and distinct from "token budget reached," so that operators and tests can distinguish "we stopped because we hit the threshold" from "we stopped because we could not verify usage."
+**Invariant B6 (reason must be bounded and specific):** The two token stop categories use the deterministic prefixes above. They are distinct from the existing attempt-budget reason. If both gates could stop a canary, attempt-budget-first ordering means the attempt-budget reason is authoritative.
 
 ### 7.6 Token Accounting Includes Invalid Attempts
 
@@ -204,29 +209,29 @@ Given token budgeting is active (`max_tokens is not None`):
 
 ### 7.7 Execution Order When Budgets Are Active
 
-- **Invariant B8:** If either `max_attempts` or `max_tokens` (or both) is active, the executor uses **critical-first execution** order internally (i.e., attempts most likely to determine an early stop/verdict are prioritized for scheduling), consistent with the ordering behavior already established for `max_attempts` alone in Batch #32. This is purely a scheduling optimization for budgeted runs and does not change semantics.
+- **Invariant B8:** Critical-first execution is used iff the run is constraining: `(max_attempts is not None and max_attempts < full_suite_attempts) or max_tokens is not None`. An unconstraining attempt budget (`max_attempts >= full_suite_attempts`) preserves existing configuration order exactly; an active token budget is constraining by definition because its future token cost is not known before execution.
 - **Invariant B9:** Regardless of internal execution order, **returned results remain in original configuration order**. Critical-first execution must never be observable in the shape or ordering of `QualificationResult`'s attempt list.
-- **Invariant B10:** When no budget is active (`max_attempts is None and max_tokens is None`), execution order is unchanged from pre-#39 behavior — this batch introduces no new reordering for unbudgeted runs.
+- **Invariant B10:** When no budget is active (`max_attempts is None and max_tokens is None`), execution order is unchanged from pre-#32 behavior — this batch introduces no new reordering for unbudgeted runs.
 
 ### 7.8 Composability with `max_attempts`
 
-- **Invariant B11 (backward compatibility of `max_attempts` alone):** A qualification run with `max_attempts` set and `max_tokens` unset behaves **exactly** as specified in the Batch #32 design — byte-for-byte identical admission decisions, ordering, and completeness semantics. This batch adds a second, independent gate; it does not alter the first.
+- **Invariant B11 (backward compatibility of `max_attempts` alone):** A qualification run with `max_attempts` set and `max_tokens` unset preserves Batch #32 admission decisions, execution order, `run_order`, returned execution ordering, verdicts, and completeness semantics. Batch #40 intentionally expands serialized usage/accounting artifacts, so no byte-for-byte artifact identity is claimed.
 - **Invariant B12 (both active):** When both `max_attempts` and `max_tokens` are set, admission at each canary boundary is evaluated in the fixed order given in §7.3 — attempt-budget check first, token-budget check second. Either gate stopping the run is sufficient to stop it; neither gate "waits" for the other.
 
 ## 8. `QualificationResult` Accounting
 
-New fields, all backward-compatible via safe defaults:
+Batch #40 adds four new `QualificationResult` fields, each with a safe default:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `max_attempts` | `int \| None` | `None` | Echo of the attempt budget in effect for this run (already exists from #39; listed here for completeness of the accounting group) |
+| `max_attempts` | `int \| None` | `None` | Echo of the attempt budget in effect for this run; Batch #32 had executor input only and did not persist this on `QualificationResult` |
 | `max_tokens` | `int \| None` | `None` | Echo of the token budget in effect for this run, if any |
 | `attempts_used` | `int` | `0` | Count of every attempt that was **started**, regardless of validity or budget involvement |
 | `observed_tokens` | `int \| None` | `None` | See below |
 
 **Invariant R1 (`attempts_used` semantics):** `attempts_used` counts every started attempt, full stop — matching Invariant B7's philosophy that "started" is the unit of accounting for cost, independent of validity.
 
-**Invariant R2 (`observed_tokens` all-or-nothing exactness):** `observed_tokens` is the exact sum of `total_tokens` (per Invariant U2) across every started attempt **if and only if every started attempt had `observed=True`** usage. If even one started attempt has `observed=False`, `observed_tokens` MUST be `None` — never a partial sum, never a best-effort estimate. A partial sum would look precise while being silently wrong, which is worse than an honest "unavailable."
+**Invariant R2 (`observed_tokens` all-or-nothing exactness):** `observed_tokens` is the exact sum of `total_tokens` (per Invariant U2) across every started attempt **if and only if every started attempt had `observed=True`** usage. If even one started attempt has `observed=False`, `observed_tokens` MUST be `None` — never a partial sum, never a best-effort estimate. If zero attempts were started, the exact empty sum is `0`, not `None`; this preserves the distinction between "nothing ran" and "usage was unavailable."
 
 **Invariant R3 (usage recorded even without a token budget):** A qualification run with `max_tokens=None` (no token budget requested) still populates `observed_tokens` according to Invariant R2, if usage is known. Token *observation and reporting* is independent of whether token *budgeting* was requested — an operator should be able to see how many tokens a run cost even if they didn't set a threshold.
 
@@ -236,12 +241,12 @@ New fields, all backward-compatible via safe defaults:
 
 ### 9.1 `report.json`
 
-- The expanded `Usage` shape (§4) is included via normal model serialization — no bespoke serialization logic for the new fields. Existing serialization mechanisms already used for `Usage` are extended, not replaced.
+- The expanded `Usage` shape (§4) is included via normal model serialization — no bespoke serialization logic for the new fields. Existing serialization mechanisms already used for `Usage` are extended, not replaced. This intentionally supersedes Batch #32's artifact byte-identity expectation for `report.json`; the behavioral qualification result remains compatible per Invariant B11. Existing payload content such as `events_jsonl` is otherwise unchanged.
 
 ### 9.2 `qualification.json`
 
-- Explicitly records `max_attempts`, `max_tokens`, `attempts_used`, and `observed_tokens` as top-level (or clearly-scoped) fields in the persisted qualification artifact.
-- **Invariant A1 (old-artifact tolerance):** Older `qualification.json` artifacts written before this batch do not have these fields. Readers MUST tolerate their absence (treat as the same defaults given in §8) rather than requiring a migration or rewrite of historical artifacts. No artifact rewrite tooling is introduced in this batch.
+- Explicitly records `max_attempts`, `max_tokens`, `attempts_used`, and `observed_tokens` as top-level fields in the persisted qualification artifact. This intentionally supersedes Batch #32's byte-identical `qualification.json` artifact expectation; tests that pin the old exact key set must be deliberately re-baselined.
+- **Invariant A1 (writer-side forward compatibility):** No in-tree `qualification.json` reader exists in Batch #40. This batch MUST NOT invent one. Older artifacts are not rewritten. Any future reader must treat absent accounting fields as the §8 defaults, but that future-reader behavior is a contract only, not implementation scope for this batch.
 
 ### 9.3 Baseline Creation
 
@@ -268,6 +273,12 @@ When usage is unknown (`observed_tokens is None`), the line states unavailabilit
 Observed model tokens: unavailable
 ```
 
+When usage is unknown and a token threshold was active, the threshold framing remains visible:
+
+```
+Observed model tokens: unavailable (threshold 50,000; checked between complete canaries)
+```
+
 **Invariant D1:** The default output line MUST NOT include cache-read, cache-write, or reasoning-output breakdowns. Default output is intentionally low-tech; per-category detail belongs to technical output only (§9.5), to avoid cluttering the primary signal operators check first.
 
 ### 9.5 Technical Terminal / Markdown Output
@@ -276,7 +287,7 @@ Technical-mode rendering (terminal verbose mode and/or Markdown report) includes
 
 - Attempts used (`attempts_used`)
 - Observed token total, or an explicit "unavailable" marker, matching Invariant R2's all-or-nothing rule (no partial/estimated totals ever rendered as if exact)
-- Any active limits (`max_attempts`, `max_tokens`), rendered using the same "checked between complete canaries" framing as help text (Invariant B2/B3) — technical output is not exempt from the honesty requirement about what the threshold means.
+- Any active budgets. `max_tokens` MUST use the same "threshold; checked between complete canaries" framing as help text (Invariant B2/B3). `max_attempts` retains its existing attempt-count wording and MUST NOT be mislabeled as a token-style threshold.
 
 Cache/reasoning subset detail MAY appear in technical output (it is not excluded there), but is still governed by Invariant U2/U3 — subsets are always presented as detail of a total, never summed into a second total.
 
@@ -284,11 +295,12 @@ Cache/reasoning subset detail MAY appear in technical output (it is not excluded
 
 | Scenario | Behavior |
 |---|---|
-| No `max_attempts`, no `max_tokens` | Execution order, admission, and completeness unchanged from pre-#39 behavior (Invariant B10). Usage is now reported if observed (Invariant R3), which is the only visible change. |
-| `max_attempts` only | Byte-for-byte identical to Batch #32 behavior (Invariant B11). |
-| `max_tokens` only | New behavior per §7; attempt-budget admission logic is simply never engaged (its check trivially passes since no attempt limit is set). |
-| Both set | Attempt-budget admission evaluated first, then token-budget admission, at every canary boundary (Invariant B12). |
-| Old `qualification.json` read by new code | Missing new fields treated as defaults (Invariant A1). |
+| No `max_attempts`, no `max_tokens` | Execution order, admission, verdict, and completeness unchanged from pre-#32 behavior (Invariant B10). Usage/accounting is now reported if observed, so artifacts and terminal output intentionally gain fields/lines. |
+| `max_attempts` only, constraining | Batch #32 admission decisions, critical-first execution, `run_order`, returned execution ordering, verdicts, and completeness are preserved. Artifacts intentionally gain Batch #40 accounting fields. |
+| `max_attempts` only, unconstraining | Existing configuration execution order is preserved exactly, including when `max_attempts == full_suite_attempts` or is larger. |
+| `max_tokens` only | New behavior per §7; critical-first execution applies because token cost cannot be known before running. `run_order` may therefore differ from an unbudgeted run, while returned executions remain in configuration order. |
+| Both set | Attempt-budget admission evaluated first before every canary; token admission is second and begins only after the first completed canary (Invariant B12). |
+| Historical `qualification.json` | No in-tree reader exists and none is added. Future readers are contractually required to default absent accounting fields per Invariant A1. |
 | New `qualification.json` read by old code | Out of scope — no backward-reader compatibility for old code reading new artifacts is claimed or required. |
 
 ## 11. Test Plan
@@ -296,26 +308,27 @@ Cache/reasoning subset detail MAY appear in technical output (it is not excluded
 All items below must be pinned as explicit, named test cases (not merely covered incidentally):
 
 1. **Provider total pinning, no double-counting:**
-   - Codex: total reflects already-inclusive provider figure; cache/cache-write/reasoning subsets never added to it.
+   - Codex: normalized `input_tokens` reflects the already-inclusive provider input figure; canonical `total_tokens` is `input_tokens + output_tokens`, with cache/cache-write/reasoning subsets never added again.
    - Claude: total is exactly `input + cache_read + cache_creation`; a test must assert that a nonzero `cache_creation_input_tokens` is reflected in the total exactly once.
-   - Antigravity: total is exactly the reported figure; `cache_write_input_tokens` is pinned to `0`, not absent/`None`.
+   - Antigravity: normalized input/output are the reported component figures and canonical `total_tokens` is their sum; provider `total_tokens` never drives or cross-checks the canonical total. `cache_write_input_tokens` is pinned to `0`, not absent/`None`.
    - Cross-cutting: a test asserting `total_tokens == input_tokens + output_tokens` for representative fixtures from all three providers, with nonzero cache/reasoning subsets present, to catch any accidental re-addition.
 2. **Claude cache-read + cache-creation normalization**, including the default-`0` compatibility path for `cache_creation_input_tokens` absence.
+   - The locked 2.1.260 golden transcript is intentionally re-pinned to `input_tokens=18202`, `cached_input_tokens=9035`, `cache_write_input_tokens=9163`, and `output_tokens=74`.
 3. **Unknown usage is never treated as real zero:** a fixture where a provider fails to report usage must produce `observed=False`, and a budget-admission test must confirm the executor treats this as fail-closed (stops), not as "0 tokens consumed, continue."
 4. **No partial canary:** a test that sets `max_tokens` below the cost of the very first canary and asserts the *entire* first canary (all its configured attempts) still completes, with a normal verdict, before the executor stops.
 5. **Threshold below first-canary cost still lets it finish, then stops:** explicit assertion that the run stops immediately after the first canary (does not attempt a second) once cumulative usage is known to meet/exceed the threshold.
 6. **Exact-reach and overshoot both stop before the next canary:** a case where cumulative usage lands exactly on `max_tokens`, and a separate case where it overshoots it, both must stop admission for the next canary identically.
 7. **Skipped canary implies `INCOMPLETE`:** for both `max_attempts`-caused and `max_tokens`-caused skips, and for the "unknown usage" fail-closed skip.
 8. **Invalid-attempt usage still counts if observed:** an attempt that fails/errors but has `observed=True` usage contributes to `observed_tokens` and to budget admission.
-9. **`max_attempts`-only regression suite unchanged:** the full existing Batch #32 test suite for `max_attempts` alone must pass unmodified, proving Invariant B11.
+9. **`max_attempts` behavioral regression:** existing Batch #32 admission/order/verdict tests must remain semantically unchanged, including unconstraining `max_attempts` values preserving configuration order. Artifact-shape assertions that pin the old exact `qualification.json` key set or old `report.json` `Usage` shape are deliberately updated for the four new result fields and expanded usage model; this is an explicit re-baseline, not an accidental regression.
 10. **Combination ordering:** a test with both budgets active, arranged so that if token-check ran first it would produce a different stop point than attempt-check-first — asserting attempt-budget-first ordering (Invariant B12) is actually observed, not just documented.
 11. **No-budget behavior unchanged except usage reporting:** a snapshot/characterization test on an unbudgeted run's ordering, completeness, and verdict, confirming only `observed_tokens`/`attempts_used` reporting is newly populated.
 12. **CLI validation:** `--max-tokens 0` and `--max-tokens -5` both produce `CommandError`/exit code 3; `--max-tokens` help text includes the "checked between complete canaries" framing verbatim in spirit.
-13. **Artifact metadata:** `qualification.json` round-trip includes the four new fields; a fixture representing an *old* artifact (missing the fields) still loads with correct defaults (Invariant A1).
-14. **All three parser suites** updated/extended for the new `Usage` shape (Codex, Claude, Antigravity), including negative-value defense (Invariant U1) and no-leakage checks on summary metadata (Invariant E2).
+13. **Artifact metadata writer:** `qualification.json` contains the four new top-level fields with exact values, including the zero-attempt case (`attempts_used=0`, `observed_tokens=0`). Update the existing exact key-set assertion in `tests/unit/test_commands.py`; do not add an artifact reader or an old-artifact loading test.
+14. **All three parser suites** updated/extended for the new `Usage` shape: Codex whole-attempt `observed=False` on malformed required totals without raising; Claude negative terminal counters raise `ClaudeEvidenceError`; Antigravity keeps its existing strict non-negative checks without component-sum validation; all three pin no-double-counting and no new usage-summary leakage.
 15. **Backend / host-backend tests** confirming propagation from evidence to qualification `Usage` performs no additional arithmetic (parsers own normalization exclusively).
 16. **Budget-specific executor test module** covering all state-machine branches in §7.5.
-17. **Command / CLI / report / storage integration tests** covering the default low-tech line (§9.4, all three variants: plain, threshold-annotated, unavailable) and technical output (§9.5).
+17. **Command / CLI / report / storage integration tests** covering all four low-tech lines in §9.4 (known/plain, known+threshold, unavailable/plain, unavailable+threshold), technical output (§9.5), and direct/CLI nonpositive `max_tokens` validation.
 
 ## 12. Review Gates (Required Before Roadmap Update)
 
@@ -325,7 +338,8 @@ All of the following must pass before this feature may be marked delivered in `R
 - Ruff clean.
 - Strict mypy clean.
 - `compileall` clean.
-- Exact-head diff check (`git diff --check`) clean — no whitespace/conflict-marker artifacts.
+- Exact-head verification: record and review the committed HEAD SHA that all final local gates ran against.
+- `git diff --check` clean on that exact HEAD — no whitespace errors or conflict markers.
 - Protected-scope proof: an explicit diff-scope check demonstrating no changes landed under §3.1's protected paths unless justified and called out individually in the PR description.
 - Windows CI green (this repo has prior history of Windows-specific credential/path issues per recent commits; token-budget CLI/help text and integer parsing must be verified cross-platform).
 - No authenticated agent qualification run is required to validate this batch — all provider-parsing behavior is testable via fixtures/unit tests without live credentials, consistent with this being a design-and-implementation batch, not a live-agent validation batch.
@@ -356,7 +370,7 @@ This document does not itself edit `ROADMAP.md`; that edit happens only as part 
 - **Contradiction check:** the two budgets (`max_attempts`, `max_tokens`) are defined with a single, non-overlapping admission order (attempt-first, then token) at every decision point in this document (§7.3, §7.8, Invariant B12), with no alternate ordering asserted elsewhere.
 - **Ambiguity check:** "checked between complete canaries" is defined precisely as a state-machine (§7.5) rather than left as prose alone, specifically to prevent divergent interpretations by implementers (e.g., "does mid-canary partial usage count?" — no, per Invariant B1/B2).
 - **Scope-creep check:** every capability introduced (normalized `Usage`, `max_tokens`, `attempts_used`/`observed_tokens`) is scoped strictly to local qualock check and its supporting layers (evidence, parsers, executor, CLI, artifacts). No change is proposed to baseline/config/canary schema, policy pass/fail logic, or any protected surface in §3.1. Monetary/historical features are explicitly deferred rather than partially implemented.
-- **Compatibility check:** every new field has a documented safe default (§8, §9.2 Invariant A1) and every "only when X" behavior (e.g., `max_attempts`-only) is pinned as its own regression-test obligation (§11 item 9) rather than assumed.
+- **Compatibility check:** every new field has a documented safe default (§8); the absence contract for historical artifacts is forward-looking only because no in-tree reader exists (§9.2 Invariant A1); and `max_attempts` behavioral compatibility is pinned by explicit regression obligations (§11 item 9) rather than by impossible artifact byte-identity claims.
 - **Honesty-of-framing check:** all user-facing language templates in this document (§7.2, §9.4) avoid "cap," "limit enforced," or "will not exceed" phrasing, consistent with Invariant B3.
 
 No unresolved concerns remain for implementation to begin against this spec.
