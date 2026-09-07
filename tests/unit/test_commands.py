@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from qualock.agents.antigravity import AntigravityAdapter
 from qualock.agents.antigravity_resolver import AntigravityResolver
 from qualock.agents.base import AgentBinary
 from qualock.baseline.io import read_baseline_lock, write_baseline_lock
+from qualock.canary.loader import CanaryLoadError
 from qualock.commands import (
     BaselineUnstableError,
     CommandError,
@@ -17,9 +19,11 @@ from qualock.commands import (
     agent_display_name,
     execute_baseline,
     execute_check,
+    execute_history,
     parse_agent_spec,
 )
-from qualock.config.io import write_default_config
+from qualock.config.io import ConfigError, write_default_config
+from qualock.history.models import HistoryAnalysis, HistorySummary, SuiteEstimate
 from qualock.project import load_project
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.host import LinuxHostRunner
@@ -481,3 +485,55 @@ def test_check_baseline_agent_must_match_candidate_before_resolution(tmp_path: P
         )
 
     assert resolver.calls == []
+
+
+def test_execute_history_uses_current_canaries_in_config_order(tmp_path: Path, monkeypatch) -> None:
+    setup_project(tmp_path)
+    seen: dict[str, object] = {}
+    summary = HistorySummary(loaded=(), ignored=())
+    expected = HistoryAnalysis(
+        loaded_reports=0, ignored_reports=(), ranked=(), not_enough_history=(),
+        per_canary_estimates=(), suite_estimate=SuiteEstimate(None, None, (), ()),
+    )
+
+    def fake_scan(path: Path) -> HistorySummary:
+        seen["path"] = path
+        return summary
+
+    def fake_analyze(value: HistorySummary, ids: Sequence[str]) -> HistoryAnalysis:
+        seen["summary"] = value
+        seen["ids"] = tuple(ids)
+        return expected
+
+    monkeypatch.setattr(commands_module, "scan_results", fake_scan)
+    monkeypatch.setattr(commands_module, "analyze_history", fake_analyze)
+    assert execute_history(tmp_path) is expected
+    assert seen["path"] == tmp_path.resolve() / ".qualock/results"
+    assert seen["summary"] is summary
+    assert seen["ids"] == ("sample",)
+
+
+def test_execute_history_rejects_empty_canary_suite(tmp_path: Path) -> None:
+    ub = tmp_path / ".qualock"
+    (ub / "canaries").mkdir(parents=True)
+    (ub / "results").mkdir()
+    write_default_config(ub / "config.yaml")
+
+    with pytest.raises(CommandError, match="no canaries found"):
+        execute_history(tmp_path)
+
+
+def test_execute_history_does_not_wrap_config_load_failure(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError):
+        execute_history(tmp_path)
+
+
+def test_execute_history_does_not_wrap_canary_load_failure(tmp_path: Path) -> None:
+    ub = tmp_path / ".qualock"
+    (ub / "canaries").mkdir(parents=True)
+    (ub / "results").mkdir()
+    write_default_config(ub / "config.yaml")
+    (ub / "canaries/broken.yaml").write_text("not: valid: canary", encoding="utf-8")
+
+    with pytest.raises(CanaryLoadError):
+        execute_history(tmp_path)
