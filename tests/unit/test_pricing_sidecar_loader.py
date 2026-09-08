@@ -330,6 +330,22 @@ def test_priced_and_unavailable_nullability_are_mutually_exclusive(tmp_path: Pat
     )
 
 
+def test_unavailable_sidecar_requires_null_effective_interval(tmp_path: Path) -> None:
+    for field, bad_value in (
+        ("effective_from", "2026-09-07"),
+        ("effective_until", "2026-09-07"),
+    ):
+        report = loaded_report(tmp_path, "q-1", name=f"dir-{field}")
+        payload = unavailable_payload("q-1")
+        payload[field] = bad_value
+        write_pricing(report.qualification_dir, payload)
+        summary = HistorySummary(loaded=(report,), ignored=())
+
+        assert scan_pricing(summary).failures == (
+            PricingLoadFailure("q-1", report.qualification_dir, "malformed pricing sidecar"),
+        )
+
+
 def test_catalog_version_must_be_nonempty_string(tmp_path: Path) -> None:
     for bad_value in ("", 7, None):
         report = loaded_report(tmp_path, "q-1", name=f"dir-{bad_value}")
