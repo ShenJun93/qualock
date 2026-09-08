@@ -50,47 +50,55 @@ _SCRUBBED_ENV_VARS = (
 )
 
 
-# Shell-interception source-contract proof: anchored to the exact three
-# named units of the reviewed 0.58.0 shell-interception chain rather than a
-# generic same-function heuristic:
-#   1. getShellConfiguration selects bare, non-absolute 'bash' on Linux, and
-#      never '/bin/bash' -- checked strictly inside the Linux-specific
-#      branch's own bounded scope, not merely somewhere in the function.
-#   2. prepareExecution obtains that value from a call to
-#      getShellConfiguration(...) and forwards the *same, unmodified* value
-#      into a call to resolveExecutable(...). For the assignment form
-#      (`const x = getShellConfiguration(); ...; resolveExecutable(x)`),
-#      both the declaration and the forward call must be top-level
-#      statements of prepareExecution's own body (not inside a nested
-#      block/function, which could shadow the identifier with an unrelated
-#      binding), and no write to that identifier -- reassignment,
-#      redeclaration, or a compound/increment/decrement operator -- may
-#      occur between them; otherwise the value actually forwarded is no
-#      longer provably the value getShellConfiguration returned.
-#   3. resolveExecutable's own bounded body performs non-absolute executable
-#      resolution by referencing process.env.PATH.
-# Mere token co-occurrence -- anywhere in a function, or a bare 'bash'
-# literal outside the actual Linux branch -- is not accepted as proof.
-# Failing to find all three named units wired together this way fails
-# closed. Class/static method shorthand is accepted for each named unit;
-# no AST parser is used.
+# Shell-interception source-contract proof. Three earlier generic
+# mutable-variable dataflow heuristics were each bypassed by a differently
+# shaped write sitting between obtaining and forwarding the executable, so
+# this validator no longer attempts to reason about arbitrary dataflow. It
+# certifies the one concrete, historically reviewed Gemini shell-interception
+# source chain, and fails closed on any structural drift from it:
+#
+#   1. `getShellConfiguration` returns a shell configuration object whose
+#      non-Windows `executable` is the bare, PATH-resolvable "bash" -- never
+#      the absolute "/bin/bash" -- with the Windows configuration returned
+#      from its own separate branch.
+#   2. `prepareShellExecution` destructures `executable` directly out of a
+#      `getShellConfiguration()` call, and the very next
+#      executable-affecting statement forms
+#      `resolveExecutable(executable) ?? executable`. Only whitespace and
+#      comments may separate the two statements, so no mutation, rebinding,
+#      shadowing, or control flow of any shape -- however written -- can come
+#      between them.
+#   3. `resolveExecutable` handles absolute executables in their own branch
+#      and resolves everything else by searching `process.env.PATH` (or
+#      `process.env["PATH"]`).
+#
+# Formatting, indentation, and quote style are free; structure is not.
+# Generic token co-occurrence, a generically named `prepareExecution` unit,
+# and any non-destructuring obtain all fail closed. No AST parser and no new
+# dependency is used.
 _GET_SHELL_CONFIGURATION = "getShellConfiguration"
-_PREPARE_EXECUTION = "prepareExecution"
+_PREPARE_SHELL_EXECUTION = "prepareShellExecution"
 _RESOLVE_EXECUTABLE = "resolveExecutable"
-
-_LINUX_IF_RE = re.compile(r"if\s*\(\s*platform\(\)\s*===?\s*['\"]linux['\"]\s*\)\s*\{")
-_ABSOLUTE_BASH_RE = re.compile(r"""['"]/bin/bash['"]""")
-_BASH_LITERAL_RE = re.compile(r"['\"]bash['\"]")
-_PATH_LOOKUP_RE = re.compile(r"process\.env\.PATH")
 
 _UNIT_PATTERN_TEMPLATE = r"(?:function\s+|static\s+)?(?<![\w.$]){name}\s*\([^)]*\)\s*\{{"
 
-# Any write to a tracked identifier between obtaining and forwarding it:
-# plain/compound assignment (=, +=, -=, *=, /=, %=, **=, &&=, ||=, ??=) or
-# increment/decrement (++, --). Deliberately does not attempt to reason
-# about whether a given write preserves the original value -- any write at
-# all invalidates the forwarding proof.
-_WRITE_OPERATOR_RE = r"(?:\*\*|[-+*/%]|&&|\|\||\?\?)?=(?!=)|\+\+|--"
+# A configuration object's `executable:` key bound to a string literal.
+_EXECUTABLE_LITERAL_RE = re.compile(r"(?<![\w$.])executable\s*:\s*(['\"])([^'\"]*)\1")
+# The `executable` binding introduced by an object destructuring pattern,
+# optionally renamed (`executable: exe`).
+_EXECUTABLE_PROPERTY_RE = re.compile(
+    r"(?<![\w$])executable(?:\s*:\s*(?P<alias>[\w$]+))?\s*(?=,|$)"
+)
+_RETURN_OBJECT_RE = re.compile(r"\breturn\s*\(?\s*\{")
+_WINDOWS_CONDITION_RE = re.compile(r"isWindows[A-Za-z]*\s*\(|['\"]win32['\"]")
+_ABSOLUTE_CONDITION_RE = re.compile(r"(?<![\w$])isAbsolute\s*\(")
+_PATH_LOOKUP_RE = re.compile(
+    r"process\s*\.\s*env\s*(?:\.\s*PATH(?![\w$])|\[\s*(['\"])PATH\1\s*\])"
+)
+_DESTRUCTURE_RE = re.compile(
+    r"(?:const|let|var)\s*\{(?P<properties>[^{}]*)\}\s*=\s*"
+    rf"(?:[\w$]+\s*\.\s*)?{_GET_SHELL_CONFIGURATION}\s*\(\s*\)\s*;"
+)
 
 
 def _match_brace_scope(text: str, open_index: int) -> str | None:
@@ -117,6 +125,30 @@ def _match_brace_scope(text: str, open_index: int) -> str | None:
     return None
 
 
+def _match_paren_scope(text: str, open_index: int) -> str | None:
+    depth = 0
+    in_string: str | None = None
+    index = open_index
+    while index < len(text):
+        char = text[index]
+        if in_string is not None:
+            if char == "\\":
+                index += 2
+                continue
+            if char == in_string:
+                in_string = None
+        elif char in ("'", '"', "`"):
+            in_string = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_index : index + 1]
+        index += 1
+    return None
+
+
 def _find_unit_bodies(text: str, name: str) -> list[str]:
     pattern = re.compile(_UNIT_PATTERN_TEMPLATE.format(name=re.escape(name)))
     bodies: list[str] = []
@@ -128,137 +160,125 @@ def _find_unit_bodies(text: str, name: str) -> list[str]:
     return bodies
 
 
-def _mask_nested_scopes(body: str) -> str:
-    # Blanks out everything inside nested brace scopes (if/else/try/nested
-    # function/object-literal bodies, etc.) so only the statements at the
-    # unit's own top level remain visible to the caller. A write or a
-    # forward call hidden inside a nested block could rebind or shadow the
-    # tracked identifier with an unrelated binding, so it must not count as
-    # dataflow proof. String-literal aware, like `_match_brace_scope`, so
-    # braces inside quotes don't desync the depth count.
-    result = list(body)
-    depth = 0
-    in_string: str | None = None
+def _conditional_branch(body: str, condition_pattern: re.Pattern[str]) -> str | None:
+    # The braced consequent of the first `if` whose condition matches
+    # `condition_pattern`. A braceless consequent is not recognised, so a
+    # bundle that writes one fails closed rather than being certified from a
+    # branch this scanner cannot bound.
+    for match in re.finditer(r"\bif\s*\(", body):
+        open_paren = match.end() - 1
+        condition = _match_paren_scope(body, open_paren)
+        if condition is None or not condition_pattern.search(condition):
+            continue
+        tail = body[open_paren + len(condition) :]
+        stripped = tail.lstrip()
+        if not stripped.startswith("{"):
+            continue
+        return _match_brace_scope(body, len(body) - len(stripped))
+    return None
+
+
+def _blank_out(body: str, fragment: str) -> str:
+    # Replaces one bounded fragment with spaces (newlines preserved) so the
+    # remaining text can be searched as "everything outside that branch".
+    index = body.find(fragment)
+    if index == -1:
+        return body
+    blanked = "".join("\n" if char == "\n" else " " for char in fragment)
+    return body[:index] + blanked + body[index + len(fragment) :]
+
+
+def _strip_leading_trivia(text: str) -> str:
     index = 0
-    length = len(body)
+    length = len(text)
     while index < length:
-        char = body[index]
-        if in_string is not None:
-            if char == "\\":
-                if depth > 1:
-                    result[index] = " "
-                    if index + 1 < length:
-                        result[index + 1] = " "
-                index += 2
-                continue
-            if depth > 1:
-                result[index] = " "
-            if char == in_string:
-                in_string = None
+        char = text[index]
+        if char.isspace():
             index += 1
             continue
-        if char in ("'", '"', "`"):
-            in_string = char
-            if depth > 1:
-                result[index] = " "
-            index += 1
+        if text.startswith("//", index):
+            end = text.find("\n", index)
+            index = length if end == -1 else end + 1
             continue
-        if char == "{":
-            depth += 1
-            if depth > 1:
-                result[index] = " "
-            index += 1
+        if text.startswith("/*", index):
+            end = text.find("*/", index)
+            if end == -1:
+                return ""
+            index = end + 2
             continue
-        if char == "}":
-            if depth > 1:
-                result[index] = " "
-            depth -= 1
-            index += 1
+        break
+    return text[index:]
+
+
+def _configuration_executables(scope: str) -> list[str]:
+    values: list[str] = []
+    for match in _RETURN_OBJECT_RE.finditer(scope):
+        returned_object = _match_brace_scope(scope, match.end() - 1)
+        if returned_object is None:
             continue
-        if depth > 1 and char != "\n":
-            result[index] = " "
-        index += 1
-    return "".join(result)
-
-
-def _linux_branch(get_shell_configuration_body: str) -> str | None:
-    match = _LINUX_IF_RE.search(get_shell_configuration_body)
-    if match is None:
-        return None
-    return _match_brace_scope(get_shell_configuration_body, match.end() - 1)
-
-
-def _selects_bare_bash_for_linux(get_shell_configuration_body: str) -> bool:
-    branch = _linux_branch(get_shell_configuration_body)
-    if branch is None:
-        return False
-    # A branch that selects the absolute '/bin/bash' path never proves the
-    # PATH-resolved contract, even if a bare 'bash' literal also appears
-    # elsewhere in the same branch (e.g. unused fallback code) — presence of
-    # the absolute literal fails this link closed.
-    if _ABSOLUTE_BASH_RE.search(branch):
-        return False
-    return bool(_BASH_LITERAL_RE.search(branch))
-
-
-def _obtains_and_forwards_executable(prepare_execution_body: str) -> bool:
-    # Direct nested call: resolveExecutable(getShellConfiguration()). No
-    # intervening variable exists to be rewritten between "obtained" and
-    # "forwarded", so this form is accepted wherever it appears in the body.
-    nested = re.search(
-        rf"{_RESOLVE_EXECUTABLE}\s*\(\s*(?:[\w$]+\.)?{_GET_SHELL_CONFIGURATION}\s*\([^)]*\)\s*\)",
-        prepare_execution_body,
-    )
-    if nested is not None:
-        return True
-
-    # Assignment form: `const executable = getShellConfiguration();` then
-    # later `resolveExecutable(executable)`. Both statements must be at the
-    # unit's own top level (nested content is blanked out first, so a
-    # declaration or forward call hidden in a nested block/function cannot
-    # satisfy this), and the bounded text between the declaration and the
-    # forward call must contain no write to that identifier -- otherwise the
-    # value actually forwarded is no longer provably the value
-    # getShellConfiguration returned.
-    top_level = _mask_nested_scopes(prepare_execution_body)
-    for assign in re.finditer(
-        rf"(?:const|let|var)\s+(\w+)\s*=\s*(?:[\w$]+\.)?{_GET_SHELL_CONFIGURATION}\s*\([^)]*\)",
-        top_level,
-    ):
-        variable = re.escape(assign.group(1))
-        remainder = top_level[assign.end() :]
-        forward = re.search(rf"{_RESOLVE_EXECUTABLE}\s*\(\s*{variable}\s*[,)]", remainder)
-        if forward is None:
-            continue
-        between = remainder[: forward.start()]
-        write_pattern = (
-            rf"(?:const|let|var)\s+{variable}\b|\b{variable}\b\s*(?:{_WRITE_OPERATOR_RE})"
+        values.extend(
+            literal.group(2)
+            for literal in _EXECUTABLE_LITERAL_RE.finditer(returned_object)
         )
-        if re.search(write_pattern, between):
+    return values
+
+
+def _returns_bare_bash_outside_windows(get_shell_configuration_body: str) -> bool:
+    windows_branch = _conditional_branch(get_shell_configuration_body, _WINDOWS_CONDITION_RE)
+    if windows_branch is None or not _EXECUTABLE_LITERAL_RE.search(windows_branch):
+        return False
+    non_windows = _blank_out(get_shell_configuration_body, windows_branch)
+    executables = _configuration_executables(non_windows)
+    # Every non-Windows configuration object must select the bare 'bash';
+    # a single absolute (or otherwise different) selection fails this link
+    # closed rather than being outvoted by a sibling bare literal.
+    return bool(executables) and all(value == "bash" for value in executables)
+
+
+def _resolve_statement_pattern(name: str) -> re.Pattern[str]:
+    identifier = re.escape(name)
+    return re.compile(
+        r"(?:const|let|var)\s+[\w$]+\s*=\s*"
+        rf"(?:[\w$]+\s*\.\s*)?{_RESOLVE_EXECUTABLE}\s*\(\s*{identifier}\s*\)"
+        rf"\s*\?\?\s*{identifier}\s*(?:;|$)"
+    )
+
+
+def _destructures_then_resolves_executable(prepare_shell_execution_body: str) -> bool:
+    for destructure in _DESTRUCTURE_RE.finditer(prepare_shell_execution_body):
+        bound = _EXECUTABLE_PROPERTY_RE.search(destructure.group("properties"))
+        if bound is None:
             continue
-        return True
+        name = bound.group("alias") or "executable"
+        following = _strip_leading_trivia(prepare_shell_execution_body[destructure.end() :])
+        if _resolve_statement_pattern(name).match(following) is not None:
+            return True
     return False
 
 
-def _searches_path_for_executable(resolve_executable_body: str) -> bool:
-    return bool(_PATH_LOOKUP_RE.search(resolve_executable_body))
+def _resolves_absolute_separately_and_searches_path(resolve_executable_body: str) -> bool:
+    absolute_branch = _conditional_branch(resolve_executable_body, _ABSOLUTE_CONDITION_RE)
+    if absolute_branch is None:
+        return False
+    non_absolute = _blank_out(resolve_executable_body, absolute_branch)
+    return bool(_PATH_LOOKUP_RE.search(non_absolute))
 
 
 def _proves_shell_interception_chain(text: str) -> bool:
     link1 = any(
-        _selects_bare_bash_for_linux(body)
+        _returns_bare_bash_outside_windows(body)
         for body in _find_unit_bodies(text, _GET_SHELL_CONFIGURATION)
     )
     if not link1:
         return False
     link2 = any(
-        _obtains_and_forwards_executable(body)
-        for body in _find_unit_bodies(text, _PREPARE_EXECUTION)
+        _destructures_then_resolves_executable(body)
+        for body in _find_unit_bodies(text, _PREPARE_SHELL_EXECUTION)
     )
     if not link2:
         return False
     return any(
-        _searches_path_for_executable(body)
+        _resolves_absolute_separately_and_searches_path(body)
         for body in _find_unit_bodies(text, _RESOLVE_EXECUTABLE)
     )
 
