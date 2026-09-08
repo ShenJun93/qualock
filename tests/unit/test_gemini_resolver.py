@@ -47,8 +47,12 @@ def _shell_contract_source(mutate: str | None = None) -> str:
     resolve_fallback = "executable"
     path_lookup = 'process.env.PATH || process.env["PATH"]'
     prepare_name = "prepareShellExecution"
+    prepare_prelude = ""
     obtain = "  let { executable, argsPrefix, shell } = getShellConfiguration();\n"
     between = ""
+    return_statement = (
+        "  return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
+    )
     absolute_branch = (
         "  if (path.isAbsolute(exe)) {\n"
         "    return isExecutable(exe) ? exe : void 0;\n"
@@ -102,6 +106,33 @@ def _shell_contract_source(mutate: str | None = None) -> str:
         between = "  if (isDebugShell()) {\n" '    executable = "/bin/bash";\n' "  }\n"
     elif mutate == "unrelated_statement_between":
         between = "  const attemptCount = 0;\n"
+    elif mutate == "hardcoded_resolved_executable_return":
+        return_statement = (
+            '  return { resolvedExecutable: "/bin/bash", argsPrefix: [], shell: "bash",'
+            " commandToExecute };\n"
+        )
+    elif mutate == "other_resolved_executable_return":
+        prepare_prelude = '  const forcedExecutable = "/bin/bash";\n'
+        return_statement = (
+            "  return { resolvedExecutable: forcedExecutable, argsPrefix, shell,"
+            " commandToExecute };\n"
+        )
+    elif mutate == "nested_resolved_executable_return_decoy":
+        return_statement = (
+            '  return { resolvedExecutable: "/bin/bash", metadata: { resolvedExecutable },'
+            " argsPrefix, shell, commandToExecute };\n"
+        )
+    elif mutate == "dead_resolved_executable_return_decoy":
+        return_statement = (
+            '  return { resolvedExecutable: "/bin/bash", argsPrefix, shell,'
+            " commandToExecute };\n"
+            "  return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
+        )
+    elif mutate == "explicit_resolved_executable_return":
+        return_statement = (
+            "  return { resolvedExecutable: resolvedExecutable, argsPrefix, shell,"
+            " commandToExecute };\n"
+        )
     elif mutate is not None:
         raise ValueError(f"unknown shell contract mutation: {mutate!r}")
 
@@ -136,10 +167,11 @@ def _shell_contract_source(mutate: str | None = None) -> str:
         "}\n"
         "\n"
         f"function {prepare_name}(commandToExecute) {{\n"
+        f"{prepare_prelude}"
         f"{obtain}"
         f"{between}"
         f"  const resolvedExecutable = {resolve_call} ?? {resolve_fallback};\n"
-        "  return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
+        f"{return_statement}"
         "}\n"
     )
 
@@ -867,6 +899,22 @@ def test_shell_interception_contract_missing_fails_closed(tmp_path: Path) -> Non
             "generic_prepare_execution_name",
             id="link2j-generic-prepare-execution-unit-name",
         ),
+        pytest.param(
+            "hardcoded_resolved_executable_return",
+            id="link2k-computed-resolved-executable-ignored-by-return",
+        ),
+        pytest.param(
+            "other_resolved_executable_return",
+            id="link2l-return-forwards-other-binding",
+        ),
+        pytest.param(
+            "nested_resolved_executable_return_decoy",
+            id="link2m-return-has-only-nested-computed-binding-decoy",
+        ),
+        pytest.param(
+            "dead_resolved_executable_return_decoy",
+            id="link2n-return-has-only-dead-computed-binding-decoy",
+        ),
         pytest.param("path_lookup_changed", id="link3a-path-lookup-replaced-with-fixed-list"),
         pytest.param(
             "path_lookup_only_in_absolute_branch",
@@ -948,6 +996,10 @@ def test_shell_interception_contract_rejects_uncertified_source_shapes(
     "shell_contract_js",
     [
         pytest.param(_SHELL_CONTRACT_JS, id="preserved-historical-prototype-source"),
+        pytest.param(
+            _shell_contract_source("explicit_resolved_executable_return"),
+            id="explicit-resolved-executable-property-source",
+        ),
         pytest.param(
             _SHELL_CONTRACT_FORMATTING_VARIANT_JS,
             id="formatting-and-quote-equivalent-source",

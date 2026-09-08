@@ -67,7 +67,8 @@ _SCRUBBED_ENV_VARS = (
 #      `resolveExecutable(executable) ?? executable`. Only whitespace and
 #      comments may separate the two statements, so no mutation, rebinding,
 #      shadowing, or control flow of any shape -- however written -- can come
-#      between them.
+#      between them. Its next top-level statement returns an object whose
+#      top-level `resolvedExecutable` property forwards that computed binding.
 #   3. `resolveExecutable` handles absolute executables in their own branch
 #      and resolves everything else by searching `process.env.PATH` (or
 #      `process.env["PATH"]`).
@@ -284,10 +285,31 @@ def _top_level_offsets(body: str) -> set[int]:
 def _resolve_statement_pattern(name: str) -> re.Pattern[str]:
     identifier = re.escape(name)
     return re.compile(
-        r"(?:const|let|var)\s+[\w$]+\s*=\s*"
+        r"(?:const|let|var)\s+(?P<resolved>[\w$]+)\s*=\s*"
         rf"(?:[\w$]+\s*\.\s*)?{_RESOLVE_EXECUTABLE}\s*\(\s*{identifier}\s*\)"
         rf"\s*\?\?\s*{identifier}\s*(?:;|$)"
     )
+
+
+def _return_object_forwards_binding(statement: str, binding: str) -> bool:
+    returned = _RETURN_OBJECT_RE.match(statement)
+    if returned is None:
+        return False
+    returned_object = _match_brace_scope(statement, returned.end() - 1)
+    if returned_object is None:
+        return False
+    property_pattern = re.compile(
+        r"(?<![\w$])resolvedExecutable"
+        r"(?:\s*:\s*(?P<value>[\w$]+))?\s*(?=,|})"
+    )
+    object_top_level = _top_level_offsets(returned_object)
+    for property_match in property_pattern.finditer(returned_object):
+        if property_match.start() not in object_top_level:
+            continue
+        forwarded = property_match.group("value") or "resolvedExecutable"
+        if forwarded == binding:
+            return True
+    return False
 
 
 def _destructures_then_resolves_executable(prepare_shell_execution_body: str) -> bool:
@@ -307,7 +329,20 @@ def _destructures_then_resolves_executable(prepare_shell_execution_body: str) ->
         resolve_offset = destructure.end() + len(tail) - len(following)
         if resolve_offset not in top_level:
             continue
-        if _resolve_statement_pattern(name).match(following) is not None:
+        resolve = _resolve_statement_pattern(name).match(following)
+        if resolve is None:
+            continue
+        after_resolve = following[resolve.end() :]
+        returned = _strip_leading_trivia(after_resolve)
+        return_offset = (
+            resolve_offset
+            + resolve.end()
+            + len(after_resolve)
+            - len(returned)
+        )
+        if return_offset not in top_level:
+            continue
+        if _return_object_forwards_binding(returned, resolve.group("resolved")):
             return True
     return False
 
