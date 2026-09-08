@@ -209,3 +209,38 @@ def test_runtime_section_always_notes_excluded_overhead() -> None:
     assert "setup" in section.lower()
     assert "preparation" in section.lower()
     assert "cli overhead" in section.lower()
+
+
+def test_qualock_history_public_output_is_unchanged() -> None:
+    text = render_history_text(empty_analysis())
+
+    assert text == (
+        "Loaded 0 qualification report(s).\n"
+        "Ignored 0 report(s).\n"
+        "No qualification history found yet. "
+        "Run `qualock check` to start building history.\n"
+        "\n"
+        "Estimated model-attempt runtime\n"
+        "  Suite estimate unavailable.\n"
+        "  Note: this excludes setup, preparation, and CLI overhead "
+        "(model-attempt time only).\n"
+        "\n"
+        "Estimated model tokens\n"
+        "  Suite estimate unavailable.\n"
+        "\n"
+        "Ranked current canaries\n"
+        "  (none)\n"
+        "\n"
+        "Not-enough-history current canaries\n"
+        "  (none)\n"
+    )
+
+
+def test_history_renderer_does_not_consult_pricing_package() -> None:
+    import inspect
+
+    import qualock.history.render as render_module
+
+    source = inspect.getsource(render_module)
+    assert "qualock.pricing" not in source
+    assert "pricing" not in source.lower()

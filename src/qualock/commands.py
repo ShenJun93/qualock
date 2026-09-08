@@ -29,8 +29,10 @@ from qualock.evidence.storage import write_baseline_artifacts, write_qualificati
 from qualock.history.analysis import analyze_history
 from qualock.history.loader import scan_results
 from qualock.history.models import HistoryAnalysis
+from qualock.pricing.analysis import analyze_cost
+from qualock.pricing.models import CostAnalysis
 from qualock.pricing.resolve import build_pricing_payload
-from qualock.pricing.sidecar import write_pricing_sidecar
+from qualock.pricing.sidecar import scan_pricing, write_pricing_sidecar
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
 from qualock.qualification.models import AttemptResult, QualificationResult
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
@@ -309,3 +311,19 @@ def execute_history(root: Path) -> HistoryAnalysis:
         raise CommandError("no canaries found")
     summary = scan_results(project_dir(root) / "results")
     return analyze_history(summary, [canary.id for canary in canaries])
+
+
+def execute_cost(root: Path) -> CostAnalysis:
+    config, canaries = load_project(root)
+    if not canaries:
+        raise CommandError("no canaries found")
+    summary = scan_results(project_dir(root) / "results")
+    pricing = scan_pricing(summary)
+    return analyze_cost(
+        summary,
+        pricing,
+        [canary.id for canary in canaries],
+        agent=config.agent.name,
+        configured_model=config.model.effective_model,
+        reasoning_effort=config.model.reasoning_effort,
+    )

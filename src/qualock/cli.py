@@ -19,6 +19,7 @@ from qualock.commands import (
     agent_display_name,
     execute_baseline,
     execute_check,
+    execute_cost,
     execute_history,
     parse_agent_spec,
 )
@@ -39,6 +40,7 @@ from qualock.github_pr.report import (
 from qualock.github_pr.setup import GitHubSetupConflictError, install_github_workflows
 from qualock.github_pr.source import HttpxGitHubPrSource, PrContextError
 from qualock.history.render import render_history_text
+from qualock.pricing.render import render_cost_text
 from qualock.project import load_project, project_dir
 from qualock.project_protection.commands import (
     ProjectProtectionConfigError,
@@ -773,6 +775,19 @@ def history_command() -> None:
         console.print(str(exc), markup=False)
         raise typer.Exit(1) from exc
     console.print(render_history_text(analysis), end="", markup=False)
+
+
+@app.command("cost")
+def cost_command() -> None:
+    try:
+        analysis = execute_cost(Path.cwd())
+    except (ConfigError, CanaryLoadError, CommandError, ValueError) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception as exc:
+        console.print("unable to analyze reference cost", markup=False)
+        raise typer.Exit(1) from exc
+    console.print(render_cost_text(analysis), end="", markup=False)
 
 
 def _required_env(name: str) -> str:
