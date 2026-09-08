@@ -351,6 +351,24 @@ def test_prepare_copies_digest_pinned_runtime_overlay(tmp_path: Path, monkeypatc
     assert "COPY --from=qualock-overlay-0 /usr/local /opt/qualock/node-runtime" in text
     assert "RUN /opt/qualock/node-runtime/bin/node --version" in text
 
+    lines = text.splitlines()
+    overlay_from_index = next(
+        i for i, line in enumerate(lines) if line.startswith("FROM node:22.23.2-bookworm")
+    )
+    canary_from_index = next(
+        i for i, line in enumerate(lines) if line == f"FROM {spec.runtime.image}"
+    )
+    copy_workspace_index = lines.index("COPY . /workspace")
+    overlay_copy_index = lines.index(
+        "COPY --from=qualock-overlay-0 /usr/local /opt/qualock/node-runtime"
+    )
+    dependency_install_index = next(
+        i for i, line in enumerate(lines) if line.startswith("RUN if ")
+    )
+
+    assert overlay_from_index < canary_from_index
+    assert copy_workspace_index < overlay_copy_index < dependency_install_index
+
 
 def test_prepare_rejects_floating_runtime_overlay_image(tmp_path: Path, monkeypatch) -> None:
     source, spec = _sample_canary(tmp_path)
