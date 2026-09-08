@@ -235,6 +235,52 @@ def _returns_bare_bash_outside_windows(get_shell_configuration_body: str) -> boo
     return bool(executables) and all(value == "bash" for value in executables)
 
 
+def _top_level_offsets(body: str) -> set[int]:
+    # Offsets of `body` (a unit body including its own outer braces) that sit
+    # directly in the unit's own top-level statement flow, i.e. at brace depth
+    # 1: not inside a nested block, a dead `if (false) {...}` branch, or a
+    # nested (possibly never-called) function declaration. Strings and
+    # comments are skipped so their braces cannot shift the depth; an
+    # unterminated string or comment ends the scan, which drops the remaining
+    # offsets and therefore fails closed.
+    offsets: set[int] = set()
+    depth = 0
+    in_string: str | None = None
+    index = 0
+    length = len(body)
+    while index < length:
+        char = body[index]
+        if in_string is not None:
+            if char == "\\":
+                index += 2
+                continue
+            if char == in_string:
+                in_string = None
+            index += 1
+            continue
+        if body.startswith("//", index):
+            end = body.find("\n", index)
+            index = length if end == -1 else end + 1
+            continue
+        if body.startswith("/*", index):
+            end = body.find("*/", index)
+            if end == -1:
+                break
+            index = end + 2
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+        else:
+            if depth == 1:
+                offsets.add(index)
+            if char in ("'", '"', "`"):
+                in_string = char
+        index += 1
+    return offsets
+
+
 def _resolve_statement_pattern(name: str) -> re.Pattern[str]:
     identifier = re.escape(name)
     return re.compile(
@@ -245,12 +291,22 @@ def _resolve_statement_pattern(name: str) -> re.Pattern[str]:
 
 
 def _destructures_then_resolves_executable(prepare_shell_execution_body: str) -> bool:
+    # Both statements of the certified pair must belong to the unit's own
+    # top-level statement flow. A pair found only inside a nested block, a
+    # dead `if (false)` branch, or a never-called nested function proves
+    # nothing about what the unit actually forwards, so it must not certify
+    # link 2 while the live flow selects some other executable.
+    top_level = _top_level_offsets(prepare_shell_execution_body)
     for destructure in _DESTRUCTURE_RE.finditer(prepare_shell_execution_body):
         bound = _EXECUTABLE_PROPERTY_RE.search(destructure.group("properties"))
-        if bound is None:
+        if bound is None or destructure.start() not in top_level:
             continue
         name = bound.group("alias") or "executable"
-        following = _strip_leading_trivia(prepare_shell_execution_body[destructure.end() :])
+        tail = prepare_shell_execution_body[destructure.end() :]
+        following = _strip_leading_trivia(tail)
+        resolve_offset = destructure.end() + len(tail) - len(following)
+        if resolve_offset not in top_level:
+            continue
         if _resolve_statement_pattern(name).match(following) is not None:
             return True
     return False
