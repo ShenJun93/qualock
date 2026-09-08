@@ -50,6 +50,7 @@ def _shell_contract_source(mutate: str | None = None) -> str:
     prepare_prelude = ""
     obtain = "  let { executable, argsPrefix, shell } = getShellConfiguration();\n"
     between = ""
+    resolve_terminator = ";\n"
     return_statement = (
         "  return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
     )
@@ -128,6 +129,32 @@ def _shell_contract_source(mutate: str | None = None) -> str:
             " commandToExecute };\n"
             "  return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
         )
+    elif mutate == "live_return_before_dead_certified_sequence":
+        prepare_prelude = (
+            '  return { resolvedExecutable: "/bin/bash", argsPrefix: [], shell: "bash",'
+            " commandToExecute };\n"
+        )
+    elif mutate == "spread_binding_is_not_property":
+        return_statement = (
+            "  return { ...resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
+        )
+    elif mutate == "duplicate_resolved_executable_override":
+        return_statement = (
+            '  return { resolvedExecutable, resolvedExecutable: "/bin/bash", argsPrefix,'
+            " shell, commandToExecute };\n"
+        )
+    elif mutate == "top_level_spread_may_override":
+        return_statement = (
+            "  return { resolvedExecutable, ...getOverrides(), argsPrefix, shell,"
+            " commandToExecute };\n"
+        )
+    elif mutate == "return_object_after_line_terminator":
+        return_statement = (
+            "  return\n"
+            "  { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
+        )
+    elif mutate == "semicolonless_resolve_declaration":
+        resolve_terminator = "\n"
     elif mutate == "explicit_resolved_executable_return":
         return_statement = (
             "  return { resolvedExecutable: resolvedExecutable, argsPrefix, shell,"
@@ -170,7 +197,7 @@ def _shell_contract_source(mutate: str | None = None) -> str:
         f"{prepare_prelude}"
         f"{obtain}"
         f"{between}"
-        f"  const resolvedExecutable = {resolve_call} ?? {resolve_fallback};\n"
+        f"  const resolvedExecutable = {resolve_call} ?? {resolve_fallback}{resolve_terminator}"
         f"{return_statement}"
         "}\n"
     )
@@ -915,6 +942,26 @@ def test_shell_interception_contract_missing_fails_closed(tmp_path: Path) -> Non
             "dead_resolved_executable_return_decoy",
             id="link2n-return-has-only-dead-computed-binding-decoy",
         ),
+        pytest.param(
+            "live_return_before_dead_certified_sequence",
+            id="review-c1-live-return-before-dead-certified-sequence",
+        ),
+        pytest.param(
+            "spread_binding_is_not_property",
+            id="review-c2a-spread-binding-is-not-property",
+        ),
+        pytest.param(
+            "duplicate_resolved_executable_override",
+            id="review-c2b-duplicate-property-overrides-certified-binding",
+        ),
+        pytest.param(
+            "top_level_spread_may_override",
+            id="review-c2c-top-level-spread-may-override-property",
+        ),
+        pytest.param(
+            "return_object_after_line_terminator",
+            id="review-c3-return-newline-triggers-asi",
+        ),
         pytest.param("path_lookup_changed", id="link3a-path-lookup-replaced-with-fixed-list"),
         pytest.param(
             "path_lookup_only_in_absolute_branch",
@@ -999,6 +1046,10 @@ def test_shell_interception_contract_rejects_uncertified_source_shapes(
         pytest.param(
             _shell_contract_source("explicit_resolved_executable_return"),
             id="explicit-resolved-executable-property-source",
+        ),
+        pytest.param(
+            _shell_contract_source("semicolonless_resolve_declaration"),
+            id="review-minor-semicolonless-resolve-with-line-terminator",
         ),
         pytest.param(
             _SHELL_CONTRACT_FORMATTING_VARIANT_JS,
