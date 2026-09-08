@@ -1,5 +1,8 @@
 from datetime import UTC, datetime
 
+import pytest
+
+import qualock.pricing.resolve as pricing_resolve
 from qualock.config.models import QualockConfig
 from qualock.pricing.models import ModelIdentity
 from qualock.pricing.resolve import (
@@ -277,13 +280,33 @@ def test_gemini_unknown_observed_model_never_uses_configured_alias() -> None:
     assert result == ModelIdentity(None, "unavailable", "unknown_model")
 
 
-def test_gemini_exact_config_must_agree_with_observed_model() -> None:
+def test_gemini_unknown_observed_model_takes_precedence_over_exact_mismatch() -> None:
     result = resolve_model_identity(
         "gemini",
         "gemini-3.8-flash",
         qualification_with_events(
             '{"type":"init","model":"gemini-nonexistent-9"}\n'
         ),
+    )
+
+    assert result == ModelIdentity(
+        None, "unavailable", "unknown_model"
+    )
+
+
+def test_gemini_known_exact_config_must_agree_with_known_observed_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def canonical_models_for(provider: str) -> frozenset[str]:
+        assert provider == "google"
+        return frozenset(("gemini-3.8-flash", "gemini-3.8-pro"))
+
+    monkeypatch.setattr(pricing_resolve, "_canonical_models_for", canonical_models_for)
+
+    result = resolve_model_identity(
+        "gemini",
+        "gemini-3.8-flash",
+        qualification_with_events('{"type":"init","model":"gemini-3.8-pro"}\n'),
     )
 
     assert result == ModelIdentity(

@@ -166,10 +166,10 @@ def _resolve_gemini(
         return ModelIdentity(None, _UNAVAILABLE, failure)
     if observed_model is None:
         return ModelIdentity(None, _UNAVAILABLE, _MISSING_OBSERVED_MODEL)
-    if configured_model in canonical_models and configured_model != observed_model:
-        return ModelIdentity(None, _UNAVAILABLE, _INCONSISTENT_OBSERVED_MODEL)
     if observed_model not in canonical_models:
         return ModelIdentity(None, _UNAVAILABLE, _UNKNOWN_MODEL)
+    if configured_model in canonical_models and configured_model != observed_model:
+        return ModelIdentity(None, _UNAVAILABLE, _INCONSISTENT_OBSERVED_MODEL)
     return ModelIdentity(observed_model, "runtime_observed", None)
 
 
