@@ -1,7 +1,7 @@
 # Provider-Specific API-Equivalent Reference Cost Estimates
 
 - **Batch:** #42
-- **Status:** Proposed design; implementation is not authorized until this spec is reviewed
+- **Status:** Delivered
 - **Branch:** `feat/provider-cost-estimates`
 - **Base:** `5800a814e295cf1126bca227bfb043438fd22c27`
 - **Depends on:** Batch #40 normalized usage; Batch #41 read-only historical analytics
