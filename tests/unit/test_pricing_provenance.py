@@ -166,6 +166,21 @@ def test_antigravity_cache_read_observed_and_write_known_zero() -> None:
     )
 
 
+def test_antigravity_malformed_cache_read_keeps_write_unobserved() -> None:
+    malformed_usage_payloads = (
+        '{"event":"result","result":{"usage":{}}}\n',
+        '{"event":"result","result":{"usage":{"cache_read_tokens":true}}}\n',
+        '{"event":"result","result":{"usage":{"cache_read_tokens":-1}}}\n',
+    )
+    for events in malformed_usage_payloads:
+        result = make_result(
+            (make_execution("canary-a", (make_attempt(events_jsonl=events),)),)
+        )
+        trust = build_usage_detail_trust("antigravity", result)
+        assert trust[0].cached_input_tokens_trust == "unobserved"
+        assert trust[0].cache_write_input_tokens_trust == "unobserved"
+
+
 def test_usage_trust_is_local_to_attempt_and_never_changes_usage() -> None:
     usage = Usage(input_tokens=10, output_tokens=1, observed=True)
     attempt = make_attempt(
