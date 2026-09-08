@@ -136,6 +136,10 @@ def test_claude_adapter_requires_socat_runtime_dependency() -> None:
     )
 
 
+def test_claude_adapter_declares_no_runtime_overlays() -> None:
+    assert ClaudeAdapter().runtime_overlays == ()
+
+
 def test_select_claude_automation_credential_follows_documented_precedence() -> None:
     env = {
         "CLAUDE_CODE_OAUTH_TOKEN": "oauth",

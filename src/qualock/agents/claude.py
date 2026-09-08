@@ -7,7 +7,13 @@ from pathlib import Path
 from qualock.evidence.claude_stream_json import parse_claude_stream_json
 from qualock.evidence.models import AgentEvidence
 
-from .base import AgentBinary, AgentInvocation, AgentMount, AgentRuntimeDependency
+from .base import (
+    AgentBinary,
+    AgentInvocation,
+    AgentMount,
+    AgentRuntimeDependency,
+    AgentRuntimeOverlay,
+)
 
 _SETTINGS_CONTAINER_PATH = "/opt/qualock/claude-settings.json"
 _CONFIG_DIR = "/opt/qualock/claude-home"
@@ -29,6 +35,10 @@ class ClaudeAdapter:
     @property
     def runtime_dependencies(self) -> tuple[AgentRuntimeDependency, ...]:
         return (AgentRuntimeDependency(command="socat", apt_package="socat"),)
+
+    @property
+    def runtime_overlays(self) -> tuple[AgentRuntimeOverlay, ...]:
+        return ()
 
     def __init__(self, automation_credential: tuple[str, str] | None = None) -> None:
         self.automation_credential = automation_credential

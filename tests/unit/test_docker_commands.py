@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from qualock.agents.base import AgentRuntimeDependency
+from qualock.agents.base import AgentRuntimeDependency, AgentRuntimeOverlay
 from qualock.run.docker import DockerRunner
 
 
@@ -295,6 +295,141 @@ def test_prepare_quotes_runtime_dependency_name_in_error_message(
         "else echo 'Qualock agent runner requires bwrap and odd'\"'\"'name "
         "in the runtime image'"
     ) in seen["dockerfile"]
+
+
+def _sample_canary(tmp_path: Path):
+    from qualock.canary.models import CanarySpec
+
+    source = tmp_path / "source"
+    source.mkdir()
+    grader = tmp_path / "grader.patch"
+    grader.write_text("patch", encoding="utf-8")
+    return source, CanarySpec.model_validate(
+        {
+            "schema_version": 1, "id": "sample", "name": "Sample",
+            "repository": {"url": "https://example.invalid/repo.git", "base_sha": "a" * 40},
+            "runtime": {"image": "python:3.12-slim"}, "task": "Fix it", "setup": [],
+            "agent": {"timeout_seconds": 60},
+            "grader": {"patch": str(grader), "command": ["pytest -q"]},
+            "constraints": {"protected_paths": []}, "critical": True,
+        }
+    )
+
+
+def _capture_dockerfile(runner: DockerRunner, monkeypatch) -> dict[str, str]:
+    from qualock.run.process import ProcessResult
+
+    seen: dict[str, str] = {}
+
+    def fake_run(argv, *, timeout_seconds):
+        if "build" in argv:
+            path = Path(argv[argv.index("--file") + 1])
+            seen["dockerfile"] = path.read_text(encoding="utf-8")
+        return ProcessResult(0, "", "", 0.01, False)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_inspect_image_id", lambda reference: "sha256:prepared")
+    return seen
+
+
+def test_prepare_copies_digest_pinned_runtime_overlay(tmp_path: Path, monkeypatch) -> None:
+    source, spec = _sample_canary(tmp_path)
+    runner = DockerRunner()
+    seen = _capture_dockerfile(runner, monkeypatch)
+    overlay = AgentRuntimeOverlay(
+        image="node:22.23.2-bookworm@sha256:" + "a" * 64,
+        source_path="/usr/local",
+        destination_path="/opt/qualock/node-runtime",
+        validation_command=("/opt/qualock/node-runtime/bin/node", "--version"),
+    )
+
+    runner.prepare(source, spec, image_tag="prepared", runtime_overlays=(overlay,))
+    text = seen["dockerfile"]
+
+    assert "FROM node:22.23.2-bookworm@sha256:" in text
+    assert "AS qualock-overlay-0" in text
+    assert "COPY --from=qualock-overlay-0 /usr/local /opt/qualock/node-runtime" in text
+    assert "RUN /opt/qualock/node-runtime/bin/node --version" in text
+
+
+def test_prepare_rejects_floating_runtime_overlay_image(tmp_path: Path, monkeypatch) -> None:
+    source, spec = _sample_canary(tmp_path)
+    runner = DockerRunner()
+    _capture_dockerfile(runner, monkeypatch)
+    overlay = AgentRuntimeOverlay(
+        image="node:22.23.2-bookworm",
+        source_path="/usr/local",
+        destination_path="/opt/qualock/node-runtime",
+    )
+
+    with pytest.raises(ValueError, match="digest-pinned"):
+        runner.prepare(source, spec, image_tag="prepared", runtime_overlays=(overlay,))
+
+
+def test_prepare_rejects_non_absolute_overlay_source(tmp_path: Path, monkeypatch) -> None:
+    source, spec = _sample_canary(tmp_path)
+    runner = DockerRunner()
+    _capture_dockerfile(runner, monkeypatch)
+    overlay = AgentRuntimeOverlay(
+        image="node:22.23.2-bookworm@sha256:" + "a" * 64,
+        source_path="usr/local",
+        destination_path="/opt/qualock/node-runtime",
+    )
+
+    with pytest.raises(ValueError, match="source path must be absolute"):
+        runner.prepare(source, spec, image_tag="prepared", runtime_overlays=(overlay,))
+
+
+def test_prepare_rejects_non_absolute_overlay_destination(tmp_path: Path, monkeypatch) -> None:
+    source, spec = _sample_canary(tmp_path)
+    runner = DockerRunner()
+    _capture_dockerfile(runner, monkeypatch)
+    overlay = AgentRuntimeOverlay(
+        image="node:22.23.2-bookworm@sha256:" + "a" * 64,
+        source_path="/usr/local",
+        destination_path="opt/qualock/node-runtime",
+    )
+
+    with pytest.raises(ValueError, match="destination path must be absolute"):
+        runner.prepare(source, spec, image_tag="prepared", runtime_overlays=(overlay,))
+
+
+def test_prepare_rejects_non_absolute_overlay_validation_executable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source, spec = _sample_canary(tmp_path)
+    runner = DockerRunner()
+    _capture_dockerfile(runner, monkeypatch)
+    overlay = AgentRuntimeOverlay(
+        image="node:22.23.2-bookworm@sha256:" + "a" * 64,
+        source_path="/usr/local",
+        destination_path="/opt/qualock/node-runtime",
+        validation_command=("node", "--version"),
+    )
+
+    with pytest.raises(ValueError, match="validation command executable must be absolute"):
+        runner.prepare(source, spec, image_tag="prepared", runtime_overlays=(overlay,))
+
+
+def test_prepare_with_no_overlays_produces_unchanged_dockerfile(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source, spec = _sample_canary(tmp_path)
+    runner = DockerRunner()
+    seen = _capture_dockerfile(runner, monkeypatch)
+
+    runner.prepare(source, spec, image_tag="prepared", runtime_overlays=())
+
+    assert seen["dockerfile"] == (
+        "FROM python:3.12-slim\n"
+        "WORKDIR /workspace\n"
+        "COPY . /workspace\n"
+        "RUN if command -v bwrap >/dev/null 2>&1; then :; "
+        "elif command -v apt-get >/dev/null 2>&1; then "
+        "apt-get update && apt-get install -y --no-install-recommends "
+        "bubblewrap && rm -rf /var/lib/apt/lists/*; "
+        "else echo 'Qualock agent runner requires bwrap in the runtime image' >&2; exit 127; fi\n"
+    )
 
 
 def test_agent_container_relaxes_seccomp_only_for_inner_bubblewrap(tmp_path: Path) -> None:

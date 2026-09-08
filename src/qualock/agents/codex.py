@@ -14,6 +14,7 @@ from .base import (
     AgentInvocation,
     AgentMount,
     AgentRuntimeDependency,
+    AgentRuntimeOverlay,
 )
 
 
@@ -27,6 +28,10 @@ class CodexAdapter:
 
     @property
     def runtime_dependencies(self) -> tuple[AgentRuntimeDependency, ...]:
+        return ()
+
+    @property
+    def runtime_overlays(self) -> tuple[AgentRuntimeOverlay, ...]:
         return ()
 
     def detect_capabilities(self, binary: Path) -> AgentCapabilities:

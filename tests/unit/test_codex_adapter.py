@@ -151,6 +151,10 @@ def test_invocation_preserves_tmpfs_auth_home_without_seed(
         assert invocation.bootstrap_copy is None
 
 
+def test_codex_adapter_declares_no_runtime_overlays() -> None:
+    assert CodexAdapter().runtime_overlays == ()
+
+
 def test_parse_evidence_returns_normalized_agent_evidence() -> None:
     evidence = CodexAdapter().parse_evidence(
         '{"type":"turn.completed","usage":{"input_tokens":4,"output_tokens":1}}\n',

@@ -76,6 +76,7 @@ class DockerQualificationBackend:
             canary,
             image_tag=f"qualock-prepared-{key}",
             runtime_dependencies=self.agent_adapter.runtime_dependencies,
+            runtime_overlays=self.agent_adapter.runtime_overlays,
         )
 
     def run_attempt(

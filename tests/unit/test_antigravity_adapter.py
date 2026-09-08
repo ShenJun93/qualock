@@ -40,6 +40,10 @@ def _tool_payload(tool_name: str, parameters: object) -> dict[str, object]:
     return {"toolCall": {"name": tool_name, "args": parameters}}
 
 
+def test_antigravity_adapter_declares_no_runtime_overlays(tmp_path: Path) -> None:
+    assert AntigravityAdapter(auth_app_data=tmp_path / "app-data").runtime_overlays == ()
+
+
 def test_invocation_builds_fresh_private_profile(tmp_path: Path) -> None:
     token = tmp_path / "real-app" / "antigravity-oauth-token"
     token.parent.mkdir()
