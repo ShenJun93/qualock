@@ -21,6 +21,14 @@ class AgentRuntimeDependency:
 
 
 @dataclass(frozen=True)
+class AgentRuntimeOverlay:
+    image: str
+    source_path: str
+    destination_path: str
+    validation_command: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class AgentBinary:
     name: str
     version: str
@@ -75,6 +83,9 @@ class AgentInvocation:
 class AgentAdapter(Protocol):
     @property
     def runtime_dependencies(self) -> tuple[AgentRuntimeDependency, ...]: ...
+
+    @property
+    def runtime_overlays(self) -> tuple[AgentRuntimeOverlay, ...]: ...
 
     def invocation(
         self,

@@ -8,7 +8,7 @@ from pathlib import Path
 from qualock.evidence.antigravity_stream_json import parse_antigravity_stream_json
 from qualock.evidence.models import AgentEvidence
 
-from .base import AgentBinary
+from .base import AgentBinary, AgentRuntimeOverlay
 
 _WORKSPACE_MOUNT = "/tmp/qualock-workspace"
 _OAUTH_TOKEN_NAME = "antigravity-oauth-token"
@@ -112,6 +112,10 @@ def _write_json(path: Path, payload: object) -> None:
 class AntigravityAdapter:
     def __init__(self, auth_app_data: Path) -> None:
         self.auth_app_data = auth_app_data
+
+    @property
+    def runtime_overlays(self) -> tuple[AgentRuntimeOverlay, ...]:
+        return ()
 
     @contextmanager
     def invocation(

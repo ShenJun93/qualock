@@ -5,7 +5,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from qualock.agents.base import AgentRuntimeDependency
+from qualock.agents.base import AgentRuntimeDependency, AgentRuntimeOverlay
 from qualock.canary.models import CanarySpec
 
 from .models import AgentStateEvidence, FrozenAgentState, GradeResult, PreparedTarget
@@ -82,6 +82,24 @@ class DockerRunner:
             raise DockerCommandError(result.stderr.strip() or f"cannot inspect image {reference}")
         return result.stdout.strip()
 
+    @staticmethod
+    def _validate_runtime_overlay(overlay: AgentRuntimeOverlay) -> None:
+        if "@sha256:" not in overlay.image:
+            raise ValueError(f"runtime overlay image must be digest-pinned: {overlay.image}")
+        if not overlay.source_path.startswith("/"):
+            raise ValueError(
+                f"runtime overlay source path must be absolute: {overlay.source_path}"
+            )
+        if not overlay.destination_path.startswith("/"):
+            raise ValueError(
+                f"runtime overlay destination path must be absolute: {overlay.destination_path}"
+            )
+        if overlay.validation_command and not overlay.validation_command[0].startswith("/"):
+            raise ValueError(
+                "runtime overlay validation command executable must be absolute: "
+                f"{overlay.validation_command[0]}"
+            )
+
     def prepare(
         self,
         source_dir: Path,
@@ -89,9 +107,12 @@ class DockerRunner:
         *,
         image_tag: str,
         runtime_dependencies: Sequence[AgentRuntimeDependency] = (),
+        runtime_overlays: Sequence[AgentRuntimeOverlay] = (),
         timeout_seconds: float = 1200,
     ) -> PreparedTarget:
         self._require()
+        for overlay in runtime_overlays:
+            self._validate_runtime_overlay(overlay)
         dependencies = (
             AgentRuntimeDependency(
                 command="bwrap", apt_package="bubblewrap"
@@ -107,10 +128,27 @@ class DockerRunner:
         dependency_message = shlex.quote(
             f"Qualock agent runner requires {dependency_names} in the runtime image"
         )
+        overlay_stage_lines = [
+            f"FROM {overlay.image} AS qualock-overlay-{index}"
+            for index, overlay in enumerate(runtime_overlays)
+        ]
+        overlay_copy_lines: list[str] = []
+        for index, overlay in enumerate(runtime_overlays):
+            overlay_copy_lines.append(
+                f"COPY --from=qualock-overlay-{index} "
+                f"{overlay.source_path} {overlay.destination_path}"
+            )
+            if overlay.validation_command:
+                quoted_command = " ".join(
+                    shlex.quote(part) for part in overlay.validation_command
+                )
+                overlay_copy_lines.append(f"RUN {quoted_command}")
         dockerfile_lines = [
+            *overlay_stage_lines,
             f"FROM {canary.runtime.image}",
             "WORKDIR /workspace",
             "COPY . /workspace",
+            *overlay_copy_lines,
             (
                 f"RUN if {dependency_checks}; then :; "
                 "elif command -v apt-get >/dev/null 2>&1; then "

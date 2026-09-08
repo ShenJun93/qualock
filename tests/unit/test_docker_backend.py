@@ -9,6 +9,7 @@ from qualock.agents.base import (
     AgentInvocation,
     AgentMount,
     AgentRuntimeDependency,
+    AgentRuntimeOverlay,
     AgentSupportBinary,
 )
 from qualock.canary.models import CanarySpec, RuntimeSpec
@@ -34,6 +35,7 @@ class FakeAdapter:
         parse_error: str | None = None,
         invocation: AgentInvocation | None = None,
         runtime_dependencies: tuple[AgentRuntimeDependency, ...] = (),
+        runtime_overlays: tuple[AgentRuntimeOverlay, ...] = (),
     ) -> None:
         self.evidence = evidence or AgentEvidence(
             input_tokens=20,
@@ -46,6 +48,7 @@ class FakeAdapter:
         self.parse_error = parse_error
         self._invocation = invocation
         self.runtime_dependencies = runtime_dependencies
+        self.runtime_overlays = runtime_overlays
 
     @contextmanager
     def invocation(
@@ -92,6 +95,7 @@ class FakeDocker:
         self.agent_container_path: str | None = None
         self.removed_containers: list[str] = []
         self.runtime_dependencies: tuple[AgentRuntimeDependency, ...] = ()
+        self.runtime_overlays: tuple[AgentRuntimeOverlay, ...] = ()
 
     def prepare(
         self,
@@ -100,9 +104,11 @@ class FakeDocker:
         *,
         image_tag: str,
         runtime_dependencies: tuple[AgentRuntimeDependency, ...] = (),
+        runtime_overlays: tuple[AgentRuntimeOverlay, ...] = (),
         timeout_seconds: float = 1200,
     ) -> PreparedTarget:
         self.runtime_dependencies = runtime_dependencies
+        self.runtime_overlays = runtime_overlays
         return PreparedTarget(reference=image_tag, digest="sha256:prepared")
 
     def run_agent(self, **kwargs: object) -> FrozenAgentState:
@@ -223,6 +229,25 @@ def test_prepare_forwards_agent_runtime_dependencies(tmp_path: Path) -> None:
     service.prepare(canary(tmp_path), "q1")
 
     assert docker.runtime_dependencies == (dependency,)
+
+
+def test_prepare_forwards_agent_runtime_overlays(tmp_path: Path) -> None:
+    overlay = AgentRuntimeOverlay(
+        image="node:22.23.2-bookworm@sha256:" + "a" * 64,
+        source_path="/usr/local",
+        destination_path="/opt/qualock/node-runtime",
+        validation_command=("/opt/qualock/node-runtime/bin/node", "--version"),
+    )
+    docker = FakeDocker()
+    service = backend(
+        tmp_path,
+        docker,
+        adapter=FakeAdapter(runtime_overlays=(overlay,)),
+    )
+
+    service.prepare(canary(tmp_path), "q1")
+
+    assert docker.runtime_overlays == (overlay,)
 
 
 def run_once(tmp_path: Path, service: DockerQualificationBackend, *, side: Side = Side.BASELINE):
