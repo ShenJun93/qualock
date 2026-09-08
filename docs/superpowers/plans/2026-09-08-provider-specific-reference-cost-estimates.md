@@ -2,118 +2,123 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add offline, reproducible provider-specific API-equivalent reference-cost estimates through pinned per-qualification pricing provenance and a read-only `qualock cost` command, without changing qualification policy or execution admission.
+**Goal:** Add an offline, advisory `qualock cost` command and immutable per-check pricing provenance that estimate current-suite token-processing cost at pinned public API-equivalent USD list rates without changing qualification behavior.
 
-**Architecture:** Extend provider-neutral history with optional normalized usage subsets, then add a one-way `qualock.pricing` package for immutable rate cards, exact model resolution, per-attempt trust provenance, sidecar writing/loading, Decimal cost calculation, cohort analysis, and deterministic rendering. `execute_check` best-effort emits `pricing.json` only after canonical artifacts; `execute_cost` composes existing project/history loading with pricing analysis and never writes. Historical pricing always uses pinned sidecar snapshots, never today's catalog.
+**Architecture:** Extend Batch #41's normalized history attempts with informational usage subsets, then add a one-way `qualock.pricing` package containing frozen models, a bundled catalog, fail-closed model/rate resolution, immutable sidecar I/O, Decimal calculation, cohort analysis, and deterministic rendering. `execute_check` invokes sidecar capture only after canonical artifacts succeed and inside a catch-all advisory boundary; `execute_cost` reads history and pinned sidecars without writing or consulting current catalog data for historical prices. Qualification policy/execution and provider-neutral `qualock history` remain unchanged.
 
-**Tech Stack:** Python 3.11+, stdlib `dataclasses`, `decimal.Decimal`, `datetime`, `json`, `os`, `pathlib`, `statistics`, existing Typer/Rich CLI, pytest, Ruff, strict mypy.
+**Tech Stack:** Python 3.11+, stdlib `dataclasses`, `datetime`, `decimal`, `json`, `os.link`, `pathlib`, `statistics`, existing Pydantic config models, Typer/Rich CLI, pytest, Ruff, strict mypy.
 
-**Spec:** `docs/superpowers/specs/2026-09-07-provider-specific-reference-cost-estimates-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-07-provider-specific-reference-cost-estimates-design.md` at canonical commit `4000ab175ab15eff7ec7ae0f68fe76a4b3abf43b`
 
 ## Global Constraints
 
-- Exact feature base: `5800a814e295cf1126bca227bfb043438fd22c27`; approved canonical spec commit: `4000ab175ab15eff7ec7ae0f68fe76a4b3abf43b`.
-- Worktree/branch: `/home/pacmap/qualock-provider-costs`, `feat/provider-cost-estimates`; all implementation tasks start after spec commit `4000ab1`.
-- `qualock cost` is advisory API-equivalent public list-rate reference only, never an invoice, subscription allocation, billing reconciliation, pass/fail signal, or admission budget.
-- Runtime must be fully offline: no provider/account/billing/pricing HTTP calls, no background refresh, no database/index, no artifact migration.
-- Historical reports before #42 remain older/unpinned and must never be retroactively assigned provider/model/rates from current config.
-- `pricing/` may depend on `history`; `history/` must never depend on `pricing`.
-- Never change `src/qualock/qualification/policy.py`, `src/qualock/run/executor.py`, verdict semantics, canary order/admission, baseline stability, `max_attempts`, `max_tokens`, monitor, bisect, GitHub PR qualification, scheduler, source management, canary/config schemas, or provider adapter behavior.
-- Do not modify `pyproject.toml`, install `types-PyYAML`, add `--max-cost`, JSON pricing output, cost filters, pricing flags, or monetary gating.
-- All monetary arithmetic and persisted rates use `Decimal`/decimal strings only; no binary float for rates, samples, medians, suite sums, or display-rounding inputs.
-- Historical price calculations use only validated pinned `pricing.json` snapshots; catalog updates never rewrite or reinterpret prior priced sidecars.
-- Cache-component trust comes from per-attempt sidecar provenance, never from compatibility-zero numeric fields alone.
-- Sidecar publication is immutable, atomic, same-filesystem, and no-replace; pricing failures remain advisory and cannot alter canonical qualification artifacts or command verdicts.
-- `qualock history` public output and #41 effectiveness/runtime/token values must remain unchanged; only the structural no-cache-fields assertion is intentionally re-baselined.
-- Strict mypy may report only the exact three inherited PyYAML `import-untyped` errors in `src/qualock/config/io.py`, `src/qualock/canary/loader.py`, and `src/qualock/project_setup/config.py`; any extra error blocks completion.
-- Every #42 changed Python file must be Ruff-clean; full-tree Ruff must introduce no findings beyond exact feature base diagnostics.
-- Fresh full pytest, compileall, `git diff --check`, protected-scope diff, Linux Python 3.11/3.12/3.13 CI, and Windows CI are mandatory gates.
-- Model budget: Sonnet medium Tasks 1/4/6 and bounded task reviews; Sonnet high Tasks 2/3/5 and pre-push whole-implementation review; Opus high exactly once for final docs-inclusive whole-branch review; Codex is fallback only and every substitution is ledgered.
-- One fresh implementer per implementation task, one independent task review after every task, no parallel branch writers, controller does not write production fixes.
-- No tag, release, package publish, or pricing-catalog network refresh is part of Batch #42.
+- Exact Batch #42 merge/base remains `5800a814e295cf1126bca227bfb043438fd22c27`; the approved spec commit is `4000ab175ab15eff7ec7ae0f68fe76a4b3abf43b` on branch `feat/provider-cost-estimates`. Here "base" means the locked feature merge-base, not the advancing branch HEAD. If that merge-base is intentionally changed, stop, record the new base, recompute every baseline waiver, and rerun the exact-base gates instead of reusing these results.
+- Resume checkpoint: plan commit `4074cac53f670a24cca3f111493423f72e8ee66a` and Task 1 implementation commit `9886108ecff1f5f27d37d5786bb284f02266d347` already exist on top of the locked base. Task 1 has a genuine RED/GREEN report but still needs its independent review; do not replay its implementation.
+- The estimate is an **API-equivalent public standard list-rate reference in USD**, never an invoice, account charge, subscription/seat allocation, credit/discount/tax calculation, cost gate, pass/fail signal, or actual-bill claim.
+- All runtime behavior is offline and deterministic. Pricing code must not import or call HTTP clients, provider APIs, billing APIs, pricing websites, background refreshes, databases, or analytics indexes.
+- `pricing.json` is separate immutable evidence. It is created only after `report.md`, `report.json`, and `qualification.json` succeed, is atomically published with no replacement, and is never migrated, refreshed, or retroactively created for old reports.
+- Sidecar generation/writing is best effort: every exception is swallowed at one isolated boundary and cannot change `qualock check` stdout, exit code, `QualificationResult`, verdict, canonical artifacts, budgets, or canary ordering.
+- `qualock cost` is argument-free, read-only, and zero-write. Missing history, no matching cohort, no priceable samples, and valid unavailable sidecars exit `0`; an empty current suite is exactly `CommandError("no canaries found")` and CLI exit `3`.
+- `qualock history` remains provider-neutral and value-identical. Its effectiveness/runtime logic never reads the new fields, and token totals remain exactly `input_tokens + output_tokens`.
+- `history` must not depend on `pricing`; dependency direction is `pricing -> history`. Do not change `src/qualock/qualification/policy.py`, `src/qualock/run/executor.py`, baseline semantics, monitor/watch, bisect, GitHub PR qualification, scheduler, source management, agent resolution, canary schema, or config schema.
+- Do not add `--max-cost`, a monetary budget, JSON mode, pricing flags, automatic canary reordering, artifact migration, or background refresh.
+- `CATALOG_VERSION` is exactly `"2026-09-07.1"`; all rates are USD per 1M tokens stored and serialized as decimal strings, and all money remains `Decimal` until final `ROUND_HALF_EVEN` cent rendering.
+- Rate-card IDs identify the complete immutable material snapshot: provider, canonical model, source URL/check date, inclusive UTC effective interval, all rates, and ordered limitations. Historical analysis uses only that validated pinned snapshot and never today's catalog.
+- The agent/provider map is closed and exact: `codex -> openai`, `claude -> anthropic`, `antigravity -> google`. No fuzzy matching, edit distance, generic prefix/suffix stripping, or closest-model inference is allowed.
+- A trust record exists for every started attempt, including invalid/failed attempts, and no skipped attempt. Cache-read/cache-write numeric zeros are not evidence: monetary use also requires matching `observed` or protocol-established `known_zero` trust.
+- Do not modify `pyproject.toml` and do not add `types-PyYAML`. Strict mypy may contain only the exact three pre-existing PyYAML `import-untyped` findings at `config/io.py:3`, `canary/loader.py:4`, and `project_setup/config.py:6` unless the implementation base moves.
+- Every Batch #42 changed Python file must be Ruff-clean. Full-tree Ruff may introduce no diagnostic relative to exact base `5800a814e295cf1126bca227bfb043438fd22c27`; do not spend this batch fixing unrelated debt.
+- Fresh full pytest, `compileall -q src tests`, `git diff --check`, protected-scope diff, exact-head identity, and Linux 3.11/3.12/3.13 plus Windows CI gates are mandatory.
+- Use Sonnet medium for fresh implementers and independent reviewers on Tasks 1, 4, and 6; Sonnet high for fresh implementers and independent reviewers on Tasks 2, 3, and 5; Sonnet high for the pre-push whole-implementation review. Use Opus high exactly once, only for the final docs-inclusive whole-branch review.
+- Codex is fallback only when the required Claude model is hard-limited. Record one nearest-effort substitution in the SDD ledger and do not launch a duplicate worker/reviewer. Opus fallback is one Codex high review, not an Opus retry plus Codex.
+- Task 1 already has its original implementation commit and must not be re-dispatched; it still requires one fresh independent Sonnet medium reviewer. Tasks 2-6 use one fresh implementer and a different independent reviewer each. Never run branch-writing implementers in parallel; reviewers are read-only, and Critical/Important findings return to that task's implementer/fixer for a scoped fix and re-review.
+- Run every command below from `/home/pacmap/qualock-provider-costs`; use `/home/pacmap/qualock-easy/.venv/bin/python`, `/home/pacmap/qualock-easy/.venv/bin/ruff`, and `/home/pacmap/qualock-easy/.venv/bin/mypy` exactly.
 
 ---
 
 ## File Structure
 
-- Modify `src/qualock/history/models.py`: append optional cache/reasoning normalized fields only.
-- Modify `src/qualock/history/loader.py`: normalize new persisted usage subsets without changing existing history semantics.
-- Create `src/qualock/pricing/models.py`: frozen rate/provenance/history/cost dataclasses and fixed literals.
-- Create `src/qualock/pricing/catalog.py`: immutable bundled rate cards, catalog validation, UTC effective-date lookup.
-- Create `src/qualock/pricing/resolve.py`: exact agent/provider/model identity resolution and raw Claude model evidence extraction.
-- Create `src/qualock/pricing/sidecar.py`: usage-detail trust extraction, payload construction, atomic writer, tolerant sidecar scanner/parser.
-- Create `src/qualock/pricing/calculate.py`: pure per-execution Decimal pricing.
-- Create `src/qualock/pricing/analysis.py`: cohort selection, report classification, medians, all-or-nothing suite estimate.
-- Create `src/qualock/pricing/render.py`: deterministic low-tech monetary rendering and final-cent rounding.
-- Create `src/qualock/pricing/__init__.py`: export only the small command-facing pricing surface.
-- Modify `src/qualock/commands.py`: capture qualification run window, best-effort sidecar emission, and `execute_cost` composition.
-- Modify `src/qualock/cli.py`: argument-free `cost` command with history-style exit mapping.
-- Create tests: `tests/unit/test_pricing_catalog.py`, `test_pricing_resolve.py`, `test_pricing_sidecar.py`, `test_pricing_calculate.py`, `test_pricing_analysis.py`, `test_pricing_render.py`.
-- Modify tests: `tests/unit/test_history_loader.py`, `test_history_analysis.py`, `test_commands.py`, `test_cli.py`.
-- Modify `README.md`, `ROADMAP.md`, and the spec status only after implementation-head CI is green in Task 7.
+- Modify `src/qualock/history/models.py` and `src/qualock/history/loader.py`: optional normalized usage details only; preserve Batch #41 semantics.
+- Create `src/qualock/pricing/__init__.py`: re-export the pricing interfaces consumed by commands and tests.
+- Create `src/qualock/pricing/models.py`: frozen catalog, provenance, scanner, sample, estimate, and analysis dataclasses plus shared monetary validation.
+- Create `src/qualock/pricing/catalog.py`: immutable bundled rate cards, catalog version, and inclusive temporal lookup.
+- Create `src/qualock/pricing/resolve.py`: closed provider mapping, exact model evidence resolution, and protocol-specific attempt trust.
+- Create `src/qualock/pricing/sidecar.py`: payload construction, atomic publication, tolerant parsing, report binding, and snapshot consistency.
+- Create `src/qualock/pricing/calculate.py`: pure per-execution Decimal pricing with trust and pairing gates.
+- Create `src/qualock/pricing/analysis.py`: current-config classification, exact cohort selection, Decimal medians, counters, and suite aggregation.
+- Create `src/qualock/pricing/render.py`: deterministic text, final-cent rounding only, history/basis/limitations, and fixed safe failures.
+- Modify `src/qualock/commands.py`: post-artifact best-effort capture and read-only `execute_cost` composition.
+- Modify `src/qualock/cli.py`: exact argument-free `cost` command and history-style exit mapping.
+- Test through `tests/unit/test_history_{loader,analysis,render}.py`, eight new `tests/unit/test_pricing_*.py` modules named in Tasks 2-6, and existing `tests/unit/test_commands.py` / `tests/unit/test_cli.py`.
+- Modify `README.md`, `ROADMAP.md`, and the canonical spec status only after implementation-head CI is green in Task 7.
 
-### Task 1: Extend Historical Usage Without Changing #41 Semantics
+### Task 1: Reconcile and Independently Review the Implemented Historical Usage Extension
 
-**Files:**
-- Modify: `src/qualock/history/models.py`
-- Modify: `src/qualock/history/loader.py`
-- Modify: `tests/unit/test_history_loader.py`
-- Modify: `tests/unit/test_history_analysis.py`
+**Resume state:** Task 1 implementation already exists at exact commit `9886108ecff1f5f27d37d5786bb284f02266d347`, whose parent is plan commit `4074cac53f670a24cca3f111493423f72e8ee66a`. The original Task 1 report at `.superpowers/sdd/2026-09-08-provider-specific-reference-cost-estimates/task-1-report.md` records genuine RED (`2 failed, 58 passed`) before the loader implementation and GREEN (`73 passed`) after it. Do not replay RED or dispatch a duplicate implementer; the remaining gate is an independent review plus the normal fix loop if that review finds a blocking gap.
+
+**Files in commit `9886108`:**
+- Modified: `src/qualock/history/models.py`
+- Modified: `src/qualock/history/loader.py`
+- Modified: `tests/unit/test_history_loader.py`
+- Modified: `tests/unit/test_history_analysis.py`
+- Regression-only: `tests/unit/test_history_render.py` remains unchanged by the implementation and is rerun to prove public history rendering stays provider-neutral.
 
 **Interfaces:**
-- Produces `HistoricalAttempt.cached_input_tokens: int | None = None`, `cache_write_input_tokens: int | None = None`, `reasoning_output_tokens: int | None = None`, appended after existing fields.
-- Preserves `analyze_history(summary, current_canary_ids)` behavior and all #41 result dataclasses unchanged.
-- Later pricing tasks consume these optional normalized details but never infer trust from them.
+- Consumes: persisted `report.json` attempt `usage` objects already loaded by `scan_results(results_dir: Path) -> HistorySummary`.
+- Produces: `HistoricalAttempt.cached_input_tokens: int | None = None`, `cache_write_input_tokens: int | None = None`, and `reasoning_output_tokens: int | None = None`, appended after `usage_observed`.
+- Preserves: `analyze_history(summary: HistorySummary, current_canary_ids: Sequence[str]) -> HistoryAnalysis` and `render_history_text(analysis: HistoryAnalysis) -> str` behavior.
+- Later pricing tasks may consume the normalized numeric fields, but monetary trust must come only from `pricing.json` provenance.
 
-- [ ] **Step 1: Write RED loader compatibility tests**
+**Worker budget:** The original Task 1 implementer commit is the implementation provenance. Use one fresh independent Sonnet medium reviewer now. If the review finds Critical/Important issues, resume that implementer when possible; if the original worker is unavailable, dispatch one fresh Sonnet medium fixer under the same Task 1 brief/report and use a scoped re-review.
 
-Add tests proving persisted `usage` detail fields normalize independently, bool/non-int/missing values become `None`, pre-#42 reports remain loadable, and the three fields default to `None` when constructing `HistoricalAttempt` with the old argument set.
-
-```python
-attempt = scan_results(results).loaded[0].executions[0].attempts[0]
-assert attempt.cached_input_tokens == 4
-assert attempt.cache_write_input_tokens == 2
-assert attempt.reasoning_output_tokens == 3
-```
-- [ ] **Step 2: Write RED #41 value-identity tests**
-
-Re-baseline the old structural assertion so fields exist with `None` defaults, then construct attempts with wildly different cache/reasoning values and prove #41 effectiveness/runtime/token results are unchanged and token totals remain exactly `input_tokens + output_tokens`.
-
-```python
-analysis = analyze_history(summary, ["canary-a"])
-assert analysis.per_canary_estimates[0].token_samples == (6000,)
-```
-
-- [ ] **Step 3: Run Task 1 RED**
+- [ ] **Step 1: Verify the exact Task 1 commit, ancestry, and scope**
 
 ```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_history_loader.py tests/unit/test_history_analysis.py
+test "$(git rev-parse 9886108ecff1f5f27d37d5786bb284f02266d347^)" = "4074cac53f670a24cca3f111493423f72e8ee66a"
+git diff --name-only 4074cac53f670a24cca3f111493423f72e8ee66a..9886108ecff1f5f27d37d5786bb284f02266d347
+git show --check --oneline --stat 9886108ecff1f5f27d37d5786bb284f02266d347
 ```
+Expected: the parent is exactly the plan commit; the diff lists only `src/qualock/history/models.py`, `src/qualock/history/loader.py`, `tests/unit/test_history_analysis.py`, and `tests/unit/test_history_loader.py`; `git show --check` is clean.
 
-Expected: new tests fail because `HistoricalAttempt` has no optional detail fields and loader drops them.
+- [ ] **Step 2: Verify the recorded TDD evidence and rerun Task 1 GREEN**
 
-- [ ] **Step 4: Implement the minimal history extension**
-
-Append the three optional fields with `None` defaults. In `_normalize_attempt`, use the existing bool-rejecting integer normalizer for the three persisted `usage` keys; malformed/missing `usage` yields all three `None`. Do not modify `history/analysis.py` or `history/render.py`.
-
-- [ ] **Step 5: Run Task 1 GREEN/static gates**
+Read the existing report before review. It records loader RED failures because the new fields normalized to `None`, followed by the minimal loader change. Then rerun:
 
 ```bash
 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_history_loader.py tests/unit/test_history_analysis.py tests/unit/test_history_render.py
 /home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/history/models.py src/qualock/history/loader.py tests/unit/test_history_loader.py tests/unit/test_history_analysis.py
 /home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/history
-git diff --check
+git diff --check 4074cac53f670a24cca3f111493423f72e8ee66a..9886108ecff1f5f27d37d5786bb284f02266d347
 ```
 
-- [ ] **Step 6: Commit Task 1**
+Expected: the focused history suites PASS, Ruff/compileall/diff-check exit `0`, and the following existing tests remain the direct behavioral evidence:
+- `test_historical_attempt_new_fields_default_to_none_with_old_argument_set`
+- `test_new_usage_detail_fields_normalize_from_usage_object`
+- `test_new_usage_detail_fields_normalize_independently_and_reject_bools`
+- `test_missing_usage_detail_keys_and_malformed_usage_yield_none_for_all_three`
+- `test_cache_and_reasoning_fields_default_to_none_and_cannot_affect_token_totals`
+- `test_wildly_different_cache_and_reasoning_values_do_not_change_41_results`
 
-```bash
-git add src/qualock/history/models.py src/qualock/history/loader.py tests/unit/test_history_loader.py tests/unit/test_history_analysis.py
-git commit -m "refactor: expose historical usage detail subsets"
+- [ ] **Step 3: Run the independent Task 1 review**
+
+Generate the review package over exact range `4074cac53f670a24cca3f111493423f72e8ee66a..9886108ecff1f5f27d37d5786bb284f02266d347`. Give the fresh read-only Sonnet medium reviewer the original Task 1 brief, Task 1 report, review package, Global Constraints, and Spec §5 plus §17 obligations 54-55. Require both spec-compliance and task-quality verdicts.
+Reviewer must verify: the three fields are additive `None`-defaulted data only; malformed/bool usage details normalize to `None`; old constructors remain compatible; `history/analysis.py` and `history/render.py` do not read the new fields; Batch #41 effectiveness/runtime/token values remain unchanged; token totals remain exactly `input_tokens + output_tokens`; numeric zero is not treated as monetary trust.
+
+- [ ] **Step 4: Resolve Task 1 review findings through the SDD fix loop**
+
+If the reviewer returns spec ❌ or any Critical/Important finding, hand the exact findings to the Task 1 implementer/fixer, require a focused failing regression when applicable, rerun Step 2 after the fix, commit only the scoped Task 1 fix, generate a fix-range review package, and obtain one scoped re-review. Record Minor findings in the ledger for final triage. The controller does not write production fixes.
+
+- [ ] **Step 5: Mark Task 1 complete in the ledger**
+
+When the independent review is clean, append:
+
+```text
+Task 1: complete (commits 4074cac..9886108, review clean)
 ```
 
-Reviewer must verify #41 values/rendering remain provider-neutral and the new numeric zeros are never treated as monetary trust.
-### Task 2: Add Pricing Models, Bundled Catalog, and Exact Model Resolution
+If a reviewed fix commit was required, replace the ending SHA with the reviewed Task 1 fix head and record the fix-round line first. No duplicate Task 1 implementation commit is created merely to match the refined plan wording.
+
+### Task 2: Add Pricing Models, Catalog, Exact Model Resolution, and Temporal Validation
 
 **Files:**
 - Create: `src/qualock/pricing/__init__.py`
@@ -124,178 +129,527 @@ Reviewer must verify #41 values/rendering remain provider-neutral and the new nu
 - Create: `tests/unit/test_pricing_resolve.py`
 
 **Interfaces:**
-- Produces frozen `RateComponents`, `RateCard`, `ModelIdentity`, `AttemptUsageTrust`, `PricingSidecar`, `PricingLoadFailure`, `PricingHistory`, `CostSample`, `CanaryCostEstimate`, `SuiteCostEstimate`, `CostAnalysis` exactly in spec field order.
-- Produces `provider_for_agent(agent: str) -> str | None`, `resolve_model_identity(agent, configured_model, result) -> ModelIdentity`, `resolve_rate_card(provider, canonical_model, instant) -> RateCard | None`.
-- Defines `CATALOG_VERSION = "2026-09-07.1"` and the six initial immutable cards/rates/effective intervals from spec §8.
+- Consumes: `QualificationResult`, each `AttemptResult.events_jsonl`, and aware capture instants.
+- Produces: all frozen dataclasses in Spec §11 with exact field order.
+- Produces: `parse_rate_components(raw: object) -> RateComponents`, `validate_effective_interval(effective_from: date | None, effective_until: date | None) -> None`, `provider_for_agent(agent: str) -> str | None`, `resolve_model_identity(agent: str, configured_model: str, result: QualificationResult) -> ModelIdentity`, and `resolve_rate_card(provider: str, canonical_model: str, instant: datetime) -> RateCard | None`.
+- Produces: `CATALOG_VERSION = "2026-09-07.1"`, immutable `RATE_CARDS: tuple[RateCard, ...]`, exact alias `gpt-5.6 -> gpt-5.6-sol`, and only the three specified Antigravity mappings.
 
-- [ ] **Step 1: Write RED catalog tests**
+**Worker budget:** Fresh Sonnet high implementer; different Sonnet high reviewer; sequential branch writing only.
 
-Pin exact IDs, Decimal rates, source URLs/check dates, limitations order, conservative `2026-09-07` applicability floors, Gemini `2026-12-31`/`2027-01-01` boundary, inclusive `effective_until`, unique IDs/material snapshots, naive-datetime rejection, and overlapping-card programmer-error behavior.
+- [ ] **Step 1: Write RED catalog and shared validation tests**
+
+Add to `test_pricing_catalog.py`: `test_catalog_version_and_rate_card_ids_are_unique`, `test_rate_cards_are_frozen_material_snapshots`, `test_openai_cards_pin_standard_rates_cache_write_multiplier_and_no_expiry`, `test_anthropic_cards_pin_global_rates_and_cache_write_range`, `test_gemini_boundary_selects_old_then_new_card`, `test_initial_cards_do_not_resolve_before_applicability_floor`, `test_effective_until_is_utc_date_inclusive`, `test_overlapping_rate_cards_are_rejected_by_catalog_validation`, `test_resolve_rate_card_rejects_naive_datetime`, `test_rate_parser_accepts_only_finite_nonnegative_decimal_strings`, `test_cache_write_rates_are_both_null_or_ordered`, `test_effective_interval_rejects_from_after_until`, and `test_pricing_runtime_has_no_network_client_imports`.
 
 ```python
-card = resolve_rate_card("google", "gemini-3.8-flash", datetime(2027, 1, 1, tzinfo=UTC))
-assert card is not None
-assert card.rates.output == Decimal("7.50")
+def test_gemini_boundary_selects_old_then_new_card() -> None:
+    old = resolve_rate_card(
+        "google",
+        "gemini-3.8-flash",
+        datetime(2026, 12, 31, 23, 59, tzinfo=UTC),
+    )
+    new = resolve_rate_card("google", "gemini-3.8-flash", datetime(2027, 1, 1, tzinfo=UTC))
+    assert old is not None
+    assert old.rate_card_id == "google:gemini-3.8-flash:standard:through-2026-12-31"
+    assert new is not None
+    assert new.rate_card_id == "google:gemini-3.8-flash:standard:from-2027-01-01"
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", "-0.01", -1, True])
+def test_rate_parser_accepts_only_finite_nonnegative_decimal_strings(value: object) -> None:
+    raw = {
+        "input_uncached": value,
+        "input_cached": "0.20",
+        "cache_write_lower": "2.50",
+        "cache_write_upper": "2.50",
+        "output": "12.00",
+    }
+    with pytest.raises(ValueError):
+        parse_rate_components(raw)
 ```
 
-- [ ] **Step 2: Write RED semantic-validation tests**
+The network test parses every `src/qualock/pricing/*.py` with `ast` and rejects import roots in `{"httpx", "requests", "urllib", "socket", "aiohttp"}`.
 
-Exercise finite/non-negative decimal strings only; reject bool/non-string, `NaN`, infinities, negatives, cache-write half-null/range inversion, and invalid effective intervals. Assert OpenAI Terra/Sol cache-write equals exactly 1.25x uncached input and no fabricated future expiry exists.
+- [ ] **Step 2: Write RED exact model-resolution tests**
 
-- [ ] **Step 3: Write RED exact-resolution tests**
+Define this local factory in `test_pricing_resolve.py`:
 
-Use direct `QualificationResult` attempts with raw `events_jsonl` to pin: exact closed agent/provider mapping; OpenAI canonical + only documented `gpt-5.6 -> gpt-5.6-sol`; explicit Antigravity three-entry mapping only; Claude exact system-init/assistant model paths; alias `sonnet` requires consistent runtime model; malformed non-empty JSON/non-object/present non-string model gives fixed `malformed_model_evidence`; disagreements fail closed; exact configured Claude ID must agree with observed runtime ID.
-- [ ] **Step 4: Run Task 2 RED**
+```python
+def qualification_with_events(*events_jsonl: str) -> QualificationResult:
+    attempts = tuple(
+        AttemptResult(
+            side="baseline",
+            repetition=index,
+            success=True,
+            valid=True,
+            duration_ms=1,
+            events_jsonl=events,
+        )
+        for index, events in enumerate(events_jsonl, 1)
+    )
+    execution = CanaryExecution(
+        "canary-a",
+        True,
+        "sha256:test",
+        attempts,
+        len(attempts),
+        0,
+        len(attempts),
+        0,
+        Verdict.PASS,
+        "test",
+    )
+    return QualificationResult("q-1", "1.0.0", "1.0.1", Verdict.PASS, (execution,), (), ())
+```
+
+Add `test_provider_for_agent_is_exact_and_closed`, `test_claude_alias_resolves_consistent_runtime_model`, `test_claude_alias_without_observation_fails_closed`, `test_claude_conflicting_observations_fail_closed`, `test_claude_exact_config_requires_observed_agreement`, `test_claude_model_paths_missing_and_empty_are_absent`, `test_claude_non_string_model_is_malformed`, `test_claude_malformed_or_non_object_jsonl_is_malformed`, `test_claude_unrelated_events_are_ignored`, `test_claude_unknown_consistent_runtime_model_is_unknown`, `test_openai_exact_canonical_models_resolve`, `test_openai_documented_alias_resolves_only_to_sol`, `test_openai_unknown_and_convenience_names_do_not_fuzzy_match`, `test_antigravity_three_explicit_effort_ids_map`, and `test_antigravity_unlisted_suffix_does_not_resolve`.
+
+```python
+assert resolve_model_identity(
+    "claude",
+    "sonnet",
+    qualification_with_events('{"type":"system","subtype":"init","model":"claude-sonnet-5"}\n'),
+) == ModelIdentity("claude-sonnet-5", "runtime_observed", None)
+```
+
+- [ ] **Step 3: Run Task 2 tests to verify RED**
 
 ```bash
 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_catalog.py tests/unit/test_pricing_resolve.py
 ```
 
-Expected: import/collection failure because `qualock.pricing` does not exist.
+Expected: collection FAIL with `ModuleNotFoundError: No module named 'qualock.pricing'`.
 
-- [ ] **Step 5: Implement frozen models and immutable catalog**
+- [ ] **Step 4: Implement all frozen dataclasses and shared validators**
 
-Define exact spec dataclasses and constants. Build cards from literal decimal strings into validated `Decimal` objects at import/construction time. `resolve_rate_card` requires aware datetimes, normalizes to UTC date, returns exactly one card/`None`, and raises `ValueError` for naive input or overlapping matches.
+Define `RateComponents`, `RateCard`, `ModelIdentity`, `AttemptUsageTrust`, `PricingSidecar`, `PricingLoadFailure`, `PricingHistory`, `CostSample`, `CanaryCostEstimate`, `SuiteCostEstimate`, and `CostAnalysis` exactly in Spec §11 field order. The first declarations are:
 
-- [ ] **Step 6: Implement exact fail-closed model resolution**
+```python
+@dataclass(frozen=True)
+class RateComponents:
+    input_uncached: Decimal
+    input_cached: Decimal | None
+    cache_write_lower: Decimal | None
+    cache_write_upper: Decimal | None
+    output: Decimal
 
-`provider_for_agent` is a literal closed map. Claude parser reads only spec paths and never leaks raw parse text. Runtime observation is authoritative over configured exact IDs. Codex and Antigravity use only literal tables; no generic suffix/prefix/fuzzy logic.
 
-- [ ] **Step 7: Run Task 2 GREEN/static gates**
+@dataclass(frozen=True)
+class RateCard:
+    rate_card_id: str
+    provider: str
+    canonical_model: str
+    effective_from: date | None
+    effective_until: date | None
+    source_url: str
+    source_checked_at: date
+    rates: RateComponents
+    limitations: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ModelIdentity:
+    canonical_model: str | None
+    source: str
+    unavailable_reason: str | None
+
+
+@dataclass(frozen=True)
+class AttemptUsageTrust:
+    canary_id: str
+    side: str
+    repetition: int
+    cached_input_tokens_trust: str
+    cache_write_input_tokens_trust: str
+
+
+@dataclass(frozen=True)
+class PricingSidecar:
+    qualification_id: str
+    qualification_dir: Path
+    availability: str
+    run_started_at: datetime
+    run_finished_at: datetime
+    agent: str
+    provider: str
+    configured_model: str
+    reasoning_effort: str
+    canonical_model: str | None
+    model_identity_source: str
+    catalog_version: str
+    rate_card_id: str | None
+    source_url: str | None
+    source_checked_at: date | None
+    effective_from: date | None
+    effective_until: date | None
+    rates: RateComponents | None
+    usage_detail_trust: tuple[AttemptUsageTrust, ...]
+    limitations: tuple[str, ...]
+    unavailable_reason: str | None
+
+
+@dataclass(frozen=True)
+class PricingLoadFailure:
+    qualification_id: str
+    qualification_dir: Path
+    reason: str
+
+
+@dataclass(frozen=True)
+class PricingHistory:
+    records: tuple[PricingSidecar, ...]
+    older_unpinned_qualification_ids: tuple[str, ...]
+    failures: tuple[PricingLoadFailure, ...]
+
+
+@dataclass(frozen=True)
+class CostSample:
+    lower_usd: Decimal
+    upper_usd: Decimal
+
+
+@dataclass(frozen=True)
+class CanaryCostEstimate:
+    canary_id: str
+    samples: tuple[CostSample, ...]
+    lower_median_usd: Decimal | None
+    upper_median_usd: Decimal | None
+
+
+@dataclass(frozen=True)
+class SuiteCostEstimate:
+    lower_usd: Decimal | None
+    upper_usd: Decimal | None
+    missing_cost_canaries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CostAnalysis:
+    current_agent: str
+    configured_model: str
+    reasoning_effort: str
+    selected_canonical_model: str | None
+    selected_rate_card_id: str | None
+    per_canary: tuple[CanaryCostEstimate, ...]
+    suite: SuiteCostEstimate
+    selected_cohort_runs: int
+    priceable_qualification_runs: int
+    older_unpinned_runs: int
+    unavailable_pricing_runs: int
+    excluded_config_runs: int
+    excluded_cohort_runs: int
+    pricing_failures: tuple[PricingLoadFailure, ...]
+    limitations: tuple[str, ...]
+```
+
+`parse_rate_components` requires exactly five keys, rejects non-string present values before `Decimal`, requires finite/non-negative input/output, and enforces paired ordered cache-write bounds. Validate date order.
+
+- [ ] **Step 5: Implement exact catalog and model resolution**
+
+Define all six cards from Spec §8 with exact IDs, intervals, values, URLs, checked date, and ordered limitations. Validate unique IDs and no overlapping model/provider intervals at module construction. Lookup normalizes aware offsets to UTC and uses inclusive UTC dates; naive direct calls raise `ValueError`.
+
+| ID | UTC dates | Input | Cached | Write lower/upper | Output |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `openai:gpt-5.6-terra:standard:2026-09-07` | `2026-09-07` onward | `2.00` | `0.20` | `2.50/2.50` | `12.00` |
+| `openai:gpt-5.6-sol:standard:2026-09-07` | `2026-09-07` onward | `4.00` | `0.40` | `5.00/5.00` | `20.00` |
+| `anthropic:claude-sonnet-5:standard-global:2026-09-07` | `2026-09-07` onward | `2.00` | `0.20` | `2.50/4.00` | `10.00` |
+| `anthropic:claude-sonnet-4-6:standard-global:2026-09-07` | `2026-09-07` onward | `3.00` | `0.30` | `3.75/6.00` | `15.00` |
+| `google:gemini-3.8-flash:standard:through-2026-12-31` | `2026-09-07..2026-12-31` | `0.75` | `0.075` | `null/null` | `3.75` |
+| `google:gemini-3.8-flash:standard:from-2027-01-01` | `2027-01-01` onward | `1.50` | `0.15` | `null/null` | `7.50` |
+
+Pin sources exactly to `https://developers.openai.com/api/docs/models/gpt-5.6-terra`, `https://developers.openai.com/api/docs/models/gpt-5.6-sol`, `https://platform.claude.com/docs/en/about-claude/pricing`, `https://platform.claude.com/docs/en/models/sonnet-4-6/overview`, and `https://ai.google.dev/gemini-api/docs/pricing`; use source-check date `2026-09-07` and the ordered limitation text from Spec §8 without paraphrasing.
+
+Pin these limitation strings verbatim:
+- OpenAI: `the pinned standard card includes the published 1.25x cache-write token rate. Long-context, tool/search, Batch/Priority/Flex/other serving modifiers remain excluded because current attempt telemetry does not preserve correct per-request modifier data.`
+- Anthropic: `Batch, data residency, fast mode, server-side tool fees and subscription/seat economics are excluded. Cache-write TTL is not observed, so cache-write tokens create a bounded range.`
+- Gemini: `explicit cache-storage token-hour fees, tools/search, tier discounts and regional/enterprise terms are excluded. Output rate already includes thinking tokens.`
+
+Use only these maps:
+
+```python
+_PROVIDERS = {"codex": "openai", "claude": "anthropic", "antigravity": "google"}
+_OPENAI_ALIASES = {"gpt-5.6": "gpt-5.6-sol"}
+_ANTIGRAVITY_MODELS = {
+    "gemini-3.8-flash-low": "gemini-3.8-flash",
+    "gemini-3.8-flash-medium": "gemini-3.8-flash",
+    "gemini-3.8-flash-high": "gemini-3.8-flash",
+}
+```
+
+Claude observes only `system/init -> event["model"]` and `assistant -> event["message"]["model"]`. Empty values are absent; present non-strings, invalid JSON, and non-object non-empty lines are malformed. Runtime strings must all agree and override/agrees-with exact configuration. Never persist parser text.
+
+- [ ] **Step 6: Run Task 2 GREEN and static checks**
 
 ```bash
 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_catalog.py tests/unit/test_pricing_resolve.py
-/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/models.py src/qualock/pricing/catalog.py src/qualock/pricing/resolve.py tests/unit/test_pricing_catalog.py tests/unit/test_pricing_resolve.py
-/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing
+/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/__init__.py src/qualock/pricing/models.py src/qualock/pricing/catalog.py src/qualock/pricing/resolve.py tests/unit/test_pricing_catalog.py tests/unit/test_pricing_resolve.py
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing tests/unit/test_pricing_catalog.py tests/unit/test_pricing_resolve.py
 git diff --check
 ```
 
-- [ ] **Step 8: Commit Task 2**
+Expected: all tests PASS; Ruff, compileall, and diff-check exit `0`.
+
+- [ ] **Step 7: Commit Task 2**
 
 ```bash
 git add src/qualock/pricing/__init__.py src/qualock/pricing/models.py src/qualock/pricing/catalog.py src/qualock/pricing/resolve.py tests/unit/test_pricing_catalog.py tests/unit/test_pricing_resolve.py
-git commit -m "feat: add offline provider pricing catalog"
+git commit -m "feat: bundle validated provider rate cards"
 ```
 
-Reviewer must verify rate data/effective windows exactly match the approved spec, all resolution is exact/fail-closed, and no runtime network code exists.
+Expected: one commit containing only the six named files.
 
-### Task 3: Pin Runtime Provenance and Write Atomic Best-Effort Sidecars
+- [ ] **Step 8: Run independent Task 2 review**
+
+Give the exact commit and Spec §§6-8.2, 11, 16, and mapped obligations to the fresh read-only reviewer. Require checks of every card field, snapshot IDs, exact Claude paths, closed maps, absence of fuzzy/network logic, Decimal rejection, UTC inclusivity, and dataclass field order. Critical/Important findings require a scoped fix, Step 6 rerun, and exact-head re-review.
+
+### Task 3: Capture Runtime Provenance, Usage Trust, Immutable Sidecars, and Best-Effort Checks
+
 **Files:**
+- Modify: `src/qualock/pricing/resolve.py`
 - Create: `src/qualock/pricing/sidecar.py`
+- Modify: `src/qualock/pricing/__init__.py`
 - Modify: `src/qualock/commands.py`
-- Create: `tests/unit/test_pricing_sidecar.py`
+- Create: `tests/unit/test_pricing_provenance.py`
+- Create: `tests/unit/test_pricing_sidecar_writer.py`
 - Modify: `tests/unit/test_commands.py`
+- Modify: `tests/unit/test_cli.py`
 
 **Interfaces:**
-- Produces `build_usage_detail_trust(agent: str, result: QualificationResult) -> tuple[AttemptUsageTrust, ...]`.
-- Produces `build_pricing_payload(config, result, run_started_at, run_finished_at) -> dict[str, object]`.
-- Produces `write_pricing_sidecar(qualification_dir: Path, payload: dict[str, object]) -> Path`.
-- `execute_check` captures `run_started_at` immediately before `QualificationExecutor.run`, writes canonical artifacts, captures `run_finished_at`, then invokes one exception-swallowing pricing boundary.
+- Consumes: Task 2 catalog/resolution, `QualockConfig`, completed `QualificationResult`, and aware start/finish instants.
+- Produces: `build_usage_detail_trust(agent: str, result: QualificationResult) -> tuple[AttemptUsageTrust, ...]`.
+- Produces: `build_pricing_payload(config: QualockConfig, result: QualificationResult, run_started_at: datetime, run_finished_at: datetime) -> dict[str, object]`.
+- Produces: `write_pricing_sidecar(qualification_dir: Path, payload: dict[str, object]) -> Path`.
+- Produces in `commands.py`: `_write_pricing_sidecar_best_effort(qualification_dir: Path, config: QualockConfig, result: QualificationResult, run_started_at: datetime, run_finished_at: datetime) -> None`.
 
-- [ ] **Step 1: Write RED per-provider trust tests**
+**Worker budget:** Fresh Sonnet high implementer; different Sonnet high reviewer; sequential branch writing only.
 
-Pin one trust record for every started attempt, 1-based `(canary_id, side, repetition)` identity, failed/invalid attempts included, skipped executions excluded. Codex cache-read is observed only if every `turn.completed` has explicit valid `usage.cached_input_tokens`; cache-write always `unobserved`. Claude terminal cache-read is observed only on trustworthy usage and cache-write only when `cache_creation_input_tokens` is explicitly present/valid. Antigravity cache-read observed and cache-write `known_zero`.
+- [ ] **Step 1: Write RED protocol-specific trust tests**
+
+In `test_pricing_provenance.py`, define local factories for `AttemptResult`, `CanaryExecution`, and `QualificationResult`; arguments include canary, side, repetition, valid, success, usage, and `events_jsonl`. Add `test_codex_cache_read_requires_every_completed_turn_detail`, `test_codex_missing_or_malformed_completed_turn_detail_is_unobserved`, `test_codex_cache_write_is_always_unobserved`, `test_claude_trust_uses_unique_terminal_result_usage`, `test_claude_cache_creation_absence_is_unobserved`, `test_claude_explicit_zero_cache_creation_is_observed`, `test_antigravity_cache_read_observed_and_write_known_zero`, `test_usage_trust_is_local_to_attempt_and_never_changes_usage`, `test_usage_trust_covers_every_started_failed_or_invalid_attempt_once`, and `test_usage_trust_omits_skipped_executions`.
 
 ```python
-trust = build_usage_detail_trust("antigravity", result)
-assert trust[0].cache_write_input_tokens_trust == "known_zero"
+assert build_usage_detail_trust("antigravity", result) == (
+    AttemptUsageTrust(
+        canary_id="canary-a",
+        side="candidate",
+        repetition=1,
+        cached_input_tokens_trust="observed",
+        cache_write_input_tokens_trust="known_zero",
+    ),
+)
 ```
 
-- [ ] **Step 2: Write RED payload/time-precedence tests**
+- [ ] **Step 2: Write RED payload, temporal-precedence, and atomic-writer tests**
 
-Pin complete trust provenance even for unavailable outcomes. Assert aware timestamps normalize to UTC; invalid/naive/reversed window wins as `invalid_capture_time`; then model failures; then endpoint lookup: both missing -> `no_rate_card`, one missing/different IDs -> `rate_boundary_crossed`, same ID -> priced. Unavailable payload nullability/reason/source rules must match spec §8.1 exactly.
+In `test_pricing_sidecar_writer.py`, define `configured(agent: str, model: str, effort: str) -> QualockConfig` from `AgentConfig`, `ModelConfig`, and default remaining config, plus a local one-attempt result factory. Add `test_priced_payload_has_exact_schema_and_decimal_strings`, `test_unknown_model_payload_is_unavailable_with_complete_trust`, `test_malformed_claude_model_payload_has_fixed_reason_without_raw_text`, `test_invalid_capture_time_precedes_model_and_rate_failures`, `test_temporal_lookup_precedence_for_no_card_boundary_and_same_card`, `test_overlapping_catalog_runtime_lookup_fails_closed_to_no_rate_card`, `test_rate_boundary_crossed_keeps_resolved_model_source`, `test_payload_normalizes_aware_offsets_to_utc`, `test_successful_sidecar_publish_exposes_complete_sorted_bytes`, `test_existing_pricing_sidecar_is_never_overwritten`, `test_publish_failure_leaves_no_final_or_temp_file`, and `test_sidecar_capture_does_not_rewrite_existing_artifacts`.
 
-- [ ] **Step 3: Write RED atomic/no-replace writer tests**
-
-Assert serialized rates are strings, JSON is `sort_keys=True`, `indent=2`, UTF-8 with trailing newline; successful publish exposes complete final bytes; existing destination remains byte-identical; injected temp-write/fsync/link failures leave no partial `pricing.json` and clean the temp file where possible.
-- [ ] **Step 4: Write RED `execute_check` isolation tests**
-
-Monkeypatch pricing build/write to fail and prove canonical result, verdict, stdout-facing result object, and existing artifacts are unchanged except absent sidecar. Pin unknown-model as a normal unavailable sidecar when I/O succeeds. Assert existing `pricing.json` is never overwritten and that baseline creation never emits a pricing sidecar.
-
-- [ ] **Step 5: Run Task 3 RED**
-
-```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_sidecar.py tests/unit/test_commands.py -k "pricing or execute_check"
+```python
+assert set(payload) == {
+    "schema_version", "availability", "basis", "currency", "qualification_id",
+    "run_started_at", "run_finished_at", "agent", "provider", "configured_model",
+    "reasoning_effort", "canonical_model", "model_identity_source", "catalog_version",
+    "rate_card_id", "source_url", "source_checked_at", "effective_from",
+    "effective_until", "rates_per_million", "usage_detail_trust", "limitations",
+    "unavailable_reason",
+}
+assert set(payload["rates_per_million"]) == {
+    "input_uncached", "input_cached", "cache_write_lower", "cache_write_upper", "output",
+}
+assert all(
+    value is None or isinstance(value, str)
+    for value in payload["rates_per_million"].values()
+)
 ```
 
-Expected: failures because trust/payload/writer/integration are absent.
+```python
+path = write_pricing_sidecar(qualification_dir, payload)
+assert path == qualification_dir / "pricing.json"
+assert path.read_bytes() == (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode()
+assert not tuple(qualification_dir.glob(".pricing.*.tmp"))
+```
 
-- [ ] **Step 6: Implement trust, payload, atomic writer, and integration**
+- [ ] **Step 3: Write RED `execute_check` advisory-boundary tests**
 
-Keep raw-event parsing pricing-only and independent from qualification validity. Build payload from exact Task 2 catalog/model APIs. Atomic publication: create temp in qualification directory, write complete bytes, flush + `os.fsync`, `os.link(temp, final)` as same-filesystem no-replace, then unlink temp. Treat unsupported/no-replace failures as advisory. In `execute_check`, preserve existing canonical writer call/result return; the pricing boundary catches every exception.
+Reuse `setup_project`, `FakeResolver`, and `FakeBackend` in `test_commands.py`. Add `test_execute_check_captures_window_around_run_and_after_canonical_write`, `test_check_pricing_writer_failure_is_advisory`, `test_unknown_model_check_writes_unavailable_sidecar`, `test_existing_sidecar_failure_cannot_change_check_result`, and `test_standalone_baseline_does_not_write_pricing_sidecar`. In `test_cli.py`, add `test_check_pricing_writer_failure_preserves_cli_output_and_exit`: build equivalent fixed-ID checks in two temporary project roots, inject a writer failure into only one real `execute_check`, return each result through `cli.execute_check`, and assert the two `runner.invoke(app, ["check", "codex@0.151.0"])` calls have identical stdout and exit code.
 
-- [ ] **Step 7: Run Task 3 GREEN/static gates**
+```python
+def fail_write(_directory: Path, _payload: dict[str, object]) -> Path:
+    raise OSError("sensitive writer detail")
+
+monkeypatch.setattr(commands_module, "write_pricing_sidecar", fail_write)
+result = execute_check(
+    tmp_path,
+    "codex@0.151.0",
+    resolver=resolver,
+    backend=backend,
+    qualification_id="check-pricing-failure",
+)
+artifact_root = tmp_path / ".qualock/results/check-pricing-failure"
+assert result.verdict is Verdict.BLOCK
+assert {path.name for path in artifact_root.iterdir()} == {
+    "report.md",
+    "report.json",
+    "qualification.json",
+}
+```
+
+- [ ] **Step 4: Run Task 3 tests to verify RED**
 
 ```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_sidecar.py tests/unit/test_commands.py
-/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/sidecar.py src/qualock/commands.py tests/unit/test_pricing_sidecar.py tests/unit/test_commands.py
-/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing src/qualock/commands.py
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_provenance.py tests/unit/test_pricing_sidecar_writer.py tests/unit/test_commands.py tests/unit/test_cli.py -k "pricing or usage_trust or standalone_baseline"
+```
+
+Expected: FAIL because trust extraction, payload construction, atomic publication, and check integration do not exist.
+
+- [ ] **Step 5: Implement exact protocol trust**
+
+Iterate executions/attempts in result order and emit one record per actual attempt. Codex requires at least one `turn.completed` and valid explicit `usage.cached_input_tokens` on every completed turn; write trust is always unobserved. Claude uses the unique terminal top-level `type="result"` usage, observed read only with trustworthy canonical usage, and observed write only with explicit valid `cache_creation_input_tokens`. Antigravity uses terminal `event="result" -> result.usage`, observed read and protocol-known-zero write. Never mark a component trusted unless the protocol establishes read/write as mutually exclusive input partitions. Parser defects downgrade only that attempt/component and never mutate `Usage`.
+
+- [ ] **Step 6: Implement complete payload construction**
+
+Always build trust first. Validate and UTC-normalize time before model resolution. Apply endpoint precedence exactly: neither card or an overlap/programming lookup defect `no_rate_card`; one card or differing IDs `rate_boundary_crossed`; identical non-null ID `priced`. Emit exactly the Spec §6 keys, fixed basis/currency/provider, UTC ISO timestamps, catalog version, decimal strings, full material snapshot, ordered trust, limitations, and correct reason/null fields. Expected failures return complete unavailable dicts; unavailable records retain trust, have empty limitations, and no rate/source/effective/card fields. The only generated reasons are `unknown_model`, `missing_observed_model`, `inconsistent_observed_model`, `malformed_model_evidence`, `no_rate_card`, `invalid_capture_time`, and `rate_boundary_crossed`.
+
+- [ ] **Step 7: Implement atomic no-replace publication**
+
+Use `tempfile.mkstemp(prefix=".pricing.", suffix=".tmp", dir=qualification_dir)`, `os.fdopen(fd, "wb")`, write complete sorted/indented/trailing-newline bytes, `flush()`, `os.fsync()`, and `os.link(temp_path, qualification_dir / "pricing.json")`. In `finally`, unlink the temp path with `missing_ok=True`. Do not use final-path writes, `rename`, `replace`, or existence pre-checks.
+
+- [ ] **Step 8: Integrate one isolated best-effort boundary after canonical writes**
+
+```python
+def _write_pricing_sidecar_best_effort(
+    qualification_dir: Path,
+    config: QualockConfig,
+    result: QualificationResult,
+    run_started_at: datetime,
+    run_finished_at: datetime,
+) -> None:
+    try:
+        payload = build_pricing_payload(config, result, run_started_at, run_finished_at)
+        write_pricing_sidecar(qualification_dir, payload)
+    except Exception:
+        return
+```
+
+Capture start immediately before `QualificationExecutor.run`. Assign the successful canonical writer's returned directory, then capture finish and call this helper. Do not touch baseline, policy, executor, or callers already delegating to `execute_check`.
+
+- [ ] **Step 9: Run Task 3 GREEN and regressions**
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_provenance.py tests/unit/test_pricing_sidecar_writer.py tests/unit/test_commands.py tests/unit/test_cli.py tests/unit/test_storage.py
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_cli.py -k "check or monitor or bisect or github"
+/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/resolve.py src/qualock/pricing/sidecar.py src/qualock/pricing/__init__.py src/qualock/commands.py tests/unit/test_pricing_provenance.py tests/unit/test_pricing_sidecar_writer.py tests/unit/test_commands.py tests/unit/test_cli.py
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing src/qualock/commands.py tests/unit/test_pricing_provenance.py tests/unit/test_pricing_sidecar_writer.py tests/unit/test_commands.py tests/unit/test_cli.py
 git diff --check
 ```
 
-- [ ] **Step 8: Commit Task 3**
+Expected: tests PASS; injected pricing failures preserve result/verdict/canonical artifacts; static commands exit `0`.
+
+- [ ] **Step 10: Commit Task 3**
 
 ```bash
-git add src/qualock/pricing/sidecar.py src/qualock/commands.py tests/unit/test_pricing_sidecar.py tests/unit/test_commands.py
-git commit -m "feat: pin qualification pricing provenance"
+git add src/qualock/pricing/resolve.py src/qualock/pricing/sidecar.py src/qualock/pricing/__init__.py src/qualock/commands.py tests/unit/test_pricing_provenance.py tests/unit/test_pricing_sidecar_writer.py tests/unit/test_commands.py tests/unit/test_cli.py
+git commit -m "feat: capture immutable pricing provenance"
 ```
 
-Reviewer must verify sidecar failure cannot affect qualification semantics, cache trust never upgrades malformed/absent detail, and canonical artifacts are written before any sidecar attempt.
+Expected: one commit containing only the eight named files.
 
-### Task 4: Load Pricing Sidecars Tolerantly and Enforce Snapshot Consistency
+- [ ] **Step 11: Run independent Task 3 review**
+
+Give the exact commit and Spec §§6-8.2, 11, 15-16, and mapped obligations to the fresh read-only reviewer. Require checks of protocol trust, every-started-attempt coverage, temporal precedence, unavailable completeness, decimal-string JSON, post-canonical ordering, atomic/no-replace cleanup, and catch-all advisory isolation. Critical/Important findings require a scoped fix, Step 9 rerun, and exact-head re-review.
+
+### Task 4: Tolerantly Scan Sidecars and Enforce Cross-File Snapshot Consistency
 
 **Files:**
 - Modify: `src/qualock/pricing/sidecar.py`
 - Modify: `src/qualock/pricing/__init__.py`
-- Create: `tests/unit/test_pricing_loader.py`
+- Create: `tests/unit/test_pricing_sidecar_loader.py`
+- Modify: `tests/unit/test_history_loader.py`
 
 **Interfaces:**
-- Consumes `HistorySummary.loaded` only; does not rescan arbitrary report directories.
-- Produces `scan_pricing(summary: HistorySummary) -> PricingHistory` with parsed `PricingSidecar`, older/unpinned IDs, and fixed `PricingLoadFailure`s.
-- [ ] **Step 1: Write RED tolerant-reader tests**
+- Consumes: `HistorySummary.loaded` and exact owning historical attempt identities; never scans directories independently.
+- Produces: `scan_pricing(summary: HistorySummary) -> PricingHistory`.
+- Produces only fixed reasons: `unreadable pricing sidecar`, `invalid pricing JSON`, `pricing sidecar is not a JSON object`, `unsupported pricing schema`, `pricing qualification_id mismatch`, `malformed pricing sidecar`, and `rate-card snapshot mismatch`.
+- Preserves: missing sidecars as older/unpinned; valid unavailable sidecars as records; Batch #41 report loading/rendering unaffected.
 
-Create loaded-report fixtures whose qualification directories contain: no sidecar; unreadable/non-UTF-8; invalid JSON; non-object; unsupported schema; qualification ID mismatch; malformed typed/semantic fields; valid unavailable sidecar; valid priced sidecar. Assert exact fixed reasons from spec and prove malformed pricing never removes the owning report from normal `scan_results`/`qualock history` analysis.
+**Worker budget:** Fresh Sonnet medium implementer; different Sonnet medium reviewer; sequential branch writing only.
 
-- [ ] **Step 2: Write RED trust-binding validation tests**
+- [ ] **Step 1: Write RED tolerance and owner-binding tests**
 
-Add `test_pricing_scan_is_path_neutral`: build qualification directories through `Path`, include names/order that would fail slash-splitting assumptions, and assert discovery/order uses `qualification_dir`/`Path.name` without OS-specific separators.
+Define local `priced_payload(qualification_id: str = "q-1") -> dict[str, object]` with every Spec §6 field and valid Terra snapshot, plus `loaded_summary(tmp_path: Path, qualification_id: str = "q-1") -> HistorySummary` with one matching baseline repetition. Add `test_missing_pricing_sidecar_is_older_unpinned_not_failure`, `test_invalid_pricing_json_is_fixed_failure_and_sibling_loads`, `test_non_utf8_sidecar_is_unreadable_and_sibling_loads`, `test_non_object_and_unsupported_schema_have_fixed_reasons`, `test_qualification_id_mismatch_cannot_rebind_report`, `test_valid_unavailable_sidecar_loads_normally`, `test_malformed_typed_fields_collapse_to_fixed_reason`, `test_raw_exception_path_and_payload_never_enter_failure_reason`, and `test_scanner_uses_only_successfully_loaded_reports`.
 
-For the owning `HistoricalExecution`, require exact one-to-one started attempt identities. Missing, duplicate, extra, invalid side/repetition, or `known_zero` paired with nonzero persisted numeric value makes the whole pricing sidecar `malformed pricing sidecar`.
-
-- [ ] **Step 3: Write RED material-snapshot consistency tests**
-
-Two sidecars sharing one `rate_card_id` but differing in provider, canonical model, source URL/check date, effective interval, any parsed rate, or ordered limitation must both be removed from `records` and returned as `rate-card snapshot mismatch`. `catalog_version` differences alone do not trigger mismatch. Historical validation must not call today's catalog.
-
-- [ ] **Step 4: Run Task 4 RED**
-
-```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_loader.py
+```python
+assert scan_pricing(summary) == PricingHistory(
+    records=(),
+    older_unpinned_qualification_ids=("q-1",),
+    failures=(),
+)
 ```
 
-Expected: import/function failures because `scan_pricing` does not exist.
+- [ ] **Step 2: Write RED semantic, identity, and snapshot tests**
 
-- [ ] **Step 5: Implement strict parser + deterministic scanner**
+Add `test_sidecar_requires_exact_basis_currency_and_agent_provider_map`, `test_sidecar_model_source_reason_combinations_are_closed`, `test_priced_and_unavailable_nullability_are_mutually_exclusive`, `test_catalog_version_must_be_nonempty_string`, `test_sidecar_rates_reject_non_strings_nan_infinity_negative_and_reversed_range`, `test_sidecar_timestamps_require_aware_ordered_instants_and_normalize_utc`, `test_sidecar_effective_interval_must_be_ordered`, `test_missing_duplicate_or_extra_trust_identity_is_malformed`, `test_trust_repetition_is_positive_and_matches_one_based_attempt`, `test_same_rate_card_id_equal_snapshots_all_remain_records`, and `test_same_rate_card_id_different_snapshot_invalidates_every_owner`.
 
-Read `pricing.json` only for successfully loaded #41 reports. Catch only file/Unicode/JSON boundaries into fixed reasons; parse aware timestamps to UTC; parse Decimal strings under Task 2 rules; enforce priced/unavailable cross-field contracts; validate trust identities against owning report. After individual parsing, perform all-or-nothing material-snapshot conflict removal per rate-card ID.
+The conflict fixture has two reports using the same ID and changes only the second ordered limitations tuple; assert both records disappear and both owners receive `rate-card snapshot mismatch`.
 
-- [ ] **Step 6: Run Task 4 GREEN/static gates**
+- [ ] **Step 3: Pin history isolation**
+
+Add `test_missing_pricing_sidecar_does_not_hide_history_report` and `test_malformed_pricing_sidecar_does_not_hide_history_report` to `test_history_loader.py`. Each writes valid `report.json`, optionally malformed `pricing.json`, calls only `scan_results`, and expects the same loaded report with no ignored entry. Production history must not import pricing.
+
+- [ ] **Step 4: Run Task 4 tests to verify RED**
 
 ```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_loader.py tests/unit/test_history_loader.py
-/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/sidecar.py src/qualock/pricing/__init__.py tests/unit/test_pricing_loader.py
-/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_sidecar_loader.py tests/unit/test_history_loader.py -k "pricing or sidecar or history_report"
+```
+
+Expected: FAIL because `scan_pricing` and strict parsing/snapshot checks do not exist; history isolation characterizations PASS.
+
+- [ ] **Step 5: Implement report-bound tolerant parsing**
+
+For each loaded report, inspect only `qualification_dir / "pricing.json"`. Translate read/decode/JSON/object/schema defects to exact reasons. Parse exact types, enums, dates, shared Decimal rules, aware timestamps normalized to UTC, model-source/reason combinations, and priced/unavailable nullability. Require sidecar/report ID equality before construction; never expose raw exceptions or paths.
+
+- [ ] **Step 6: Enforce exact trust coverage and snapshot consistency**
+
+Build expected identities from every owning started historical attempt; reject malformed, missing, duplicate, extra, or non-positive identities. Group priced records by non-null card ID and compare exactly:
+
+```python
+(
+    sidecar.provider,
+    sidecar.canonical_model,
+    sidecar.source_url,
+    sidecar.source_checked_at,
+    sidecar.effective_from,
+    sidecar.effective_until,
+    sidecar.rates,
+    sidecar.limitations,
+)
+```
+
+Any difference removes every group member and creates one fixed failure per owner. Never call `resolve_rate_card` from the reader.
+
+- [ ] **Step 7: Run Task 4 GREEN and static gates**
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_sidecar_loader.py tests/unit/test_history_loader.py tests/unit/test_history_analysis.py tests/unit/test_history_render.py
+/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/sidecar.py src/qualock/pricing/__init__.py tests/unit/test_pricing_sidecar_loader.py tests/unit/test_history_loader.py
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing/sidecar.py tests/unit/test_pricing_sidecar_loader.py
 git diff --check
 ```
 
-- [ ] **Step 7: Commit Task 4**
+Expected: all scanner, trust, snapshot, sibling-tolerance, and history-isolation tests PASS; static commands exit `0`.
+
+- [ ] **Step 8: Commit Task 4**
 
 ```bash
-git add src/qualock/pricing/sidecar.py src/qualock/pricing/__init__.py tests/unit/test_pricing_loader.py
-git commit -m "feat: load pinned pricing history"
+git add src/qualock/pricing/sidecar.py src/qualock/pricing/__init__.py tests/unit/test_pricing_sidecar_loader.py tests/unit/test_history_loader.py
+git commit -m "feat: load pinned pricing sidecars safely"
 ```
 
-Reviewer must verify pricing sees only #41-loaded reports, never leaks paths/raw exceptions, and conflicting snapshots fail closed for every affected sidecar.
-### Task 5: Calculate Decimal Costs and Analyze Current Model/Rate Cohorts
+Expected: one commit containing only the four named files.
+
+- [ ] **Step 9: Run independent Task 4 review**
+
+Give the exact commit and Spec §§6, 8.1, 12, and mapped obligations to the fresh read-only reviewer. Require checks of fixed reasons, sibling tolerance, owner binding, trust coverage, schema states, UTC normalization, all-member snapshot invalidation, no catalog lookup, and no reverse history dependency. Critical/Important findings require a scoped fix, Step 7 rerun, and exact-head re-review.
+
+### Task 5: Calculate Decimal Samples and Analyze Exact Model/Rate Cohorts
 
 **Files:**
 - Create: `src/qualock/pricing/calculate.py`
@@ -305,67 +659,107 @@ Reviewer must verify pricing sees only #41-loaded reports, never leaks paths/raw
 - Create: `tests/unit/test_pricing_analysis.py`
 
 **Interfaces:**
-- Produces `price_execution(execution, trust_by_identity, rates) -> CostSample | None`.
-- Produces `analyze_cost(summary, pricing, current_canary_ids, *, agent, configured_model, reasoning_effort) -> CostAnalysis`.
-- Uses only pinned `PricingSidecar.rates/limitations`; must not call `resolve_rate_card` during history analysis.
+- Consumes: `HistoricalExecution`, `Mapping[tuple[str, str, int], AttemptUsageTrust]`, pinned `RateComponents`, `HistorySummary`, `PricingHistory`, current canary IDs, and exact current agent/model/effort.
+- Produces: `price_execution(execution: HistoricalExecution, trust_by_identity: Mapping[tuple[str, str, int], AttemptUsageTrust], rates: RateComponents) -> CostSample | None`.
+- Produces: `analyze_cost(summary: HistorySummary, pricing: PricingHistory, current_canary_ids: Sequence[str], *, agent: str, configured_model: str, reasoning_effort: str) -> CostAnalysis`.
+- Preserves: unrounded `Decimal` arithmetic/medians/sums and distinct qualification counting.
 
-- [ ] **Step 1: Write RED per-execution pricing tests**
+**Worker budget:** Fresh Sonnet high implementer; different Sonnet high reviewer; sequential branch writing only.
 
-Pin shared pairing prerequisite; `usage_observed`; non-negative input/output; exact trust binding; `known_zero` requires numeric zero; unobserved cache category is unpriceable even when numeric zero; cached/cache-write subtraction from total input; nonzero category with missing rate unpriceable; reasoning <= output and never double-counted; failed/invalid outcomes and malformed duration do not affect cost eligibility.
+- [ ] **Step 1: Write RED Decimal calculator tests**
+
+Define local typed/defaulted `hist_attempt`, `execution`, `trust`, and `rates` factories in `test_pricing_calculate.py`. Add `test_decimal_exact_cost_with_trusted_zero_cache_categories`, `test_cached_input_is_subtracted_from_uncached`, `test_cache_write_input_is_subtracted_from_uncached`, `test_reasoning_tokens_are_validated_but_not_double_counted`, `test_negative_or_inconsistent_subsets_are_unpriceable`, `test_unobserved_usage_is_unpriceable`, `test_nonzero_category_requires_corresponding_rate`, `test_claude_cache_write_rates_produce_lower_upper_range`, `test_explicit_zero_cache_write_is_exact_but_unobserved_zero_is_unpriceable`, `test_failed_or_invalid_outcomes_still_price`, `test_malformed_duration_does_not_block_price`, `test_skipped_execution_is_not_sample`, `test_mismatched_or_duplicate_pairing_is_not_sample`, `test_known_zero_requires_persisted_numeric_zero`, `test_missing_or_duplicate_trust_binding_is_unpriceable`, and `test_every_attempt_in_execution_must_be_priceable`.
 
 ```python
-sample = price_execution(execution, trust, rates)
-assert sample == CostSample(Decimal("0.0000225"), Decimal("0.0000225"))
+rate = RateComponents(
+    Decimal("2.00"),
+    Decimal("0.20"),
+    Decimal("2.50"),
+    Decimal("2.50"),
+    Decimal("12.00"),
+)
+sample = price_execution(execution(
+    hist_attempt("baseline", 1, input_tokens=1_000_000, output_tokens=100_000),
+    hist_attempt("candidate", 1, input_tokens=500_000, output_tokens=50_000),
+), trust_by_identity, rate)
+assert sample == CostSample(Decimal("4.8"), Decimal("4.8"))
 ```
 
-Use explicit hand-calculated fixtures for exact zero-cache, cached-input, cache-write, Claude lower/upper range, and Gemini reasoning subset cases.
+The local `execution` factory fixes `canary_id="canary-a"`; `trust_by_identity` is a literal baseline/candidate repetition-1 mapping with both states `known_zero` and persisted cache counters `0`.
 
-- [ ] **Step 2: Write RED cohort/classification tests**
+- [ ] **Step 2: Write RED cohort, counter, and median tests**
 
-Create reports spanning: older/unpinned, pricing failure, config mismatch, current-config unavailable, multiple priced cohorts, selected latest cohort, removed historical canary. Assert primary classifications are disjoint/exhaustive and counters exact; latest cohort uses greatest `run_finished_at`, lexical `(canonical_model, rate_card_id)` tie-break; no cross-model/card mixing.
+Define local `report`, `sidecar`, `priced_history`, and paired-execution factories in `test_pricing_analysis.py`; the sidecar factory accepts ID, finish instant, configured triple, canonical model, card ID, rates, and limitations. Add `test_current_agent_model_effort_must_match_exactly`, `test_canonical_models_never_mix`, `test_rate_card_ids_never_mix`, `test_latest_finished_cohort_wins`, `test_latest_tie_uses_lexicographically_smallest_cohort`, `test_removed_historical_canaries_do_not_enter_estimates`, `test_per_canary_medians_are_decimal_without_prerounding`, `test_even_decimal_median_averages_middle_values`, `test_suite_sums_unrounded_per_canary_medians`, `test_missing_current_canary_makes_suite_unavailable`, `test_missing_canaries_preserve_current_config_order`, `test_primary_classifications_are_disjoint_and_exhaustive`, `test_one_multicanary_run_counts_priceable_qualification_once`, `test_selected_run_without_samples_is_not_priceable_run`, `test_historical_samples_use_pinned_rates_not_current_catalog`, `test_selected_limitations_come_only_from_pinned_snapshot`, and `test_unavailable_sidecar_never_enters_priced_cohort`.
 
-- [ ] **Step 3: Write RED medians/suite tests**
+```python
+primary_total = (
+    analysis.selected_cohort_runs
+    + analysis.older_unpinned_runs
+    + analysis.unavailable_pricing_runs
+    + analysis.excluded_config_runs
+    + analysis.excluded_cohort_runs
+    + len(analysis.pricing_failures)
+)
+assert primary_total == len(summary.loaded)
+assert analysis.priceable_qualification_runs <= analysis.selected_cohort_runs
+```
 
-Assert Decimal odd/even medians without cent rounding, current-canary order, removed historical canaries excluded, one selected qualification contributing multiple canaries increments `priceable_qualification_runs` once, complete suite sums unrounded medians, any missing current canary yields both suite bounds `None` and config-ordered missing list.
-
-- [ ] **Step 4: Pin historical-snapshot independence**
-
-Monkeypatch/change today's catalog and prove `analyze_cost` output is byte/value-identical because it consumes pinned sidecar rates/limitations only.
-- [ ] **Step 5: Run Task 5 RED**
+- [ ] **Step 3: Run Task 5 tests to verify RED**
 
 ```bash
 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_calculate.py tests/unit/test_pricing_analysis.py
 ```
 
-Expected: failures because calculator/analysis are not implemented.
+Expected: collection/import FAIL because calculator, analysis, and exports do not exist.
 
-- [ ] **Step 6: Implement pure Decimal calculator**
+- [ ] **Step 4: Implement strict per-execution pricing**
 
-Reuse the same side/repetition pairing semantics as #41 without importing private history helpers. Compute `uncached_input = input - cached - cache_write`; reject negative/inconsistent values. Require rates only for nonzero categories. Sum all attempts in an execution into one lower/upper `CostSample`; no partial execution sample.
+Require non-empty identical baseline/candidate repetition sets and no duplicate slots. Every attempt requires observed non-negative total input/output, non-negative cached/write subsets, matching `observed`/`known_zero` trust, `known_zero -> numeric zero`, optional reasoning within output, and non-negative `uncached = input - cached - write`. A nonzero category requires its rate; zero does not. Sum every attempt with the Spec §9 formula and divide by `Decimal(1_000_000)`; any attempt defect returns `None` for the execution. Never inspect success, valid, or duration.
 
-- [ ] **Step 7: Implement deterministic cohort analysis**
+- [ ] **Step 5: Implement primary classification and exact cohort selection**
 
-Classify every successfully loaded report once under spec precedence. Match current config exactly on agent/configured model/reasoning effort before cohorting. Partition by exact `(canonical_model, rate_card_id)`, select latest/tie-break, compute current-canary samples/medians/suite, carry pinned ordered limitations, and count priceable qualification IDs distinctly.
+Join by qualification ID and apply precedence: older/unpinned; pricing failure; excluded config; current-config unavailable; non-selected priced cohort; selected priced cohort. Select current-config priced `(canonical_model, rate_card_id)` by greatest normalized finish time, then lexicographically smallest tuple. Use no current catalog data for historical resolution, rates, or limitations.
 
-- [ ] **Step 8: Run Task 5 GREEN/static gates**
+- [ ] **Step 6: Implement current-canary Decimal medians and counters**
+
+```python
+def _decimal_median(values: Sequence[Decimal]) -> Decimal | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / Decimal(2)
+```
+
+Price only current canary IDs, preserve config order, and sum unrounded medians only if all current canaries have a sample. Count a selected qualification once if at least one current execution prices. Carry selected pinned limitations unchanged.
+
+- [ ] **Step 7: Run Task 5 GREEN and static checks**
 
 ```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_calculate.py tests/unit/test_pricing_analysis.py
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_calculate.py tests/unit/test_pricing_analysis.py tests/unit/test_pricing_sidecar_loader.py
 /home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/calculate.py src/qualock/pricing/analysis.py src/qualock/pricing/__init__.py tests/unit/test_pricing_calculate.py tests/unit/test_pricing_analysis.py
-/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing tests/unit/test_pricing_calculate.py tests/unit/test_pricing_analysis.py
 git diff --check
 ```
 
-- [ ] **Step 9: Commit Task 5**
+Expected: all tests PASS; no float represents pricing data; static commands exit `0`.
+
+- [ ] **Step 8: Commit Task 5**
 
 ```bash
 git add src/qualock/pricing/calculate.py src/qualock/pricing/analysis.py src/qualock/pricing/__init__.py tests/unit/test_pricing_calculate.py tests/unit/test_pricing_analysis.py
 git commit -m "feat: analyze historical reference costs"
 ```
 
-Reviewer must verify every monetary value stays Decimal, current-cohort selection is deterministic, classification counts are exact, and no catalog re-resolution occurs for historical priced runs.
+Expected: one commit containing only the five named files.
 
-### Task 6: Render and Expose Read-Only `qualock cost`
+- [ ] **Step 9: Run independent Task 5 review**
+
+Give the exact commit and Spec §§9-11 and mapped obligations to the fresh read-only reviewer. Require checks of trust/pairing all-or-nothing gates, no outcome/duration dependency, no float/pre-rounding, exact config/cohort logic, exhaustive classification, tie-break, unique run counter, removed-canary exclusion, and pinned-only history. Critical/Important findings require a scoped fix, Step 7 rerun, and exact-head re-review.
+
+### Task 6: Render Reference Costs and Expose a Read-Only Argument-Free CLI
 
 **Files:**
 - Create: `src/qualock/pricing/render.py`
@@ -375,253 +769,522 @@ Reviewer must verify every monetary value stays Decimal, current-cohort selectio
 - Create: `tests/unit/test_pricing_render.py`
 - Modify: `tests/unit/test_commands.py`
 - Modify: `tests/unit/test_cli.py`
+- Modify: `tests/unit/test_history_render.py`
+
 **Interfaces:**
-- Produces `render_cost_text(analysis: CostAnalysis) -> str`.
-- Produces `execute_cost(root: Path) -> CostAnalysis` composing `load_project`, `scan_results`, `scan_pricing`, and `analyze_cost`.
-- Adds exactly argument-free `@app.command("cost") def cost_command() -> None` with history-style exception mapping.
+- Consumes: `CostAnalysis`, `load_project`, `project_dir`, `scan_results`, `scan_pricing`, and `analyze_cost`.
+- Produces: `render_cost_text(analysis: CostAnalysis) -> str`.
+- Produces: `execute_cost(root: Path) -> CostAnalysis` using current agent, effective model, effort, and config-order canaries.
+- Produces: exact `@app.command("cost") def cost_command() -> None` with no arguments/options.
+
+**Worker budget:** Fresh Sonnet medium implementer; different Sonnet medium reviewer; sequential branch writing only.
 
 - [ ] **Step 1: Write RED renderer tests**
 
-Pin first line `QuaLock Reference Cost`; selected cohort model/rate card block; complete exact suite, complete range, partial suite, selected cohort with zero samples, and no-selected-cohort guidance. Assert `ROUND_HALF_EVEN` cents only at final display, lower/upper independently, collapsed display range becomes one amount, per-canary order follows current config, all History counters render including zeros, pricing failures are lexical `<qualification_id>: <fixed reason>` rows only, and generic Basis/not-actual-bill text is always present.
+Define a local `cost_analysis` factory returning `CostAnalysis` with all counters/estimates explicit. Add `test_output_starts_with_exact_title`, `test_complete_suite_renders_latest_cohort_and_one_amount`, `test_distinct_range_renders_en_dash_endpoints`, `test_subcent_range_collapses_to_one_display_amount`, `test_money_rounds_only_at_final_boundary_half_even`, `test_money_never_abbreviates_thousands`, `test_partial_suite_renders_missing_count_and_config_order`, `test_selected_cohort_with_zero_samples_has_specific_guidance`, `test_no_selected_cohort_is_unavailable_not_error`, `test_basis_and_not_actual_bill_are_always_present`, `test_limitations_are_deduplicated_in_first_seen_order`, `test_every_history_counter_renders_even_when_zero`, and `test_pricing_failures_are_lexical_fixed_rows_without_paths_or_exceptions`. The last test injects absolute paths, traceback text, provider response text, and credential-shaped text into `PricingLoadFailure.qualification_dir`/unreachable fixture data and asserts none appears.
 
-- [ ] **Step 2: Pin limitations/output safety tests**
+```python
+def cost_analysis(*, suite: SuiteCostEstimate) -> CostAnalysis:
+    return CostAnalysis(
+        current_agent="codex",
+        configured_model="gpt-5.6",
+        reasoning_effort="high",
+        selected_canonical_model="gpt-5.6-sol",
+        selected_rate_card_id="openai:gpt-5.6-sol:standard:2026-09-07",
+        per_canary=(),
+        suite=suite,
+        selected_cohort_runs=1,
+        priceable_qualification_runs=1,
+        older_unpinned_runs=0,
+        unavailable_pricing_runs=0,
+        excluded_config_runs=0,
+        excluded_cohort_runs=0,
+        pricing_failures=(),
+        limitations=(),
+    )
 
-Render ordered pinned limitations deduplicated by first occurrence only when a cohort exists. Assert absolute paths, raw exceptions, provider responses, credentials, "actual bill", monetary gating, and current-catalog-derived limitation text cannot appear through renderer-owned diagnostics.
 
-- [ ] **Step 3: Write RED `execute_cost` composition tests**
-
-Assert current config values passed verbatim (`agent.name`, `model.effective_model`, `reasoning_effort`), current canary IDs preserve config order, results path is `.qualock/results`, empty suite raises exact `CommandError("no canaries found")`, and config/canary exceptions are not wrapped.
-
-Add `test_pricing_package_has_no_network_clients_or_urlopen_calls`: parse every `src/qualock/pricing/*.py` AST and fail on imports/calls from `httpx`, `requests`, `urllib.request`, or socket/network-client construction. Also run a real local-artifact `qualock cost` invocation with outbound socket connection monkeypatched to raise, proving the read-only pricing path succeeds without network access.
-
-- [ ] **Step 4: Write RED CLI/E2E safety tests**
-
-Pin valid zero history/no cohort/unavailable model exit 0; `(ConfigError, CanaryLoadError, CommandError, ValueError)` exit 3 with `markup=False`; unexpected exception exit 1; extra positional argument rejected; help contains no `--max-cost`, pricing JSON, budget/filter flags. Real cold-start must not create results dir; real invocation snapshots bytes + `st_mtime_ns` of every artifact and proves exact preservation; mixed project-protection artifacts remain silently excluded; `qualock history` golden/public output remains unchanged.
-
-Add `test_cost_real_invocation_is_path_neutral`: create the valid project/results tree under a nested `tmp_path` containing spaces, invoke the real `qualock cost` after `monkeypatch.chdir(project_root)`, and assert successful local discovery/output without any string separator assumptions. The same test must run unmodified on Linux and `windows-latest`.
-
-- [ ] **Step 5: Run Task 6 RED**
-
-```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py -k "cost or history"
+text = render_cost_text(
+    cost_analysis(
+        suite=SuiteCostEstimate(Decimal("1.424"), Decimal("1.425"), ())
+    )
+)
+assert "About $1.42" in text
+assert "$1.42–$1.42" not in text
+assert "Public standard API list rates, USD." in text
+assert "Reference estimate, not your actual bill." in text
 ```
 
-Expected: failures because renderer/command/CLI do not exist.
-- [ ] **Step 6: Implement renderer, composition, and CLI handler**
+- [ ] **Step 2: Write RED command composition tests**
 
-`render_cost_text` consumes `CostAnalysis` only and never reads files/catalog. `execute_cost` loads project, rejects empty current suite, calls `scan_results(project_dir(root) / "results")`, `scan_pricing(summary)`, then `analyze_cost(...)`. `cost_command` mirrors history's exact exit mapping and prints with `markup=False`; no flags/arguments are added.
+Add `test_execute_cost_composes_current_config_and_canary_order`, `test_execute_cost_rejects_empty_current_suite`, `test_execute_cost_missing_results_is_normal_and_does_not_create_directory`, and `test_execute_cost_uses_effective_snapshot_model` to `test_commands.py`. Monkeypatch the three pure layers and assert exact arguments.
 
-- [ ] **Step 7: Run Task 6 GREEN + path-neutral regressions**
+```python
+def execute_cost(root: Path) -> CostAnalysis:
+    config, canaries = load_project(root)
+    if not canaries:
+        raise CommandError("no canaries found")
+    summary = scan_results(project_dir(root) / "results")
+    pricing = scan_pricing(summary)
+    return analyze_cost(
+        summary,
+        pricing,
+        [canary.id for canary in canaries],
+        agent=config.agent.name,
+        configured_model=config.model.effective_model,
+        reasoning_effort=config.model.reasoning_effort,
+    )
+```
+
+- [ ] **Step 3: Write RED CLI, no-argument, zero-write, and Windows tests**
+
+Add `test_cost_zero_history_exits_zero`, `test_cost_no_matching_cohort_exits_zero_with_guidance`, `test_cost_unavailable_sidecars_exit_zero_with_truthful_guidance`, `test_cost_empty_suite_exits_3`, `test_cost_config_and_canary_errors_exit_3_without_markup`, `test_cost_unexpected_error_exits_1_with_safe_fixed_message`, `test_cost_rejects_extra_arguments_and_pricing_flags`, `test_help_has_cost_but_no_max_cost_budget_json_or_pricing_options`, `test_cost_real_cold_start_does_not_create_results`, `test_cost_real_invocation_preserves_all_artifact_bytes_and_mtimes`, `test_cost_real_invocation_succeeds_with_network_blocked`, and `test_cost_sidecar_discovery_is_path_neutral_on_windows` to `test_cli.py`. The network test monkeypatches outbound socket connection to raise and still expects exit `0`; the path-neutral test creates the complete project under a nested `tmp_path / "project with spaces"` and runs unchanged on Linux and Windows.
+
+```python
+before = {
+    p.relative_to(results): (p.read_bytes(), p.stat().st_mtime_ns)
+    for p in results.rglob("*")
+    if p.is_file()
+}
+result = runner.invoke(app, ["cost"])
+after = {
+    p.relative_to(results): (p.read_bytes(), p.stat().st_mtime_ns)
+    for p in results.rglob("*")
+    if p.is_file()
+}
+assert result.exit_code == 0
+assert after == before
+```
+
+Add `test_qualock_history_public_output_is_unchanged` to `test_history_render.py` with the current exact zero-history rendered string, and add `test_history_renderer_does_not_consult_pricing_package` using source/import inspection. Keep all existing Batch #41 renderer tests unchanged.
+
+- [ ] **Step 4: Run Task 6 tests to verify RED**
 
 ```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py -k "cost or history"
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_history_loader.py tests/unit/test_history_analysis.py tests/unit/test_history_render.py
-/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/render.py src/qualock/commands.py src/qualock/cli.py tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py tests/unit/test_history_render.py -k "cost or pricing or history_public or history_renderer"
+```
+
+Expected: FAIL because rendering, composition, CLI registration, and imports do not exist; history golden stays green.
+
+- [ ] **Step 5: Implement deterministic rendering**
+
+Start exactly `QuaLock Reference Cost`. Render selected cohort/model/card; complete, partial, zero-sample, or no-cohort state; available per-canary rows in config order; missing IDs; all seven counters; lexical fixed failure rows; deduplicated first-seen pinned limitations only when a cohort exists; and exact Basis copy. With no cohort, omit card limitations and render the spec's non-error guidance. `_format_money(lower: Decimal, upper: Decimal) -> str` quantizes both only here with `Decimal("0.01")` and `ROUND_HALF_EVEN`, emits one value for equal displayed cents, otherwise an en dash, and never abbreviates thousands.
+
+```text
+Latest observed model/rate cohort
+- Model: gpt-5.6-sol
+- Rate card: openai:gpt-5.6-sol:standard:2026-09-07
+
+Typical complete qualification
+About $1.42
+```
+
+For partial suites emit `f"Unavailable: missing monetary history for {count} current canary/canaries"`; for a selected zero-sample cohort emit `No trustworthy monetary samples are available for the current canaries in this cohort.` For no selected cohort emit `Reference cost unavailable.` plus the two spec guidance paragraphs and still exit `0`.
+
+```text
+Reference cost unavailable.
+
+No priced model/rate cohort with trustworthy pricing provenance is available
+for the current configured agent/model/effort.
+
+Run a normal qualification after pricing provenance is available;
+QuaLock will preserve it for future estimates.
+```
+
+```text
+History
+- Selected cohort runs: 0
+- Priceable matching runs: 0
+- Older/unpinned runs: 0
+- Unavailable pricing runs: 0
+- Excluded config runs: 0
+- Excluded older cohorts: 0
+- Ignored pricing sidecars: 0
+
+Basis
+Public standard API list rates, USD.
+Reference estimate, not your actual bill.
+```
+
+- [ ] **Step 6: Implement composition and exact safe CLI mapping**
+
+Use the Step 2 function unchanged, then register:
+
+```python
+@app.command("cost")
+def cost_command() -> None:
+    try:
+        analysis = execute_cost(Path.cwd())
+    except (ConfigError, CanaryLoadError, CommandError, ValueError) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception as exc:
+        console.print("unable to analyze reference cost", markup=False)
+        raise typer.Exit(1) from exc
+    console.print(render_cost_text(analysis), end="", markup=False)
+```
+
+Do not render unexpected exception text, create results, mutate artifacts, resolve historical aliases/cards, or add parameters.
+
+- [ ] **Step 7: Run Task 6 GREEN and regression gates**
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py tests/unit/test_history_loader.py tests/unit/test_history_analysis.py tests/unit/test_history_render.py
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_cli.py -k "check or history or cost or monitor or bisect"
+/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/pricing/render.py src/qualock/pricing/__init__.py src/qualock/commands.py src/qualock/cli.py tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py tests/unit/test_history_render.py
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock/pricing src/qualock/commands.py src/qualock/cli.py tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py
 git diff --check
 ```
 
-Path-neutral tests must use `Path`/`Path.name` only and contain no production split-on-`/` or Windows-only branch; the same suite runs on `windows-latest`.
+Expected: tests PASS; cold start remains absent; bytes/mtimes are unchanged; history/check/monitor/bisect regressions PASS; static commands exit `0`.
 
 - [ ] **Step 8: Commit Task 6**
 
 ```bash
-git add src/qualock/pricing/render.py src/qualock/pricing/__init__.py src/qualock/commands.py src/qualock/cli.py tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py
-git commit -m "feat: expose local reference cost estimates"
+git add src/qualock/pricing/render.py src/qualock/pricing/__init__.py src/qualock/commands.py src/qualock/cli.py tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py tests/unit/test_history_render.py
+git commit -m "feat: expose reference cost estimates"
 ```
 
-Reviewer must verify `cost` is argument-free/read-only, zero history is normal exit 0, empty suite/config errors map to 3, and history/check user-facing behavior is unchanged apart from best-effort sidecar evidence creation during checks.
+Expected: one commit containing only the eight named files.
 
-### Task 7: Verify, Review, Integrate, Document, and Close Batch #42
+- [ ] **Step 9: Run independent Task 6 review**
+
+Give the exact commit and Spec §§13-14 and mapped obligations to the fresh read-only reviewer. Require checks of title/copy, all render states/counters, pinned limitations, final-only half-even cents, safe failures, argument-free help, exit codes, zero-write/cold-start, Windows paths, and unchanged history/check output. Critical/Important findings require a scoped fix, Step 7 rerun, and exact-head re-review.
+
+### Task 7: Gate the Exact Head, Review, Push/PR/CI, Document, and Rebase-Merge
 
 **Files:**
-- Modify only after implementation-head CI is green: `README.md`, `ROADMAP.md`, `docs/superpowers/specs/2026-09-07-provider-specific-reference-cost-estimates-design.md` status line.
-- No production file changes unless a verified review/CI finding enters the formal fix loop.
+- Modify only after implementation-head CI is green: `README.md`
+- Modify only after implementation-head CI is green: `ROADMAP.md`
+- Modify only after implementation-head CI is green: `docs/superpowers/specs/2026-09-07-provider-specific-reference-cost-estimates-design.md`
+- Do not modify: `pyproject.toml`
+- Do not create: release files, tags, package-publish configuration, or `types-PyYAML` dependency changes
 
 **Interfaces:**
-- Consumes complete Tasks 1–6 implementation.
-- Produces reviewed CI-green PR merged to `main` by rebase merge.
-- Opus high is reserved exactly once for the final docs-inclusive whole-branch review.
+- Consumes: reviewed Tasks 1-6 and exact base `5800a814e295cf1126bca227bfb043438fd22c27`, with spec commit `4000ab175ab15eff7ec7ae0f68fe76a4b3abf43b` in ancestry.
+- Produces: exact-head local gates, one Sonnet high whole-implementation approval, green implementation CI, post-CI docs, docs-inclusive gates/CI, exactly one Opus high final whole-branch approval, and verified rebase merge.
+- Produces no release, tag, package publish, catalog refresh, or host-owned branch/worktree cleanup.
 
-- [ ] **Step 1: Run fresh implementation-head functional gates**
+**Worker budget:** Controller owns gates/git/docs bookkeeping; Sonnet high owns the pre-push whole-implementation review; Opus high is invoked exactly once for final docs-inclusive review; Codex is only the recorded hard-limit fallback.
+
+- [ ] **Step 1: Freeze the exact implementation head**
 
 ```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_pricing_catalog.py tests/unit/test_pricing_resolve.py tests/unit/test_pricing_sidecar.py tests/unit/test_pricing_loader.py tests/unit/test_pricing_calculate.py tests/unit/test_pricing_analysis.py tests/unit/test_pricing_render.py tests/unit/test_history_loader.py tests/unit/test_history_analysis.py tests/unit/test_history_render.py tests/unit/test_commands.py tests/unit/test_cli.py
+test "$(git merge-base 5800a814e295cf1126bca227bfb043438fd22c27 HEAD)" = "5800a814e295cf1126bca227bfb043438fd22c27"
+git merge-base --is-ancestor 4000ab175ab15eff7ec7ae0f68fe76a4b3abf43b HEAD
+test -z "$(git status --short)"
+git rev-parse HEAD | tee /tmp/b42-implementation-head.txt
+```
+
+Expected: ancestry checks and clean-worktree assertion exit `0`; the file contains one 40-character SHA. If the base intentionally moved, replace it later only after recomputing mypy/Ruff baselines and recording the decision.
+
+- [ ] **Step 2: Run fresh implementation-head GREEN tests, compileall, mypy, changed Ruff, and diff-check**
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_history_loader.py tests/unit/test_history_analysis.py tests/unit/test_history_render.py tests/unit/test_pricing_catalog.py tests/unit/test_pricing_resolve.py tests/unit/test_pricing_provenance.py tests/unit/test_pricing_sidecar_writer.py tests/unit/test_pricing_sidecar_loader.py tests/unit/test_pricing_calculate.py tests/unit/test_pricing_analysis.py tests/unit/test_pricing_render.py tests/unit/test_commands.py tests/unit/test_cli.py
 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q
 /home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src tests
-git diff --check
-```
-
-Record exact HEAD and fresh counts in the SDD ledger.
-- [ ] **Step 2: Run strict static-baseline gates**
-
-```bash
 set +e
 /home/pacmap/qualock-easy/.venv/bin/mypy --strict src/qualock > /tmp/b42-mypy.txt 2>&1
-mypy_rc=$?
+b42_mypy_rc=$?
 set -e
-test "$mypy_rc" -eq 1
+cat /tmp/b42-mypy.txt
+test "$b42_mypy_rc" -eq 1
+test "$(grep -c ': error:' /tmp/b42-mypy.txt)" -eq 3
 test "$(grep -F -c '[import-untyped]' /tmp/b42-mypy.txt)" -eq 3
-grep -F 'src/qualock/config/io.py:' /tmp/b42-mypy.txt
-grep -F 'src/qualock/canary/loader.py:' /tmp/b42-mypy.txt
-grep -F 'src/qualock/project_setup/config.py:' /tmp/b42-mypy.txt
+grep -Fx 'src/qualock/config/io.py:3: error: Library stubs not installed for "yaml"  [import-untyped]' /tmp/b42-mypy.txt
+grep -Fx 'src/qualock/canary/loader.py:4: error: Library stubs not installed for "yaml"  [import-untyped]' /tmp/b42-mypy.txt
+grep -Fx 'src/qualock/project_setup/config.py:6: error: Library stubs not installed for "yaml"  [import-untyped]' /tmp/b42-mypy.txt
+mapfile -t b42_changed_python < <(git diff --name-only --diff-filter=ACMR 5800a814e295cf1126bca227bfb043438fd22c27..HEAD -- '*.py')
+test "${#b42_changed_python[@]}" -gt 0
+/home/pacmap/qualock-easy/.venv/bin/ruff check "${b42_changed_python[@]}"
+git diff --check 5800a814e295cf1126bca227bfb043438fd22c27..HEAD
 ```
 
-Run Ruff on every #42 changed Python file and require clean. For full-tree no-new-debt, archive exact feature base `5800a814e295cf1126bca227bfb043438fd22c27`, run the same `/home/pacmap/qualock-easy/.venv/bin/ruff check .` in base archive and HEAD, and require exit code plus canonical diagnostics byte-equivalent after replacing only absolute temp-root prefixes if any.
+Expected: focused/full pytest and compileall exit `0`; mypy exits `1` with exactly the three listed errors and no other error; changed Python Ruff exits `0`; diff-check emits nothing.
 
-- [ ] **Step 3: Prove protected scopes unchanged**
+- [ ] **Step 3: Prove no new full-tree Ruff debt and no protected-scope change**
 
 ```bash
-git diff --name-only 5800a814e295cf1126bca227bfb043438fd22c27..HEAD -- \
-  src/qualock/qualification/policy.py src/qualock/run/executor.py \
-  src/qualock/agents src/qualock/evidence src/qualock/github_pr src/qualock/release_monitor \
-  src/qualock/version_bisect src/qualock/scheduler src/qualock/source \
-  src/qualock/canary src/qualock/config pyproject.toml
+git diff --name-only --diff-filter=ACMR 5800a814e295cf1126bca227bfb043438fd22c27..HEAD -- '*.py' > /tmp/b42-changed-python.txt
+b42_base_tree=$(mktemp -d)
+git archive 5800a814e295cf1126bca227bfb043438fd22c27 | tar -x -C "$b42_base_tree"
+set +e
+(cd "$b42_base_tree" && /home/pacmap/qualock-easy/.venv/bin/ruff check . --output-format=json > /tmp/b42-base-ruff.json)
+b42_base_ruff_rc=$?
+/home/pacmap/qualock-easy/.venv/bin/ruff check . --output-format=json > /tmp/b42-head-ruff.json
+b42_head_ruff_rc=$?
+set -e
+test "$b42_base_ruff_rc" -eq 1
+test "$b42_head_ruff_rc" -eq 1
+printf '%s\n' "$b42_base_tree" > /tmp/b42-base-tree.txt
+/home/pacmap/qualock-easy/.venv/bin/python - <<'PY'
+import json
+from pathlib import Path
+
+changed = set(Path("/tmp/b42-changed-python.txt").read_text().splitlines())
+base_root = Path(Path("/tmp/b42-base-tree.txt").read_text().strip())
+head_root = Path.cwd()
+
+def diagnostics(path: str, root: Path) -> set[tuple[str, int, int, str, str]]:
+    payload = json.loads(Path(path).read_text())
+    return {
+        (Path(item["filename"]).relative_to(root).as_posix(), item["location"]["row"], item["location"]["column"], item["code"], item["message"])
+        for item in payload
+        if Path(item["filename"]).relative_to(root).as_posix() not in changed
+    }
+
+new = diagnostics("/tmp/b42-head-ruff.json", head_root) - diagnostics("/tmp/b42-base-ruff.json", base_root)
+assert not new, sorted(new)
+PY
+rm -rf "$b42_base_tree"
+b42_protected_changes=$(git diff --name-only 5800a814e295cf1126bca227bfb043438fd22c27..HEAD -- \
+  .github/workflows/ci.yml \
+  pyproject.toml \
+  src/qualock/agents \
+  src/qualock/baseline \
+  src/qualock/canary/models.py \
+  src/qualock/config/models.py \
+  src/qualock/evidence \
+  src/qualock/github_pr \
+  src/qualock/project_watch \
+  src/qualock/qualification/policy.py \
+  src/qualock/release_monitor \
+  src/qualock/run/executor.py \
+  src/qualock/scheduler \
+  src/qualock/source \
+  src/qualock/version_bisect)
+test -z "$b42_protected_changes"
+! git diff 5800a814e295cf1126bca227bfb043438fd22c27..HEAD -- pyproject.toml | grep -Fq 'types-PyYAML'
 ```
 
-Expected: no output except no files at all; Task 2 model resolution lives under `pricing/`, not provider adapters/config schema.
+Expected: inline comparison finds no new diagnostic on unchanged base files; protected command emits no path; dependency guard exits `0`. Record both Ruff return codes; base debt need not make them `0`.
 
-- [ ] **Step 4: Run whole-implementation review before first push**
+- [ ] **Step 4: Run pre-push whole-implementation review**
 
-Generate a review package for exact `5800a814..HEAD`. Use Sonnet high. Include every deferred per-task Minor from the ledger. Block on Critical/Important and use SDD fix loop; do not use Opus here.
+Use one fresh read-only Sonnet high reviewer on exact diff `5800a814e295cf1126bca227bfb043438fd22c27..$(cat /tmp/b42-implementation-head.txt)` against the spec and 87-row matrix. Require `APPROVED` with no Critical/Important finding and explicit review of advisory isolation, catalog/provenance, trust, validation, Decimal/cohorts, read-only CLI, Windows, and protected scopes. A finding returns to a fresh correctly budgeted owning-task implementer, requires that task's GREEN/review loop plus Steps 1-3 on a new head, and invalidates the old whole review.
 
-- [ ] **Step 5: Push implementation head and open non-draft PR**
+- [ ] **Step 5: Push implementation head and create a non-draft PR**
 
-Only after Steps 1–4 are green/approved, push `feat/provider-cost-estimates` and create a PR whose summary states: pinned offline pricing provenance; read-only `qualock cost`; historical rates from sidecar snapshots; advisory list-rate reference not actual bill; no policy/budget/network changes. Do not claim docs delivered yet.
-- [ ] **Step 6: Require implementation-head CI green**
+```bash
+git push -u origin feat/provider-cost-estimates
+gh pr create --base main --head feat/provider-cost-estimates --title "feat: add provider-specific reference cost estimates" --body '## Summary
+- capture immutable provider/model/rate provenance beside new qualification artifacts
+- add read-only `qualock cost` with Decimal canary medians and latest exact model/rate cohorts
+- preserve provider-neutral history and qualification policy while failing closed on incomplete pricing telemetry
+
+## Honesty and boundaries
+- API-equivalent public standard list-rate reference in USD, not an invoice or actual bill
+- no monetary gating, network pricing lookup, retroactive pricing, database/index, JSON mode, or artifact rewrite
+- no policy/executor/config-schema/canary-schema changes
+
+## Verification
+- exact-head local pytest, compileall, strict mypy baseline, changed-file Ruff, no-new full-tree Ruff, diff-check, and protected-scope gates passed
+- independent task reviews and Sonnet high whole-implementation review passed
+- Linux Python 3.11/3.12/3.13 and Windows CI must be green before documentation is marked delivered'
+gh pr view --json number,state,isDraft,headRefOid,mergeable,mergeStateStatus,url
+```
+
+Expected: push succeeds; PR is open/non-draft; `headRefOid` equals `/tmp/b42-implementation-head.txt`.
+
+- [ ] **Step 6: Require implementation-head CI green before docs**
 
 ```bash
 gh pr checks --watch --fail-fast
+gh pr checks
+test "$(gh pr view --json headRefOid --jq .headRefOid)" = "$(cat /tmp/b42-implementation-head.txt)"
 ```
 
-Require Python 3.11/3.12/3.13 and `windows-test` all PASS. Any CI defect is reproduced locally, fixed by TDD through one worker, scoped-reviewed, then Steps 1–3 rerun on the new exact HEAD before a fresh CI run.
+Expected: Linux Python 3.11/3.12/3.13 and `windows-test` all PASS on the implementation SHA. CI defects require TDD root-cause fix by a fresh owning-task implementer, scoped review, Steps 1-4, new push, and fresh CI.
 
-- [ ] **Step 7: Update docs only after implementation-head CI is green**
+- [ ] **Step 7: Run documentation RED assertions only after Step 6**
 
-README: document `qualock cost` as offline API-equivalent standard public list-rate reference, not actual billing; explain exact/range/unavailable and pinned provenance. ROADMAP: move #42 to Delivered without implying gating/invoice support. Spec: change only status from Proposed to Delivered/Implemented wording consistent with actual merged feature scope.
+```bash
+! grep -nFx '### Provider-specific reference cost estimates' README.md
+grep -nFx 'Provider-specific monetary cost estimates (#42), pending, advisory only, outside qualification pass/fail policy.' ROADMAP.md
+grep -nFx -- '- **Status:** Proposed design; implementation is not authorized until this spec is reviewed' docs/superpowers/specs/2026-09-07-provider-specific-reference-cost-estimates-design.md
+```
+
+Expected: all commands exit `0`, proving docs did not claim delivery before green implementation CI.
+
+- [ ] **Step 8: Update only the approved post-CI docs**
+
+Insert this README section immediately after Historical qualification insights:
+
+````markdown
+### Provider-specific reference cost estimates
+
+After new qualifications have captured pricing provenance, inspect the current suite's historical reference estimate:
+
+```bash
+qualock cost
+```
+
+`qualock cost` is read-only and offline. It reports an API-equivalent public standard list-rate reference in USD from the exact provider/model/rate snapshots preserved with qualification artifacts. It is not your actual bill, an invoice, a subscription or seat allocation, or a qualification budget, and it never affects PASS/WARN/BLOCK/INCOMPLETE behavior. Older runs without `pricing.json` remain visible as unpinned history and are never retroactively priced.
+````
+
+Move #42 from Roadmap `Next` to `Delivered` as exactly `Provider-specific API-equivalent reference cost estimates (#42), advisory only and outside qualification pass/fail policy.` Change only the canonical spec status line to `- **Status:** Delivered`.
+
+- [ ] **Step 9: Commit docs and run docs-inclusive GREEN local gates**
 
 ```bash
 git add README.md ROADMAP.md docs/superpowers/specs/2026-09-07-provider-specific-reference-cost-estimates-design.md
-git commit -m "docs: document provider reference cost estimates"
+git commit -m "docs: document reference cost estimates"
+grep -nFx '### Provider-specific reference cost estimates' README.md
+grep -nFx 'Provider-specific API-equivalent reference cost estimates (#42), advisory only and outside qualification pass/fail policy.' ROADMAP.md
+grep -nFx -- '- **Status:** Delivered' docs/superpowers/specs/2026-09-07-provider-specific-reference-cost-estimates-design.md
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src tests
+git diff --check 5800a814e295cf1126bca227bfb043438fd22c27..HEAD
 ```
 
-- [ ] **Step 8: Re-run docs-inclusive exact-head gates and CI**
+Repeat Steps 2-3 in full on the docs-inclusive head. Expected: exact docs copy is found; full/local/static/protected gates pass; only Tasks 1-6 product/test files plus the three approved docs differ.
 
-Repeat Steps 1–3 on the docs-inclusive HEAD, push, and require a fresh all-green Linux 3.11/3.12/3.13 + Windows run. Documentation cannot bypass functional/static gates.
+- [ ] **Step 10: Push docs-inclusive head and require fresh CI**
 
-- [ ] **Step 9: Run final whole-branch review with Opus high exactly once**
+```bash
+git rev-parse HEAD | tee /tmp/b42-docs-head.txt
+git push origin feat/provider-cost-estimates
+gh pr checks --watch --fail-fast
+gh pr checks
+test "$(gh pr view --json headRefOid --jq .headRefOid)" = "$(cat /tmp/b42-docs-head.txt)"
+```
 
-Generate exact base-to-HEAD review package including code/tests/docs and all deferred ledger minors/rulings. Use Claude Opus high once. If findings exist, SDD allows one final fix wave containing all findings, one scoped re-review, then fresh exact-head local gates + fresh 4/4 CI. Do not run a second Opus whole-branch review.
+Expected: all Linux and Windows checks PASS on exactly `/tmp/b42-docs-head.txt`.
 
-- [ ] **Step 10: Identity-check and rebase-merge**
+- [ ] **Step 11: Run exactly one final Opus high review**
 
-Immediately before merge require local HEAD = remote branch head = PR `headRefOid`, latest PR checks green, PR mergeable/CLEAN. Rebase-merge without deleting the host-owned worktree branch, then verify PR `MERGED`, fetch `origin/main`, record resulting main SHA, and prove final branch tree equals merged main tree.
+Create exactly one Opus high reviewer for exact diff `5800a814e295cf1126bca227bfb043438fd22c27..$(cat /tmp/b42-docs-head.txt)`. Require `APPROVED` with no Critical/Important finding and explicit confirmation of all 87 obligations, docs, gates/CI, and no release scope. If Opus is hard-limited, create one Codex GPT-5.6 Sol high reviewer as the only recorded fallback; never run both. If the single whole-branch review finds issues, make one consolidated owning-task fix wave, obtain independent scoped Sonnet review of every fix, and rerun fresh local gates plus CI; do not create or invoke a second Opus reviewer.
 
-- [ ] **Step 11: Close Batch #42 bookkeeping**
+- [ ] **Step 12: Verify exact identity and rebase-merge**
 
-Record task commits/reviews, exact test/static/CI evidence, final review verdict/fix wave, PR/merge SHA, and all `Ruling:` lines. Before deleting only this plan's `.superpowers/sdd/...` scratch directory, surface every ruling to the user under `Rulings I made`. No tag/release/package publish.
+```bash
+b42_local_head=$(git rev-parse HEAD)
+b42_remote_head=$(git ls-remote origin refs/heads/feat/provider-cost-estimates | cut -f1)
+b42_pr_head=$(gh pr view --json headRefOid --jq .headRefOid)
+test "$b42_local_head" = "$b42_remote_head"
+test "$b42_local_head" = "$b42_pr_head"
+test "$b42_local_head" = "$(cat /tmp/b42-docs-head.txt)"
+gh pr view --json state,isDraft,headRefOid,mergeable,mergeStateStatus,url
+gh pr checks
+gh pr merge --rebase
+gh pr view --json state,mergedAt,mergeCommit,url
+git fetch origin main
+git rev-parse origin/main
+git branch -r --contains "$(gh pr view --json mergeCommit --jq .mergeCommit.oid)"
+test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse origin/main^{tree})"
+```
 
-## TDD Obligation Coverage Matrix
+Expected: three heads match; latest checks are green; PR reports `MERGED` with non-null merge commit; fetched `origin/main` contains it. Preserve branch/worktree.
 
-Every numbered obligation in spec §17 is assigned below; implementers may add more tests but must not leave any listed row uncovered.
-| # | Task | Named covering test |
-|---:|---:|---|
-| 1 | 4 | `test_missing_sidecar_is_older_unpinned` |
-| 2 | 1/4 | `test_missing_sidecar_does_not_change_history_loading` |
-| 3 | 4 | `test_invalid_pricing_json_is_cost_only_failure` |
-| 4 | 4 | `test_non_utf8_pricing_sidecar_is_tolerated` |
-| 5 | 2 | `test_claude_sonnet_alias_uses_consistent_runtime_model` |
-| 6 | 2 | `test_claude_alias_without_runtime_model_fails_closed` |
-| 7 | 2 | `test_claude_conflicting_runtime_models_fail_closed` |
-| 8 | 2 | `test_claude_exact_configured_model_requires_observed_agreement` |
-| 9 | 2 | `test_openai_exact_canonical_model_resolves` |
-| 10 | 2 | `test_openai_documented_gpt56_alias_resolves_only_to_sol` |
-| 11 | 2 | `test_openai_unknown_model_has_no_fuzzy_resolution` |
-| 12 | 2 | `test_antigravity_three_explicit_flash_aliases_resolve` |
-| 13 | 2 | `test_antigravity_unlisted_suffix_fails_closed` |
-| 14 | 2 | `test_catalog_rate_card_ids_and_snapshots_are_unique` |
-| 15 | 2 | `test_gemini_rate_boundary_selects_published_cards` |
-| 16 | 2 | `test_openai_cache_write_multiplier_and_no_fake_expiry` |
-| 17 | 5 | `test_price_execution_decimal_exact_with_trusted_zero_cache` |
-| 18 | 5 | `test_cached_input_is_not_double_counted` |
-| 19 | 5 | `test_cache_write_input_is_not_double_counted` |
-| 20 | 5 | `test_reasoning_output_is_not_double_counted` |
+- [ ] **Step 13: Close bookkeeping without a release**
+
+Record exact commits, worker/reviewer models and fallbacks, review verdicts, implementation/docs heads, local outcomes, CI identities, single final-review verdict, PR URL, and merged main SHA. Remove only Batch #42 SDD scratch state if finishing workflow explicitly authorizes it. Do not create a tag, release, package build/upload, catalog refresh, or publish artifact.
+
+## §17 TDD Coverage Matrix
+
+| §17 | Task | Named test or exact gate |
+| ---: | ---: | --- |
+| 1 | 4 | `test_missing_pricing_sidecar_is_older_unpinned_not_failure` |
+| 2 | 4 | `test_missing_pricing_sidecar_does_not_hide_history_report` |
+| 3 | 4 | `test_invalid_pricing_json_is_fixed_failure_and_sibling_loads`; `test_malformed_pricing_sidecar_does_not_hide_history_report` |
+| 4 | 4 | `test_non_utf8_sidecar_is_unreadable_and_sibling_loads` |
+| 5 | 2 | `test_claude_alias_resolves_consistent_runtime_model` |
+| 6 | 2 | `test_claude_alias_without_observation_fails_closed` |
+| 7 | 2 | `test_claude_conflicting_observations_fail_closed` |
+| 8 | 2 | `test_claude_exact_config_requires_observed_agreement` |
+| 9 | 2 | `test_openai_exact_canonical_models_resolve` |
+| 10 | 2 | `test_openai_documented_alias_resolves_only_to_sol` |
+| 11 | 2 | `test_openai_unknown_and_convenience_names_do_not_fuzzy_match` |
+| 12 | 2 | `test_antigravity_three_explicit_effort_ids_map` |
+| 13 | 2 | `test_antigravity_unlisted_suffix_does_not_resolve` |
+| 14 | 2 | `test_catalog_version_and_rate_card_ids_are_unique`; `test_rate_cards_are_frozen_material_snapshots` |
+| 15 | 2 | `test_gemini_boundary_selects_old_then_new_card` |
+| 16 | 2 | `test_openai_cards_pin_standard_rates_cache_write_multiplier_and_no_expiry` |
+| 17 | 5 | `test_decimal_exact_cost_with_trusted_zero_cache_categories` |
+| 18 | 5 | `test_cached_input_is_subtracted_from_uncached` |
+| 19 | 5 | `test_cache_write_input_is_subtracted_from_uncached` |
+| 20 | 5 | `test_reasoning_tokens_are_validated_but_not_double_counted` |
 | 21 | 5 | `test_negative_or_inconsistent_subsets_are_unpriceable` |
 | 22 | 5 | `test_unobserved_usage_is_unpriceable` |
-| 23 | 5 | `test_nonzero_category_without_rate_is_unpriceable` |
-| 24 | 5 | `test_claude_cache_write_produces_lower_upper_range` |
-| 25 | 3/5 | `test_claude_explicit_zero_cache_write_is_exact_but_absent_is_unpriceable` |
-| 26 | 5 | `test_failed_or_invalid_outcome_does_not_block_cost_sample` |
-| 27 | 5 | `test_malformed_duration_does_not_block_cost_sample` |
-| 28 | 5 | `test_skipped_execution_has_no_cost_sample` |
-| 29 | 5 | `test_incomplete_or_mismatched_pairing_is_unpriceable` |
-| 30 | 5 | `test_current_config_agent_model_effort_match_is_exact` |
-| 31 | 5 | `test_different_canonical_models_never_mix` |
-| 32 | 5 | `test_different_rate_card_ids_never_mix` |
-| 33 | 5 | `test_latest_cohort_uses_finished_at_then_lexical_tiebreak` |
-| 34 | 5 | `test_removed_historical_canaries_are_ignored` |
-| 35 | 5 | `test_per_canary_medians_are_decimal_and_unrounded` |
-| 36 | 5 | `test_even_decimal_median_uses_middle_mean` |
+| 23 | 5 | `test_nonzero_category_requires_corresponding_rate` |
+| 24 | 5 | `test_claude_cache_write_rates_produce_lower_upper_range` |
+| 25 | 5 | `test_explicit_zero_cache_write_is_exact_but_unobserved_zero_is_unpriceable` |
+| 26 | 5 | `test_failed_or_invalid_outcomes_still_price` |
+| 27 | 5 | `test_malformed_duration_does_not_block_price` |
+| 28 | 5 | `test_skipped_execution_is_not_sample` |
+| 29 | 5 | `test_mismatched_or_duplicate_pairing_is_not_sample` |
+| 30 | 5 | `test_current_agent_model_effort_must_match_exactly` |
+| 31 | 5 | `test_canonical_models_never_mix` |
+| 32 | 5 | `test_rate_card_ids_never_mix` |
+| 33 | 5 | `test_latest_finished_cohort_wins`; `test_latest_tie_uses_lexicographically_smallest_cohort` |
+| 34 | 5 | `test_removed_historical_canaries_do_not_enter_estimates` |
+| 35 | 5 | `test_per_canary_medians_are_decimal_without_prerounding` |
+| 36 | 5 | `test_even_decimal_median_averages_middle_values` |
 | 37 | 5 | `test_suite_sums_unrounded_per_canary_medians` |
 | 38 | 5 | `test_missing_current_canary_makes_suite_unavailable` |
-| 39 | 5 | `test_missing_cost_canaries_preserve_config_order` |
-| 40 | 6 | `test_money_display_uses_half_even_cents_only_at_boundary` |
-| 41 | 6 | `test_exact_range_and_collapsed_range_rendering` |
-| 42 | 6 | `test_basis_and_not_actual_bill_text_always_render` |
-| 43 | 6 | `test_pinned_limitations_render_deterministically_deduplicated` |
-| 44 | 6 | `test_cost_zero_history_exits_zero_without_creating_results` |
-| 45 | 6 | `test_cost_no_matching_priced_cohort_exits_zero_with_guidance` |
-| 46 | 6 | `test_execute_cost_empty_suite_raises_exact_command_error` |
-| 47 | 6 | `test_cost_configuration_failures_exit_3` |
-| 48 | 6 | `test_cost_real_invocation_preserves_bytes_and_mtimes` |
-| 49 | 4/6 | `test_cost_mixed_project_protection_reports_are_silently_excluded` |
-| 50 | 3 | `test_pricing_writer_failure_preserves_check_result_and_artifacts` |
+| 39 | 5 | `test_missing_canaries_preserve_current_config_order` |
+| 40 | 6 | `test_money_rounds_only_at_final_boundary_half_even` |
+| 41 | 6 | `test_complete_suite_renders_latest_cohort_and_one_amount`; `test_distinct_range_renders_en_dash_endpoints`; `test_subcent_range_collapses_to_one_display_amount` |
+| 42 | 6 | `test_basis_and_not_actual_bill_are_always_present` |
+| 43 | 6 | `test_limitations_are_deduplicated_in_first_seen_order` |
+| 44 | 6 | `test_cost_zero_history_exits_zero`; `test_cost_real_cold_start_does_not_create_results` |
+| 45 | 6 | `test_cost_no_matching_cohort_exits_zero_with_guidance` |
+| 46 | 6 | `test_execute_cost_rejects_empty_current_suite`; `test_cost_empty_suite_exits_3` |
+| 47 | 6 | `test_cost_config_and_canary_errors_exit_3_without_markup` |
+| 48 | 6 | `test_cost_real_invocation_preserves_all_artifact_bytes_and_mtimes` |
+| 49 | 4 | `test_scanner_uses_only_successfully_loaded_reports` with the existing project-protection mixed-artifact loader fixture |
+| 50 | 3 | `test_check_pricing_writer_failure_is_advisory`; `test_check_pricing_writer_failure_preserves_cli_output_and_exit`; existing `test_check_easy_output_is_exactly_preserved` regression |
 | 51 | 3 | `test_unknown_model_check_writes_unavailable_sidecar` |
-| 52 | 3 | `test_sidecar_serializes_rates_as_decimal_strings` |
-| 53 | 3 | `test_existing_sidecar_is_immutable_across_catalog_change` |
-| 54 | 1/6 | `test_qualock_history_public_output_is_unchanged` |
-| 55 | 1 | `test_batch41_analysis_values_ignore_new_usage_details` |
-| 56 | 6/7 | `test_pricing_package_has_no_network_clients_or_urlopen_calls` + protected review gate |
-| 57 | 6 | `test_cost_help_has_no_budget_json_or_pricing_options` |
-| 58 | 7 | `test/protected-scope git diff gate` |
-| 59 | 4/6 | `test_pricing_scan_is_path_neutral` + `test_cost_real_invocation_is_path_neutral` |
-| 60 | 7 | GitHub CI Python 3.11/3.12/3.13 + `windows-test` |
-| 61 | 4 | `test_pricing_qualification_id_mismatch_cannot_rebind` |
-| 62 | 2 | `test_provider_for_agent_is_exact_closed_map` |
-| 63 | 3 | `test_payload_crossing_rate_boundary_is_unavailable` |
-| 64 | 5 | `test_historical_analysis_uses_pinned_rates_not_catalog` |
-| 65 | 3 | `test_existing_pricing_sidecar_is_never_overwritten` |
-| 66 | 2 | `test_malformed_claude_model_evidence_has_fixed_reason` |
-| 67 | 2 | `test_catalog_floor_and_inclusive_effective_until` |
-| 68 | 3 | `test_codex_cache_read_requires_every_completed_turn_detail` |
-| 69 | 3 | `test_claude_cache_trust_requires_terminal_explicit_fields` |
-| 70 | 3/5 | `test_antigravity_cache_write_known_zero_requires_numeric_zero` |
-| 71 | 4 | `test_usage_detail_trust_identity_set_must_match_report_exactly` |
-| 72 | 5 | `test_unobserved_zero_cache_category_is_still_unpriceable` |
-| 73 | 4 | `test_sidecar_basis_currency_agent_provider_and_nullability_validation` |
-| 74 | 2/4 | `test_rates_reject_nonfinite_negative_nonstring_and_reversed_range` |
-| 75 | 2/4 | `test_sidecar_timestamps_and_effective_intervals_are_validated` |
-| 76 | 3 | `test_build_payload_temporal_failure_precedence` |
-| 77 | 4 | `test_same_rate_card_id_snapshot_mismatch_invalidates_all_records` |
-| 78 | 5 | `test_same_latest_timestamp_uses_lexicographically_smallest_cohort` |
-| 79 | 5 | `test_primary_classifications_and_priceable_run_count_are_exact` |
-| 80 | 6 | `test_renderer_complete_partial_and_zero_sample_selected_cohort` |
-| 81 | 6 | `test_pricing_failure_rows_are_lexical_and_non_sensitive` |
-| 82 | 3 | `test_atomic_no_replace_publication_and_temp_cleanup` |
-| 83 | 6 | `test_unavailable_sidecars_without_cohort_render_truthful_exit_zero` |
-| 84 | 2 | `test_claude_model_extraction_exact_paths_and_malformed_cases` |
-| 85 | 5/6 | `test_historical_rates_and_limitations_ignore_current_catalog` |
-| 86 | 3 | `test_usage_trust_emits_one_record_per_started_attempt_only` |
-| 87 | 3/5 | `test_unavailable_sidecar_keeps_trust_but_cannot_enter_priced_cohort` |
+| 52 | 3 | `test_priced_payload_has_exact_schema_and_decimal_strings` |
+| 53 | 3 | `test_sidecar_capture_does_not_rewrite_existing_artifacts` |
+| 54 | 6 | `test_qualock_history_public_output_is_unchanged`; `test_history_renderer_does_not_consult_pricing_package` |
+| 55 | 1 | `test_cache_and_reasoning_fields_default_to_none_and_cannot_affect_token_totals`; `test_wildly_different_cache_and_reasoning_values_do_not_change_41_results`; full Task 1 history GREEN suite |
+| 56 | 2, 6 | `test_pricing_runtime_has_no_network_client_imports`; `test_cost_real_invocation_succeeds_with_network_blocked` |
+| 57 | 6 | `test_help_has_cost_but_no_max_cost_budget_json_or_pricing_options`; `test_cost_rejects_extra_arguments_and_pricing_flags` |
+| 58 | 7 | Step 3 protected-scope exact-base diff gate |
+| 59 | 6 | `test_cost_sidecar_discovery_is_path_neutral_on_windows`; `test_cost_real_invocation_preserves_all_artifact_bytes_and_mtimes` |
+| 60 | 7 | Steps 6 and 10 Linux 3.11/3.12/3.13 plus `windows-test` CI gates |
+| 61 | 4 | `test_qualification_id_mismatch_cannot_rebind_report` |
+| 62 | 2 | `test_provider_for_agent_is_exact_and_closed` |
+| 63 | 3 | `test_rate_boundary_crossed_keeps_resolved_model_source`; `test_temporal_lookup_precedence_for_no_card_boundary_and_same_card` |
+| 64 | 5 | `test_historical_samples_use_pinned_rates_not_current_catalog` |
+| 65 | 3 | `test_existing_pricing_sidecar_is_never_overwritten`; `test_existing_sidecar_failure_cannot_change_check_result` |
+| 66 | 2, 3 | `test_claude_malformed_or_non_object_jsonl_is_malformed`; `test_malformed_claude_model_payload_has_fixed_reason_without_raw_text` |
+| 67 | 2 | `test_initial_cards_do_not_resolve_before_applicability_floor`; `test_effective_until_is_utc_date_inclusive` |
+| 68 | 3 | `test_codex_cache_read_requires_every_completed_turn_detail`; `test_codex_missing_or_malformed_completed_turn_detail_is_unobserved`; `test_codex_cache_write_is_always_unobserved` |
+| 69 | 3 | `test_claude_trust_uses_unique_terminal_result_usage`; `test_claude_cache_creation_absence_is_unobserved`; `test_claude_explicit_zero_cache_creation_is_observed` |
+| 70 | 3, 5 | `test_antigravity_cache_read_observed_and_write_known_zero`; `test_known_zero_requires_persisted_numeric_zero` |
+| 71 | 4 | `test_missing_duplicate_or_extra_trust_identity_is_malformed`; `test_trust_repetition_is_positive_and_matches_one_based_attempt` |
+| 72 | 5 | `test_explicit_zero_cache_write_is_exact_but_unobserved_zero_is_unpriceable` |
+| 73 | 4 | `test_sidecar_requires_exact_basis_currency_and_agent_provider_map`; `test_sidecar_model_source_reason_combinations_are_closed`; `test_priced_and_unavailable_nullability_are_mutually_exclusive`; `test_catalog_version_must_be_nonempty_string` |
+| 74 | 2, 4 | `test_rate_parser_accepts_only_finite_nonnegative_decimal_strings`; `test_cache_write_rates_are_both_null_or_ordered`; `test_sidecar_rates_reject_non_strings_nan_infinity_negative_and_reversed_range` |
+| 75 | 2, 4 | `test_effective_interval_rejects_from_after_until`; `test_sidecar_timestamps_require_aware_ordered_instants_and_normalize_utc`; `test_sidecar_effective_interval_must_be_ordered` |
+| 76 | 3 | `test_invalid_capture_time_precedes_model_and_rate_failures`; `test_temporal_lookup_precedence_for_no_card_boundary_and_same_card` |
+| 77 | 4 | `test_same_rate_card_id_different_snapshot_invalidates_every_owner`; `test_same_rate_card_id_equal_snapshots_all_remain_records` |
+| 78 | 5 | `test_latest_tie_uses_lexicographically_smallest_cohort` |
+| 79 | 5 | `test_primary_classifications_are_disjoint_and_exhaustive`; `test_one_multicanary_run_counts_priceable_qualification_once`; `test_selected_run_without_samples_is_not_priceable_run` |
+| 80 | 6 | `test_complete_suite_renders_latest_cohort_and_one_amount`; `test_partial_suite_renders_missing_count_and_config_order`; `test_selected_cohort_with_zero_samples_has_specific_guidance`; `test_every_history_counter_renders_even_when_zero` |
+| 81 | 6 | `test_pricing_failures_are_lexical_fixed_rows_without_paths_or_exceptions` |
+| 82 | 3 | `test_successful_sidecar_publish_exposes_complete_sorted_bytes`; `test_existing_pricing_sidecar_is_never_overwritten`; `test_publish_failure_leaves_no_final_or_temp_file` |
+| 83 | 6 | `test_cost_unavailable_sidecars_exit_zero_with_truthful_guidance` |
+| 84 | 2 | `test_claude_model_paths_missing_and_empty_are_absent`; `test_claude_non_string_model_is_malformed`; `test_claude_malformed_or_non_object_jsonl_is_malformed`; `test_claude_unknown_consistent_runtime_model_is_unknown` |
+| 85 | 5 | `test_selected_limitations_come_only_from_pinned_snapshot`; `test_historical_samples_use_pinned_rates_not_current_catalog` |
+| 86 | 3 | `test_usage_trust_covers_every_started_failed_or_invalid_attempt_once`; `test_usage_trust_omits_skipped_executions` |
+| 87 | 3, 5 | `test_unknown_model_payload_is_unavailable_with_complete_trust`; `test_unavailable_sidecar_never_enters_priced_cohort` |
 
 ## Plan Self-Review
 
-- **Spec coverage:** Tasks 1–6 cover history compatibility, exact catalog/model provenance, per-component trust, immutable sidecars, tolerant parsing, Decimal pricing/cohorts, rendering/CLI/read-only behavior. Task 7 covers static/CI/review/docs/merge gates. The matrix maps every spec §17 obligation 1–87.
-- **Dependency direction:** Task 1 remains pricing-free; Tasks 2–6 depend from pricing toward history/config/qualification data only. No task introduces a history→pricing import.
-- **Type consistency:** Every required function/dataclass from spec §11 is produced once before downstream consumption; names and signatures are identical across task Interfaces blocks.
-- **Failure isolation:** Expected model/rate unavailability becomes a sidecar payload; pricing generation/write exceptions are swallowed only at the advisory `execute_check` boundary; sidecar reader failures affect cost only.
-- **No placeholders:** Every task names exact files, RED/GREEN commands, implementation rules, commit boundary, and reviewer rejection criteria; every implementation decision needed by a worker is explicit.
-- **Model budget:** Opus is unused until the one final docs-inclusive review; whole-implementation pre-push review uses Sonnet high.
+- **Spec coverage:** Tasks 1-6 cover every architecture file, schema field, fixed reason, provider rule, trust rule, catalog card, temporal rule, calculation/cohort rule, counter, renderer state, CLI exit, writer boundary, and zero-write constraint in §§1-16. Task 7 covers §§18-19 exact-head, review, CI, docs, merge, and no-release gates.
+- **87-obligation coverage:** The matrix has one explicit row for every integer 1 through 87; each row names its task and concrete test or unavoidable CI/protected-scope gate.
+- **Type consistency:** Every required §11 dataclass and function signature is produced before use under the identical name/type. Current config consistently uses `agent.name`, `model.effective_model`, and `model.reasoning_effort`.
+- **Dependency consistency:** Pricing imports normalized history; no task adds the reverse dependency. Historical readers use pinned rates/limitations and never catalog lookup; runtime payload construction alone uses current bundled resolution.
+- **Artifact consistency:** Canonical artifacts precede the best-effort boundary; sidecars use complete temp bytes, fsync, same-filesystem no-replace link, and cleanup. Missing/malformed pricing never changes report loading.
+- **Static baseline consistency:** Exact three PyYAML mypy findings, changed-file Ruff, full-tree no-new Ruff, compileall, diff-check, protected scope, and unchanged `pyproject.toml`/no-`types-PyYAML` gates are explicit.
+- **Review/model consistency:** Tasks 1/4/6 use Sonnet medium, Tasks 2/3/5 use Sonnet high, each with fresh implementer plus different reviewer; whole implementation uses Sonnet high; exactly one Opus high reviewer is created after docs-inclusive CI; Codex GPT-5.6 Sol is hard-limit fallback only.
+- **Placeholder scan:** No deferred markers, generic error-handling steps, unnamed test requests, code ellipses, or undefined cross-task helper interfaces remain.
+- **Code-fence audit:** All Markdown fences are paired, including the four-backtick outer README block.
 
 ## Execution Handoff
 
-Execute with **Subagent-Driven Development**. The user has already delegated routine workflow decisions, so proceed continuously: create this plan's SDD workspace/ledger, run preflight interface-conflict table, dispatch one fresh implementer per task, independent review each task, formal fix loops for Critical/Important findings, then Task 7 integration gates. Stop only for the four SDD stop classes or an explicit user instruction.
+Use **Subagent-Driven Development** for Tasks 1-6 with one sequential fresh implementer and one independent read-only reviewer per task under the exact budgets above. Task 7 is controller-owned: freeze heads, run gates, obtain the pre-push Sonnet high review, wait for implementation CI before docs, obtain the single final Opus high review, and rebase-merge only after identity and fresh docs-inclusive CI verification.
