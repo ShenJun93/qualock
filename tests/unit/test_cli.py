@@ -516,6 +516,51 @@ def test_check_max_tokens_help_describes_threshold_not_hard_cap() -> None:
     assert "billing limit" in stdout.lower()
 
 
+def test_check_pricing_writer_failure_preserves_cli_output_and_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import qualock.commands as commands_module
+    from tests.unit.test_commands import FakeBackend, FakeResolver, setup_project
+
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    setup_project(root_a)
+    setup_project(root_b)
+
+    monkeypatch.setattr(commands_module, "_default_resolver", lambda agent_name: FakeResolver())
+    monkeypatch.setattr(
+        commands_module,
+        "_default_backend",
+        lambda root, config, agent_name: FakeBackend(),
+    )
+    monkeypatch.setattr(commands_module, "_qualification_id", lambda prefix: "cli-pricing-fixed")
+
+    for root in (root_a, root_b):
+        commands_module.execute_baseline(
+            root,
+            "codex@0.150.0",
+            resolver=FakeResolver(),
+            backend=FakeBackend(),
+            qualification_id="baseline-cli-pricing",
+            created_at="2026-09-08T00:00:00Z",
+        )
+
+    monkeypatch.chdir(root_a)
+    result_a = runner.invoke(app, ["check", "codex@0.151.0"])
+
+    def fail_write(_directory: Path, _payload: dict[str, object]) -> Path:
+        raise OSError("sensitive writer detail")
+
+    monkeypatch.setattr(commands_module, "write_pricing_sidecar", fail_write)
+    monkeypatch.chdir(root_b)
+    result_b = runner.invoke(app, ["check", "codex@0.151.0"])
+
+    assert result_a.exit_code == result_b.exit_code
+    assert result_a.stdout == result_b.stdout
+    assert (root_a / ".qualock/results/cli-pricing-fixed/pricing.json").is_file()
+    assert not (root_b / ".qualock/results/cli-pricing-fixed/pricing.json").exists()
+
+
 def test_monitor_checked_output_has_no_usage_line(tmp_path: Path, monkeypatch) -> None:
     from qualock.release_monitor.models import MonitorAction, MonitorOutcome
 
