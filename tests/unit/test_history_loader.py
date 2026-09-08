@@ -484,6 +484,49 @@ def test_missing_usage_detail_keys_and_malformed_usage_yield_none_for_all_three(
         assert attempt_result.reasoning_output_tokens is None
 
 
+def test_missing_pricing_sidecar_does_not_hide_history_report(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    write_report(results, "q-dir", report("q-id"))
+
+    summary = scan_results(results)
+
+    assert summary.ignored == ()
+    assert tuple(item.qualification_id for item in summary.loaded) == ("q-id",)
+
+
+def test_malformed_pricing_sidecar_does_not_hide_history_report(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    report_dir = write_report(results, "q-dir", report("q-id")).parent
+    (report_dir / "pricing.json").write_text("{not JSON", encoding="utf-8")
+
+    summary = scan_results(results)
+
+    assert summary.ignored == ()
+    assert summary.loaded == (
+        LoadedReport(
+            qualification_id="q-id",
+            qualification_dir=report_dir,
+            executions=(
+                HistoricalExecution(
+                    canary_id="canary-a",
+                    attempts=(
+                        HistoricalAttempt(
+                            side="baseline",
+                            repetition=1,
+                            success=True,
+                            valid=True,
+                            duration_ms=100,
+                            input_tokens=10,
+                            output_tokens=5,
+                            usage_observed=True,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 def test_scan_preserves_report_bytes_and_mtimes(tmp_path: Path) -> None:
     results = tmp_path / "results"
     paths = (

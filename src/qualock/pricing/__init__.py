@@ -24,7 +24,7 @@ from qualock.pricing.resolve import (
     provider_for_agent,
     resolve_model_identity,
 )
-from qualock.pricing.sidecar import write_pricing_sidecar
+from qualock.pricing.sidecar import scan_pricing, write_pricing_sidecar
 
 __all__ = [
     "CATALOG_VERSION",
@@ -46,6 +46,7 @@ __all__ = [
     "provider_for_agent",
     "resolve_model_identity",
     "resolve_rate_card",
+    "scan_pricing",
     "validate_effective_interval",
     "write_pricing_sidecar",
 ]
