@@ -197,10 +197,9 @@ def _antigravity_trust(events_jsonl: str) -> tuple[str, str]:
     if not isinstance(result_payload, dict):
         return _UNOBSERVED, _UNOBSERVED
     usage = result_payload.get("usage")
-    if not isinstance(usage, dict):
+    if not isinstance(usage, dict) or not _valid_nonneg_int(usage.get("cache_read_tokens")):
         return _UNOBSERVED, _UNOBSERVED
-    cache_read = _OBSERVED if _valid_nonneg_int(usage.get("cache_read_tokens")) else _UNOBSERVED
-    return cache_read, _KNOWN_ZERO
+    return _OBSERVED, _KNOWN_ZERO
 
 
 _TRUST_EXTRACTORS = {
