@@ -50,19 +50,32 @@ _SCRUBBED_ENV_VARS = (
 )
 
 
-# Shell-interception source-contract proof: rather than checking whether
-# three tokens ('linux', bare 'bash', process.env.PATH) merely co-occur
-# anywhere in a bundle file, this anchors each signal to a named function's
-# bounded brace scope and follows the actual call graph, so the check only
-# passes when the value chosen on Linux is bare 'bash' (not an absolute
-# path), that value is passed into a call to another function defined in the
-# same file, and that callee's body itself references process.env.PATH.
-_FUNCTION_DEF_RE = re.compile(r"function\s+(\w+)\s*\([^)]*\)\s*\{")
-_LINUX_SELECT_RE = re.compile(r"platform\(\)\s*===\s*['\"]linux['\"]")
-_BASH_ASSIGN_RE = re.compile(r"(?:var|let|const)\s+(\w+)\s*=\s*['\"]bash['\"]")
+# Shell-interception source-contract proof: anchored to the exact three
+# named units of the reviewed 0.58.0 shell-interception chain rather than a
+# generic same-function heuristic:
+#   1. getShellConfiguration selects bare, non-absolute 'bash' on Linux, and
+#      never '/bin/bash' -- checked strictly inside the Linux-specific
+#      branch's own bounded scope, not merely somewhere in the function.
+#   2. prepareExecution obtains that value from a call to
+#      getShellConfiguration(...) and forwards the same value into a call to
+#      resolveExecutable(...).
+#   3. resolveExecutable's own bounded body performs non-absolute executable
+#      resolution by referencing process.env.PATH.
+# Mere token co-occurrence -- anywhere in a function, or a bare 'bash'
+# literal outside the actual Linux branch -- is not accepted as proof.
+# Failing to find all three named units wired together this way fails
+# closed. Class/static method shorthand is accepted for each named unit;
+# no AST parser is used.
+_GET_SHELL_CONFIGURATION = "getShellConfiguration"
+_PREPARE_EXECUTION = "prepareExecution"
+_RESOLVE_EXECUTABLE = "resolveExecutable"
+
+_LINUX_IF_RE = re.compile(r"if\s*\(\s*platform\(\)\s*===?\s*['\"]linux['\"]\s*\)\s*\{")
+_ABSOLUTE_BASH_RE = re.compile(r"""['"]/bin/bash['"]""")
 _BASH_LITERAL_RE = re.compile(r"['\"]bash['\"]")
 _PATH_LOOKUP_RE = re.compile(r"process\.env\.PATH")
-_CALL_EXPR_RE = re.compile(r"(\w+)\s*\(([^()]*)\)")
+
+_UNIT_PATTERN_TEMPLATE = r"(?:function\s+|static\s+)?(?<![\w.$]){name}\s*\([^)]*\)\s*\{{"
 
 
 def _match_brace_scope(text: str, open_index: int) -> str | None:
@@ -89,49 +102,91 @@ def _match_brace_scope(text: str, open_index: int) -> str | None:
     return None
 
 
-def _extract_named_functions(text: str) -> dict[str, str]:
-    functions: dict[str, str] = {}
-    for match in _FUNCTION_DEF_RE.finditer(text):
+def _find_unit_bodies(text: str, name: str) -> list[str]:
+    pattern = re.compile(_UNIT_PATTERN_TEMPLATE.format(name=re.escape(name)))
+    bodies: list[str] = []
+    for match in pattern.finditer(text):
         brace_index = match.end() - 1
         body = _match_brace_scope(text, brace_index)
         if body is not None:
-            functions[match.group(1)] = body
-    return functions
+            bodies.append(body)
+    return bodies
 
 
-def _proves_path_resolved_bash_shell(text: str) -> bool:
-    functions = _extract_named_functions(text)
-    for body in functions.values():
-        if _function_selects_path_resolved_bash(body, functions):
-            return True
-    return False
+def _linux_branch(get_shell_configuration_body: str) -> str | None:
+    match = _LINUX_IF_RE.search(get_shell_configuration_body)
+    if match is None:
+        return None
+    return _match_brace_scope(get_shell_configuration_body, match.end() - 1)
 
 
-def _function_selects_path_resolved_bash(body: str, functions: dict[str, str]) -> bool:
-    if not _LINUX_SELECT_RE.search(body):
+def _selects_bare_bash_for_linux(get_shell_configuration_body: str) -> bool:
+    branch = _linux_branch(get_shell_configuration_body)
+    if branch is None:
+        return False
+    # A branch that selects the absolute '/bin/bash' path never proves the
+    # PATH-resolved contract, even if a bare 'bash' literal also appears
+    # elsewhere in the same branch (e.g. unused fallback code) — presence of
+    # the absolute literal fails this link closed.
+    if _ABSOLUTE_BASH_RE.search(branch):
+        return False
+    return bool(_BASH_LITERAL_RE.search(branch))
+
+
+def _obtains_and_forwards_executable(prepare_execution_body: str) -> bool:
+    get_call = re.search(
+        rf"(?:[\w$]+\.)?{_GET_SHELL_CONFIGURATION}\s*\([^)]*\)",
+        prepare_execution_body,
+    )
+    if get_call is None:
         return False
 
-    bash_vars = set(_BASH_ASSIGN_RE.findall(body))
-    has_bare_bash_literal = bool(bash_vars) or bool(_BASH_LITERAL_RE.search(body))
-    if not has_bare_bash_literal:
+    # Direct nested call: resolveExecutable(getShellConfiguration())
+    nested = re.search(
+        rf"{_RESOLVE_EXECUTABLE}\s*\(\s*(?:[\w$]+\.)?{_GET_SHELL_CONFIGURATION}\s*\([^)]*\)\s*\)",
+        prepare_execution_body,
+    )
+    if nested is not None:
+        return True
+
+    # Assignment form: `const executable = getShellConfiguration();` then
+    # `resolveExecutable(executable)` — the exact same variable must be the
+    # one forwarded, not merely some other value present in the same body.
+    assign = re.search(
+        rf"(?:const|let|var)\s+(\w+)\s*=\s*(?:[\w$]+\.)?{_GET_SHELL_CONFIGURATION}\s*\([^)]*\)",
+        prepare_execution_body,
+    )
+    if assign is None:
         return False
+    variable = re.escape(assign.group(1))
+    forward = re.search(
+        rf"{_RESOLVE_EXECUTABLE}\s*\(\s*{variable}\s*[,)]",
+        prepare_execution_body,
+    )
+    return forward is not None
 
-    # The selected bash value must actually be handed to another named
-    # function (the upstream executable resolver) whose own body performs
-    # the PATH search — mere co-occurrence within this function's scope is
-    # not proof that the value is PATH-resolved rather than used verbatim.
-    for call_match in _CALL_EXPR_RE.finditer(body):
-        callee, args = call_match.group(1), call_match.group(2)
-        callee_body = functions.get(callee)
-        if callee_body is None:
-            continue
-        references_bash_value = any(var in args for var in bash_vars) or bool(
-            _BASH_LITERAL_RE.search(args)
-        )
-        if references_bash_value and _PATH_LOOKUP_RE.search(callee_body):
-            return True
 
-    return False
+def _searches_path_for_executable(resolve_executable_body: str) -> bool:
+    return bool(_PATH_LOOKUP_RE.search(resolve_executable_body))
+
+
+def _proves_shell_interception_chain(text: str) -> bool:
+    link1 = any(
+        _selects_bare_bash_for_linux(body)
+        for body in _find_unit_bodies(text, _GET_SHELL_CONFIGURATION)
+    )
+    if not link1:
+        return False
+    link2 = any(
+        _obtains_and_forwards_executable(body)
+        for body in _find_unit_bodies(text, _PREPARE_EXECUTION)
+    )
+    if not link2:
+        return False
+    return any(
+        _searches_path_for_executable(body)
+        for body in _find_unit_bodies(text, _RESOLVE_EXECUTABLE)
+    )
 
 
 def _core_version(version: str) -> tuple[int, int, int]:
@@ -308,7 +363,7 @@ class GeminiResolver:
                 text = js_path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            if _proves_path_resolved_bash_shell(text):
+            if _proves_shell_interception_chain(text):
                 return
         raise GeminiResolveError(
             "Gemini package bundle does not prove PATH-resolved bash shell "
