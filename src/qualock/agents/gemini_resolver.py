@@ -57,8 +57,16 @@ _SCRUBBED_ENV_VARS = (
 #      never '/bin/bash' -- checked strictly inside the Linux-specific
 #      branch's own bounded scope, not merely somewhere in the function.
 #   2. prepareExecution obtains that value from a call to
-#      getShellConfiguration(...) and forwards the same value into a call to
-#      resolveExecutable(...).
+#      getShellConfiguration(...) and forwards the *same, unmodified* value
+#      into a call to resolveExecutable(...). For the assignment form
+#      (`const x = getShellConfiguration(); ...; resolveExecutable(x)`),
+#      both the declaration and the forward call must be top-level
+#      statements of prepareExecution's own body (not inside a nested
+#      block/function, which could shadow the identifier with an unrelated
+#      binding), and no write to that identifier -- reassignment,
+#      redeclaration, or a compound/increment/decrement operator -- may
+#      occur between them; otherwise the value actually forwarded is no
+#      longer provably the value getShellConfiguration returned.
 #   3. resolveExecutable's own bounded body performs non-absolute executable
 #      resolution by referencing process.env.PATH.
 # Mere token co-occurrence -- anywhere in a function, or a bare 'bash'
@@ -76,6 +84,13 @@ _BASH_LITERAL_RE = re.compile(r"['\"]bash['\"]")
 _PATH_LOOKUP_RE = re.compile(r"process\.env\.PATH")
 
 _UNIT_PATTERN_TEMPLATE = r"(?:function\s+|static\s+)?(?<![\w.$]){name}\s*\([^)]*\)\s*\{{"
+
+# Any write to a tracked identifier between obtaining and forwarding it:
+# plain/compound assignment (=, +=, -=, *=, /=, %=, **=, &&=, ||=, ??=) or
+# increment/decrement (++, --). Deliberately does not attempt to reason
+# about whether a given write preserves the original value -- any write at
+# all invalidates the forwarding proof.
+_WRITE_OPERATOR_RE = r"(?:\*\*|[-+*/%]|&&|\|\||\?\?)?=(?!=)|\+\+|--"
 
 
 def _match_brace_scope(text: str, open_index: int) -> str | None:
@@ -113,6 +128,59 @@ def _find_unit_bodies(text: str, name: str) -> list[str]:
     return bodies
 
 
+def _mask_nested_scopes(body: str) -> str:
+    # Blanks out everything inside nested brace scopes (if/else/try/nested
+    # function/object-literal bodies, etc.) so only the statements at the
+    # unit's own top level remain visible to the caller. A write or a
+    # forward call hidden inside a nested block could rebind or shadow the
+    # tracked identifier with an unrelated binding, so it must not count as
+    # dataflow proof. String-literal aware, like `_match_brace_scope`, so
+    # braces inside quotes don't desync the depth count.
+    result = list(body)
+    depth = 0
+    in_string: str | None = None
+    index = 0
+    length = len(body)
+    while index < length:
+        char = body[index]
+        if in_string is not None:
+            if char == "\\":
+                if depth > 1:
+                    result[index] = " "
+                    if index + 1 < length:
+                        result[index + 1] = " "
+                index += 2
+                continue
+            if depth > 1:
+                result[index] = " "
+            if char == in_string:
+                in_string = None
+            index += 1
+            continue
+        if char in ("'", '"', "`"):
+            in_string = char
+            if depth > 1:
+                result[index] = " "
+            index += 1
+            continue
+        if char == "{":
+            depth += 1
+            if depth > 1:
+                result[index] = " "
+            index += 1
+            continue
+        if char == "}":
+            if depth > 1:
+                result[index] = " "
+            depth -= 1
+            index += 1
+            continue
+        if depth > 1 and char != "\n":
+            result[index] = " "
+        index += 1
+    return "".join(result)
+
+
 def _linux_branch(get_shell_configuration_body: str) -> str | None:
     match = _LINUX_IF_RE.search(get_shell_configuration_body)
     if match is None:
@@ -134,14 +202,9 @@ def _selects_bare_bash_for_linux(get_shell_configuration_body: str) -> bool:
 
 
 def _obtains_and_forwards_executable(prepare_execution_body: str) -> bool:
-    get_call = re.search(
-        rf"(?:[\w$]+\.)?{_GET_SHELL_CONFIGURATION}\s*\([^)]*\)",
-        prepare_execution_body,
-    )
-    if get_call is None:
-        return False
-
-    # Direct nested call: resolveExecutable(getShellConfiguration())
+    # Direct nested call: resolveExecutable(getShellConfiguration()). No
+    # intervening variable exists to be rewritten between "obtained" and
+    # "forwarded", so this form is accepted wherever it appears in the body.
     nested = re.search(
         rf"{_RESOLVE_EXECUTABLE}\s*\(\s*(?:[\w$]+\.)?{_GET_SHELL_CONFIGURATION}\s*\([^)]*\)\s*\)",
         prepare_execution_body,
@@ -150,20 +213,31 @@ def _obtains_and_forwards_executable(prepare_execution_body: str) -> bool:
         return True
 
     # Assignment form: `const executable = getShellConfiguration();` then
-    # `resolveExecutable(executable)` — the exact same variable must be the
-    # one forwarded, not merely some other value present in the same body.
-    assign = re.search(
+    # later `resolveExecutable(executable)`. Both statements must be at the
+    # unit's own top level (nested content is blanked out first, so a
+    # declaration or forward call hidden in a nested block/function cannot
+    # satisfy this), and the bounded text between the declaration and the
+    # forward call must contain no write to that identifier -- otherwise the
+    # value actually forwarded is no longer provably the value
+    # getShellConfiguration returned.
+    top_level = _mask_nested_scopes(prepare_execution_body)
+    for assign in re.finditer(
         rf"(?:const|let|var)\s+(\w+)\s*=\s*(?:[\w$]+\.)?{_GET_SHELL_CONFIGURATION}\s*\([^)]*\)",
-        prepare_execution_body,
-    )
-    if assign is None:
-        return False
-    variable = re.escape(assign.group(1))
-    forward = re.search(
-        rf"{_RESOLVE_EXECUTABLE}\s*\(\s*{variable}\s*[,)]",
-        prepare_execution_body,
-    )
-    return forward is not None
+        top_level,
+    ):
+        variable = re.escape(assign.group(1))
+        remainder = top_level[assign.end() :]
+        forward = re.search(rf"{_RESOLVE_EXECUTABLE}\s*\(\s*{variable}\s*[,)]", remainder)
+        if forward is None:
+            continue
+        between = remainder[: forward.start()]
+        write_pattern = (
+            rf"(?:const|let|var)\s+{variable}\b|\b{variable}\b\s*(?:{_WRITE_OPERATOR_RE})"
+        )
+        if re.search(write_pattern, between):
+            continue
+        return True
+    return False
 
 
 def _searches_path_for_executable(resolve_executable_body: str) -> bool:
