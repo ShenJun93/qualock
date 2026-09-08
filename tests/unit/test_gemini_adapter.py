@@ -203,6 +203,16 @@ def test_automation_credential_uses_stdin_secret_environment_without_metadata(
         assert all("credential" not in mount.container_path for mount in invocation.mounts)
 
 
+def test_gemini_adapter_rejects_non_api_key_automation_credential() -> None:
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        GeminiAdapter(automation_credential=("GOOGLE_API_KEY", "not-allowed"))
+
+
+def test_gemini_adapter_rejects_empty_api_key_automation_credential() -> None:
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        GeminiAdapter(automation_credential=("GEMINI_API_KEY", ""))
+
+
 def test_missing_automation_credential_keeps_isolated_config_without_secret_transport(
     tmp_path: Path,
 ) -> None:

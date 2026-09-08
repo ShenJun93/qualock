@@ -106,6 +106,10 @@ def select_gemini_automation_credential(
 
 class GeminiAdapter:
     def __init__(self, automation_credential: tuple[str, str] | None = None) -> None:
+        if automation_credential is not None:
+            name, value = automation_credential
+            if name != _CREDENTIAL_ENV_NAME or not value:
+                raise ValueError("Gemini automation credential must be a non-empty GEMINI_API_KEY")
         self.automation_credential = automation_credential
 
     @property
