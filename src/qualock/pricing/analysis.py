@@ -34,6 +34,7 @@ def _select_cohort(priced_candidates: Sequence[PricingSidecar]) -> tuple[str, st
 
     cohorts: dict[tuple[str, str], list[PricingSidecar]] = {}
     for record in priced_candidates:
+        assert record.canonical_model is not None and record.rate_card_id is not None
         key = (record.canonical_model, record.rate_card_id)
         cohorts.setdefault(key, []).append(record)
 
@@ -97,6 +98,7 @@ def analyze_cost(
             unavailable_pricing_runs += 1
             continue
 
+        assert record.canonical_model is not None and record.rate_card_id is not None
         key = (record.canonical_model, record.rate_card_id)
         if key == selected_key:
             selected_cohort_runs += 1
@@ -110,6 +112,7 @@ def analyze_cost(
     priceable_ids: set[str] = set()
 
     for record in selected_records:
+        assert record.rates is not None
         loaded = loaded_by_id[record.qualification_id]
         trust_by_identity: Mapping[tuple[str, str, int], AttemptUsageTrust] = {
             (trust.canary_id, trust.side, trust.repetition): trust
@@ -143,8 +146,15 @@ def analyze_cost(
     if missing_cost_canaries:
         suite = SuiteCostEstimate(None, None, missing_cost_canaries)
     else:
-        lower_sum = sum((estimate.lower_median_usd for estimate in per_canary), Decimal(0))
-        upper_sum = sum((estimate.upper_median_usd for estimate in per_canary), Decimal(0))
+        lower_medians: list[Decimal] = []
+        upper_medians: list[Decimal] = []
+        for estimate in per_canary:
+            assert estimate.lower_median_usd is not None
+            assert estimate.upper_median_usd is not None
+            lower_medians.append(estimate.lower_median_usd)
+            upper_medians.append(estimate.upper_median_usd)
+        lower_sum = sum(lower_medians, Decimal(0))
+        upper_sum = sum(upper_medians, Decimal(0))
         suite = SuiteCostEstimate(lower_sum, upper_sum, ())
 
     selected_canonical_model, selected_rate_card_id = (

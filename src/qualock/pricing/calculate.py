@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from decimal import Decimal
+from typing import TypeGuard
 
 from qualock.history.models import HistoricalAttempt, HistoricalExecution
 from qualock.pricing.models import AttemptUsageTrust, CostSample, RateComponents
@@ -28,7 +29,7 @@ def _has_usable_pairing(execution: HistoricalExecution) -> bool:
     return bool(baseline) and baseline == candidate
 
 
-def _is_nonnegative_int(value: object) -> bool:
+def _is_nonnegative_int(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
@@ -54,7 +55,10 @@ def _price_attempt(
     if not _is_nonnegative_int(input_tokens) or not _is_nonnegative_int(output_tokens):
         return None
 
-    trust = trust_by_identity.get((canary_id, attempt.side, attempt.repetition))
+    side = attempt.side
+    repetition = attempt.repetition
+    assert side is not None and repetition is not None
+    trust = trust_by_identity.get((canary_id, side, repetition))
     if trust is None:
         return None
 
@@ -89,13 +93,17 @@ def _price_attempt(
     upper_write = _term(write, rates.cache_write_upper)
     output_term = _term(output_tokens, rates.output)
 
-    parts_lower = (lower_uncached, lower_cached, lower_write, output_term)
-    parts_upper = (lower_uncached, lower_cached, upper_write, output_term)
-    if any(part is None for part in parts_lower) or any(part is None for part in parts_upper):
+    if (
+        lower_uncached is None
+        or lower_cached is None
+        or lower_write is None
+        or upper_write is None
+        or output_term is None
+    ):
         return None
 
-    lower_total = sum(parts_lower, Decimal(0))
-    upper_total = sum(parts_upper, Decimal(0))
+    lower_total = lower_uncached + lower_cached + lower_write + output_term
+    upper_total = lower_uncached + lower_cached + upper_write + output_term
     return lower_total, upper_total
 
 
