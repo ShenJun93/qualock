@@ -205,8 +205,8 @@ def _parse_body(loaded: LoadedReport, payload: dict[str, object]) -> PricingSide
     if payload["currency"] != "USD":
         raise ValueError
 
-    agent = payload["agent"]
-    provider = payload["provider"]
+    agent = _nonempty_str(payload["agent"])
+    provider = _nonempty_str(payload["provider"])
     if _AGENT_PROVIDERS.get(agent) != provider:
         raise ValueError
 

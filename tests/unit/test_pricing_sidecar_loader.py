@@ -275,6 +275,19 @@ def test_sidecar_requires_exact_basis_currency_and_agent_provider_map(tmp_path: 
         )
 
 
+def test_sidecar_rejects_non_string_or_empty_agent_and_provider(tmp_path: Path) -> None:
+    for field, value in (("agent", ""), ("agent", 7), ("provider", ""), ("provider", 7)):
+        report = loaded_report(tmp_path, "q-1", name=f"dir-{field}-{value!r}")
+        payload = priced_payload("q-1")
+        payload[field] = value
+        write_pricing(report.qualification_dir, payload)
+        summary = HistorySummary(loaded=(report,), ignored=())
+
+        assert scan_pricing(summary).failures == (
+            PricingLoadFailure("q-1", report.qualification_dir, "malformed pricing sidecar"),
+        )
+
+
 def test_sidecar_model_source_reason_combinations_are_closed(tmp_path: Path) -> None:
     unknown_source = loaded_report(tmp_path, "q-1", name="dir-unknown-source")
     payload = priced_payload("q-1")
