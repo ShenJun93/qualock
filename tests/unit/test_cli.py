@@ -17,6 +17,7 @@ from qualock.history.models import (
 )
 from qualock.pricing.models import CostAnalysis, SuiteCostEstimate
 from qualock.qualification.models import Verdict
+from qualock.run.process import ProcessResult
 from tests.unit.test_report import sample_result
 
 runner = CliRunner()
@@ -258,6 +259,80 @@ def test_doctor_antigravity_fails_when_binary_missing_or_rejected(tmp_path: Path
     assert result.exit_code == 1
     assert "Antigravity" in result.stdout
     assert "Docker" not in result.stdout
+
+
+def test_doctor_gemini_is_offline_and_checks_node_key_docker_and_canaries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class FakeDockerRunner:
+        def daemon_ready(self) -> bool:
+            return True
+
+    process_calls: list[tuple[tuple[str, ...], float]] = []
+
+    def fake_run_process(argv, *, timeout_seconds, **kwargs):
+        process_calls.append((tuple(argv), timeout_seconds))
+        return ProcessResult(0, "v20.19.0\n", "", 0.01, False)
+
+    def provider_call_forbidden(*args, **kwargs):
+        raise AssertionError("Gemini doctor must not resolve or call a provider")
+
+    monkeypatch.chdir(tmp_path)
+    config = SimpleNamespace(agent=SimpleNamespace(name="gemini"))
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (config, [object()]))
+    monkeypatch.setattr("qualock.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("qualock.cli.DockerRunner", FakeDockerRunner)
+    monkeypatch.setattr("qualock.cli.run_process", fake_run_process)
+    monkeypatch.setattr("qualock.agents.gemini_resolver.GeminiResolver.resolve", provider_call_forbidden)
+    monkeypatch.setattr(
+        "qualock.agents.gemini_resolver.GeminiResolver.latest_version",
+        provider_call_forbidden,
+    )
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert process_calls == [(('node', '--version'), 10)]
+    assert "Git" in result.stdout
+    assert "npm" in result.stdout
+    assert "Docker" in result.stdout
+    assert "Node >=20" in result.stdout
+    assert "Gemini key" in result.stdout
+    assert "Canaries" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("node_result", "api_key", "failed_check"),
+    [
+        (ProcessResult(0, "v19.9.0\n", "", 0.01, False), "key", "Node >=20"),
+        (ProcessResult(0, "v20.0.0\n", "", 0.01, False), "", "Gemini key"),
+    ],
+)
+def test_doctor_gemini_fails_closed_for_old_node_or_empty_key(
+    tmp_path: Path,
+    monkeypatch,
+    node_result: ProcessResult,
+    api_key: str,
+    failed_check: str,
+) -> None:
+    class FakeDockerRunner:
+        def daemon_ready(self) -> bool:
+            return True
+
+    monkeypatch.chdir(tmp_path)
+    config = SimpleNamespace(agent=SimpleNamespace(name="gemini"))
+    monkeypatch.setattr("qualock.cli.load_project", lambda root: (config, [object()]))
+    monkeypatch.setattr("qualock.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("qualock.cli.DockerRunner", FakeDockerRunner)
+    monkeypatch.setattr("qualock.cli.run_process", lambda *args, **kwargs: node_result)
+    monkeypatch.setenv("GEMINI_API_KEY", api_key)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert failed_check in result.stdout
+    assert f"{failed_check:<10} FAIL" in result.stdout
 
 
 def test_check_easy_renders_workflow_name_literally(tmp_path: Path, monkeypatch) -> None:
@@ -777,6 +852,37 @@ def test_cost_unavailable_sidecars_exit_zero_with_truthful_guidance(
     assert result.exit_code == 0
     assert "No trustworthy monetary samples are available" in result.stdout
     assert "cohort." in result.stdout
+
+
+def test_cost_unavailable_gemini_history_exits_zero_without_writes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    analysis = CostAnalysis(
+        current_agent="gemini",
+        configured_model="gemini-3.8-flash",
+        reasoning_effort="provider-default",
+        selected_canonical_model=None,
+        selected_rate_card_id=None,
+        per_canary=(),
+        suite=SuiteCostEstimate(None, None, ()),
+        selected_cohort_runs=0,
+        priceable_qualification_runs=0,
+        older_unpinned_runs=0,
+        unavailable_pricing_runs=1,
+        excluded_config_runs=0,
+        excluded_cohort_runs=0,
+        pricing_failures=(),
+        limitations=(),
+    )
+    monkeypatch.setattr("qualock.cli.execute_cost", lambda root: analysis)
+    before = tuple(tmp_path.rglob("*"))
+
+    result = runner.invoke(app, ["cost"])
+
+    assert result.exit_code == 0
+    assert "Reference cost unavailable." in result.stdout
+    assert tuple(tmp_path.rglob("*")) == before
 
 
 def test_cost_empty_suite_exits_3(tmp_path: Path, monkeypatch) -> None:

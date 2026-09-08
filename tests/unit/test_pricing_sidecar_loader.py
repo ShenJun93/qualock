@@ -94,6 +94,31 @@ def unavailable_payload(
     }
 
 
+def gemini_priced_payload(qualification_id: str = "q-1") -> dict[str, object]:
+    payload = priced_payload(qualification_id)
+    payload.update(
+        {
+            "agent": "gemini",
+            "provider": "google",
+            "configured_model": "gemini-3.8-flash",
+            "reasoning_effort": "provider-default",
+            "canonical_model": "gemini-3.8-flash",
+            "model_identity_source": "runtime_observed",
+            "rate_card_id": "google:gemini-3.8-flash:standard:through-2026-12-31",
+            "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+            "effective_until": "2026-12-31",
+            "rates_per_million": {
+                "input_uncached": "0.75",
+                "input_cached": "0.075",
+                "cache_write_lower": None,
+                "cache_write_upper": None,
+                "output": "3.75",
+            },
+        }
+    )
+    return payload
+
+
 def loaded_report(
     tmp_path: Path, qualification_id: str = "q-1", *, name: str | None = None
 ) -> LoadedReport:
@@ -273,6 +298,32 @@ def test_sidecar_requires_exact_basis_currency_and_agent_provider_map(tmp_path: 
         assert scan_pricing(summary).failures == (
             PricingLoadFailure("q-1", report.qualification_dir, "malformed pricing sidecar"),
         )
+
+
+def test_sidecar_accepts_gemini_google_pair_and_rejects_mismatch(
+    tmp_path: Path,
+) -> None:
+    valid = loaded_report(tmp_path, "q-valid")
+    write_pricing(valid.qualification_dir, gemini_priced_payload("q-valid"))
+
+    valid_history = scan_pricing(HistorySummary(loaded=(valid,), ignored=()))
+
+    assert valid_history.failures == ()
+    assert valid_history.records[0].agent == "gemini"
+    assert valid_history.records[0].provider == "google"
+
+    mismatched = loaded_report(tmp_path, "q-mismatch")
+    payload = gemini_priced_payload("q-mismatch")
+    payload["provider"] = "anthropic"
+    write_pricing(mismatched.qualification_dir, payload)
+
+    assert scan_pricing(
+        HistorySummary(loaded=(mismatched,), ignored=())
+    ).failures == (
+        PricingLoadFailure(
+            "q-mismatch", mismatched.qualification_dir, "malformed pricing sidecar"
+        ),
+    )
 
 
 def test_sidecar_rejects_non_string_or_empty_agent_and_provider(tmp_path: Path) -> None:
