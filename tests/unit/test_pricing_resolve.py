@@ -1,5 +1,12 @@
+from datetime import UTC, datetime
+
+from qualock.config.models import QualockConfig
 from qualock.pricing.models import ModelIdentity
-from qualock.pricing.resolve import provider_for_agent, resolve_model_identity
+from qualock.pricing.resolve import (
+    build_pricing_payload,
+    provider_for_agent,
+    resolve_model_identity,
+)
 from qualock.qualification.models import (
     AttemptResult,
     CanaryExecution,
@@ -39,6 +46,7 @@ def test_provider_for_agent_is_exact_and_closed() -> None:
     assert provider_for_agent("codex") == "openai"
     assert provider_for_agent("claude") == "anthropic"
     assert provider_for_agent("antigravity") == "google"
+    assert provider_for_agent("gemini") == "google"
     assert provider_for_agent("gpt") is None
     assert provider_for_agent("") is None
 
@@ -188,3 +196,135 @@ def test_antigravity_unlisted_suffix_does_not_resolve() -> None:
     assert resolve_model_identity("antigravity", "gemini-3.8-flash", empty) == ModelIdentity(
         None, "unavailable", "unknown_model"
     )
+
+
+def test_gemini_agreeing_init_and_terminal_models_are_runtime_observed() -> None:
+    events = (
+        '{"type":"init","model":"gemini-3.8-flash"}\n'
+        '{"type":"result","stats":{"models":{"gemini-3.8-flash":{}}}}\n'
+    )
+
+    assert resolve_model_identity(
+        "gemini", "gemini-3.8-flash", qualification_with_events(events)
+    ) == ModelIdentity("gemini-3.8-flash", "runtime_observed", None)
+
+
+def test_gemini_model_observations_must_agree_across_attempts() -> None:
+    result = resolve_model_identity(
+        "gemini",
+        "gemini-3.8-flash",
+        qualification_with_events(
+            '{"type":"init","model":"gemini-3.8-flash"}\n',
+            '{"type":"result","stats":{"models":{"gemini-other":{}}}}\n',
+        ),
+    )
+
+    assert result == ModelIdentity(
+        None, "unavailable", "inconsistent_observed_model"
+    )
+
+
+def test_gemini_without_runtime_model_observation_fails_closed() -> None:
+    result = resolve_model_identity(
+        "gemini", "gemini-3.8-flash", qualification_with_events("")
+    )
+
+    assert result == ModelIdentity(None, "unavailable", "missing_observed_model")
+
+
+def test_gemini_malformed_model_evidence_fails_closed() -> None:
+    malformed_streams = (
+        "not json\n",
+        '{"type":"init","model":7}\n',
+        '{"type":"result","stats":null}\n',
+        '{"type":"result","stats":{"models":[]}}\n',
+        '{"type":"result","stats":{"models":{"":{}}}}\n',
+    )
+
+    for events in malformed_streams:
+        result = resolve_model_identity(
+            "gemini", "gemini-3.8-flash", qualification_with_events(events)
+        )
+        assert result == ModelIdentity(
+            None, "unavailable", "malformed_model_evidence"
+        )
+
+
+def test_gemini_conflicting_init_and_terminal_models_fail_closed() -> None:
+    events = (
+        '{"type":"init","model":"gemini-3.8-flash"}\n'
+        '{"type":"result","stats":{"models":{"gemini-other":{}}}}\n'
+    )
+
+    result = resolve_model_identity(
+        "gemini", "gemini-3.8-flash", qualification_with_events(events)
+    )
+
+    assert result == ModelIdentity(
+        None, "unavailable", "inconsistent_observed_model"
+    )
+
+
+def test_gemini_unknown_observed_model_never_uses_configured_alias() -> None:
+    result = resolve_model_identity(
+        "gemini",
+        "gemini-3.8-flash-latest",
+        qualification_with_events(
+            '{"type":"init","model":"gemini-3.8-flash-latest"}\n'
+        ),
+    )
+
+    assert result == ModelIdentity(None, "unavailable", "unknown_model")
+
+
+def test_gemini_exact_config_must_agree_with_observed_model() -> None:
+    result = resolve_model_identity(
+        "gemini",
+        "gemini-3.8-flash",
+        qualification_with_events(
+            '{"type":"init","model":"gemini-nonexistent-9"}\n'
+        ),
+    )
+
+    assert result == ModelIdentity(
+        None, "unavailable", "inconsistent_observed_model"
+    )
+
+
+def test_gemini_pricing_payload_uses_runtime_model_and_pinned_google_card() -> None:
+    config = QualockConfig.model_validate(
+        {
+            "agent": {"name": "gemini"},
+            "model": {
+                "id": "gemini-3.8-flash",
+                "reasoning_effort": "provider-default",
+            },
+        }
+    )
+    events = (
+        '{"type":"init","model":"gemini-3.8-flash"}\n'
+        '{"type":"result","stats":{"cached":0,'
+        '"models":{"gemini-3.8-flash":{}}}}\n'
+    )
+    instant = datetime(2026, 9, 8, tzinfo=UTC)
+
+    payload = build_pricing_payload(
+        config, qualification_with_events(events), instant, instant
+    )
+
+    assert payload["availability"] == "priced"
+    assert payload["provider"] == "google"
+    assert payload["canonical_model"] == "gemini-3.8-flash"
+    assert payload["model_identity_source"] == "runtime_observed"
+    assert payload["rate_card_id"] == (
+        "google:gemini-3.8-flash:standard:through-2026-12-31"
+    )
+    assert payload["usage_detail_trust"] == [
+        {
+            "canary_id": "canary-a",
+            "side": "baseline",
+            "repetition": 1,
+            "cached_input_tokens_trust": "observed",
+            "cache_write_input_tokens_trust": "unobserved",
+        }
+    ]

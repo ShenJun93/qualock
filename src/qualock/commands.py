@@ -15,6 +15,8 @@ from qualock.agents.base import AgentAdapter, AgentBinary
 from qualock.agents.claude import ClaudeAdapter, select_claude_automation_credential
 from qualock.agents.claude_resolver import ClaudeResolver
 from qualock.agents.codex import CodexAdapter
+from qualock.agents.gemini import GeminiAdapter, select_gemini_automation_credential
+from qualock.agents.gemini_resolver import GeminiResolver
 from qualock.agents.releases import default_agent_cache_root
 from qualock.agents.resolver import CodexResolver
 from qualock.baseline.io import (
@@ -60,13 +62,13 @@ def parse_agent_spec(spec: str) -> tuple[str, str]:
     if "@" not in spec:
         raise CommandError(
             "agent spec must look like codex@<version>, claude@<version>, "
-            "or antigravity@<version>"
+            "antigravity@<version>, or gemini@<version>"
         )
     name, version = spec.rsplit("@", 1)
-    if name not in {"codex", "claude", "antigravity"} or not version:
+    if name not in {"codex", "claude", "antigravity", "gemini"} or not version:
         raise CommandError(
             "supported agents are codex@<version>, claude@<version>, "
-            "and antigravity@<version>"
+            "antigravity@<version>, and gemini@<version>"
         )
     return name, version
 
@@ -78,6 +80,8 @@ def agent_display_name(agent_name: str) -> str:
         return "Claude Code"
     if agent_name == "antigravity":
         return "Antigravity"
+    if agent_name == "gemini":
+        return "Gemini CLI"
     raise CommandError(f"unsupported agent: {agent_name}")
 
 
@@ -94,6 +98,8 @@ def _default_resolver(agent_name: str) -> Resolver:
         return ClaudeResolver(cache)
     if agent_name == "antigravity":
         return AntigravityResolver.from_environment()
+    if agent_name == "gemini":
+        return GeminiResolver(cache)
     raise CommandError(f"unsupported agent: {agent_name}")
 
 
@@ -134,6 +140,11 @@ def _default_backend(
                 "`claude setup-token` and export CLAUDE_CODE_OAUTH_TOKEN)"
             )
         adapter = ClaudeAdapter(automation_credential=credential)
+    elif agent_name == "gemini":
+        credential = select_gemini_automation_credential(os.environ)
+        if credential is None:
+            raise CommandError("Gemini qualification requires GEMINI_API_KEY")
+        adapter = GeminiAdapter(automation_credential=credential)
     else:
         raise CommandError(f"unsupported agent: {agent_name}")
 

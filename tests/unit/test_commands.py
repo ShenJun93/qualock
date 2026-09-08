@@ -10,7 +10,9 @@ import qualock.commands as commands_module
 from qualock.agents.antigravity import AntigravityAdapter
 from qualock.agents.antigravity_resolver import AntigravityResolver
 from qualock.agents.base import AgentBinary
-from qualock.baseline.io import read_baseline_lock, write_baseline_lock
+from qualock.agents.gemini import GeminiAdapter
+from qualock.agents.gemini_resolver import GeminiResolver
+from qualock.baseline.io import BaselineStaleError, read_baseline_lock, write_baseline_lock
 from qualock.canary.loader import CanaryLoadError
 from qualock.commands import (
     BaselineUnstableError,
@@ -85,6 +87,8 @@ def setup_project(root: Path, *, agent_name: str = "codex", model_id: str | None
         if model_id is not None:
             payload["model"]["id"] = model_id
             payload["model"]["snapshot"] = None
+        if agent_name == "gemini":
+            payload["model"]["reasoning_effort"] = "provider-default"
         config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     grader = ub / "canaries/grader.patch"
     grader.write_text("patch", encoding="utf-8")
@@ -132,6 +136,22 @@ def test_parse_agent_spec_accepts_antigravity() -> None:
 
 def test_antigravity_display_name() -> None:
     assert agent_display_name("antigravity") == "Antigravity"
+
+
+def test_gemini_agent_spec_and_display_name() -> None:
+    assert parse_agent_spec("gemini@0.58.0") == ("gemini", "0.58.0")
+    assert agent_display_name("gemini") == "Gemini CLI"
+
+
+def test_default_resolver_gemini_uses_shared_cache_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(commands_module, "default_agent_cache_root", lambda: tmp_path)
+
+    resolver = _default_resolver("gemini")
+
+    assert isinstance(resolver, GeminiResolver)
+    assert resolver.cache_root == tmp_path
 
 
 def test_default_resolver_antigravity_uses_path_lookup_by_default(
@@ -215,6 +235,106 @@ def test_default_claude_backend_uses_documented_credential_precedence(
         "ANTHROPIC_AUTH_TOKEN",
         "bearer",
     )
+
+
+def test_default_gemini_backend_requires_nonempty_api_key_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path, agent_name="gemini", model_id="gemini-3.8-flash")
+    config, _ = load_project(tmp_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-api")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/google.json")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "project")
+
+    with pytest.raises(CommandError, match="Gemini qualification requires GEMINI_API_KEY"):
+        _default_backend(tmp_path, config, "gemini")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    with pytest.raises(CommandError, match="Gemini qualification requires GEMINI_API_KEY"):
+        _default_backend(tmp_path, config, "gemini")
+
+
+def test_default_gemini_backend_passes_only_gemini_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path, agent_name="gemini", model_id="gemini-3.8-flash")
+    config, _ = load_project(tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv("GOOGLE_API_KEY", "ignored")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/ignored.json")
+
+    backend = _default_backend(tmp_path, config, "gemini")
+
+    assert isinstance(backend.agent_adapter, GeminiAdapter)
+    assert backend.agent_adapter.automation_credential == (
+        "GEMINI_API_KEY",
+        "gemini-secret",
+    )
+
+
+def test_gemini_baseline_and_check_pin_exact_agent_and_versions(tmp_path: Path) -> None:
+    setup_project(tmp_path, agent_name="gemini", model_id="gemini-3.8-flash")
+    resolver = FakeResolver("gemini")
+    baseline_backend = FakeBackend({"0.58.0"})
+    lock = execute_baseline(
+        tmp_path,
+        "gemini@0.58.0",
+        resolver=resolver,
+        backend=baseline_backend,
+        qualification_id="gemini-baseline",
+        created_at="2026-09-08T00:00:00Z",
+    )
+
+    result = execute_check(
+        tmp_path,
+        "gemini@0.59.0",
+        resolver=resolver,
+        backend=FakeBackend({"0.58.0"}),
+        qualification_id="gemini-check",
+    )
+
+    assert lock.agent.name == "gemini"
+    assert lock.agent.version == "0.58.0"
+    assert lock.model.reasoning_effort == "provider-default"
+    assert result.baseline_version == "0.58.0"
+    assert result.candidate_version == "0.59.0"
+    assert resolver.calls == ["0.58.0", "0.58.0", "0.59.0"]
+
+
+def test_gemini_check_rejects_baseline_sha_before_candidate_resolution(
+    tmp_path: Path,
+) -> None:
+    setup_project(tmp_path, agent_name="gemini", model_id="gemini-3.8-flash")
+    execute_baseline(
+        tmp_path,
+        "gemini@0.58.0",
+        resolver=FakeResolver("gemini"),
+        backend=FakeBackend({"0.58.0"}),
+        qualification_id="gemini-baseline-stale",
+        created_at="2026-09-08T00:00:00Z",
+    )
+    lock_path = tmp_path / ".qualock/baseline.lock"
+    lock = read_baseline_lock(lock_path)
+    write_baseline_lock(
+        lock_path,
+        lock.model_copy(
+            update={
+                "agent": lock.agent.model_copy(update={"binary_sha256": "sha-tampered"})
+            }
+        ),
+    )
+    resolver = FakeResolver("gemini")
+
+    with pytest.raises(BaselineStaleError, match="baseline binary fingerprint changed"):
+        execute_check(
+            tmp_path,
+            "gemini@0.59.0",
+            resolver=resolver,
+            backend=FakeBackend({"0.58.0"}),
+        )
+
+    assert resolver.calls == ["0.58.0"]
 
 
 def test_baseline_writes_known_good_behavior_lock(tmp_path: Path) -> None:

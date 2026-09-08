@@ -22,7 +22,12 @@ BASE_RATES = RateComponents(
     Decimal("2.00"), Decimal("0.20"), Decimal("2.50"), Decimal("2.50"), Decimal("12.00")
 )
 FINISH = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
-_PROVIDER_BY_AGENT = {"codex": "openai", "claude": "anthropic", "antigravity": "google"}
+_PROVIDER_BY_AGENT = {
+    "codex": "openai",
+    "claude": "anthropic",
+    "antigravity": "google",
+    "gemini": "google",
+}
 _CURRENT = {"agent": "codex", "configured_model": "gpt-5.6-terra", "reasoning_effort": "high"}
 
 
@@ -136,6 +141,42 @@ def test_current_agent_model_effort_must_match_exactly() -> None:
 
     assert analysis.selected_cohort_runs == 1
     assert analysis.excluded_config_runs == 1
+
+
+def test_trusted_pinned_gemini_cohort_is_priceable() -> None:
+    r = report("q-gemini")
+    summary = HistorySummary(loaded=(r,), ignored=())
+    google_rates = RateComponents(
+        Decimal("0.75"), Decimal("0.075"), None, None, Decimal("3.75")
+    )
+    pricing = priced_history(
+        sidecar(
+            "q-gemini",
+            finished=FINISH,
+            agent="gemini",
+            configured_model="gemini-3.8-flash",
+            reasoning_effort="provider-default",
+            canonical_model="gemini-3.8-flash",
+            rate_card_id=(
+                "google:gemini-3.8-flash:standard:through-2026-12-31"
+            ),
+            rates=google_rates,
+        )
+    )
+
+    analysis = analyze_cost(
+        summary,
+        pricing,
+        ["canary-a"],
+        agent="gemini",
+        configured_model="gemini-3.8-flash",
+        reasoning_effort="provider-default",
+    )
+
+    assert analysis.selected_canonical_model == "gemini-3.8-flash"
+    assert analysis.priceable_qualification_runs == 1
+    assert analysis.suite.lower_usd == Decimal("0.00225")
+    assert analysis.suite.upper_usd == Decimal("0.00225")
 
 
 def test_canonical_models_never_mix() -> None:

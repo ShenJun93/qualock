@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from qualock.agents.antigravity_resolver import AntigravityResolveError, AntigravityResolver
+from qualock.agents.gemini import select_gemini_automation_credential
 from qualock.agents.releases import ReleaseDiscoveryError
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock
 from qualock.canary.loader import CanaryLoadError
@@ -81,6 +82,7 @@ from qualock.release_monitor.models import MonitorAction
 from qualock.report.render import render_safety_terminal, render_terminal, render_usage_line
 from qualock.report.safety import build_safety_summary
 from qualock.run.docker import DockerRunner
+from qualock.run.process import run_process
 from qualock.scheduler.backends import (
     SchedulerOperationalError,
     SchedulerUnsupportedError,
@@ -176,6 +178,19 @@ def _antigravity_binary_available() -> bool:
     return True
 
 
+def _gemini_host_node_available() -> bool:
+    try:
+        result = run_process(["node", "--version"], timeout_seconds=10)
+    except OSError:
+        return False
+    if result.timed_out or result.exit_code != 0:
+        return False
+    try:
+        return Version(result.stdout.strip().removeprefix("v")).major >= 20
+    except ValueError:
+        return False
+
+
 @app.command("doctor")
 def doctor_command() -> None:
     root = Path.cwd()
@@ -195,6 +210,11 @@ def doctor_command() -> None:
         checks["Antigravity"] = _antigravity_binary_available()
     else:
         checks["Docker"] = DockerRunner().daemon_ready()
+        if config.agent.name == "gemini":
+            checks["Node >=20"] = _gemini_host_node_available()
+            checks["Gemini key"] = (
+                select_gemini_automation_credential(os.environ) is not None
+            )
     checks["Canaries"] = bool(canaries)
 
     for name, ok in checks.items():
@@ -301,6 +321,8 @@ def monitor_command(
             force=force,
             check_executor=_monitor_check_executor,
         )
+        if outcome.agent_name not in {"codex", "claude"}:
+            raise CommandError(f"unsupported release monitor agent: {outcome.agent_name}")
         display_name = agent_display_name(outcome.agent_name)
     except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:
         console.print(str(exc), markup=False)

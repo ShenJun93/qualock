@@ -181,6 +181,60 @@ def test_antigravity_malformed_cache_read_keeps_write_unobserved() -> None:
         assert trust[0].cache_write_input_tokens_trust == "unobserved"
 
 
+def test_gemini_cache_read_requires_one_valid_terminal_result() -> None:
+    valid = '{"type":"result","stats":{"cached":7}}\n'
+    result = make_result(
+        (make_execution("canary-a", (make_attempt(events_jsonl=valid),)),)
+    )
+
+    assert build_usage_detail_trust("gemini", result) == (
+        AttemptUsageTrust(
+            canary_id="canary-a",
+            side="candidate",
+            repetition=1,
+            cached_input_tokens_trust="observed",
+            cache_write_input_tokens_trust="unobserved",
+        ),
+    )
+
+
+def test_gemini_duplicate_missing_or_malformed_result_is_unobserved() -> None:
+    invalid_streams = (
+        "",
+        (
+            '{"type":"result","stats":{"cached":0}}\n'
+            '{"type":"result","stats":{"cached":0}}\n'
+        ),
+        '{"type":"result"}\n',
+        '{"type":"result","stats":null}\n',
+        '{"type":"result","stats":{"cached":true}}\n',
+        '{"type":"result","stats":{"cached":-1}}\n',
+    )
+
+    for events in invalid_streams:
+        result = make_result(
+            (make_execution("canary-a", (make_attempt(events_jsonl=events),)),)
+        )
+        trust = build_usage_detail_trust("gemini", result)
+        assert trust[0].cached_input_tokens_trust == "unobserved"
+        assert trust[0].cache_write_input_tokens_trust == "unobserved"
+
+
+def test_gemini_cache_write_is_unobserved_even_with_extra_fields() -> None:
+    events = (
+        '{"type":"result","stats":{"cached":0,"cache_write":9,'
+        '"cache_creation_input_tokens":11}}\n'
+    )
+    result = make_result(
+        (make_execution("canary-a", (make_attempt(events_jsonl=events),)),)
+    )
+
+    trust = build_usage_detail_trust("gemini", result)
+
+    assert trust[0].cached_input_tokens_trust == "observed"
+    assert trust[0].cache_write_input_tokens_trust == "unobserved"
+
+
 def test_usage_trust_is_local_to_attempt_and_never_changes_usage() -> None:
     usage = Usage(input_tokens=10, output_tokens=1, observed=True)
     attempt = make_attempt(

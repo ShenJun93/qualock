@@ -41,7 +41,12 @@ _ID_MISMATCH = "pricing qualification_id mismatch"
 _MALFORMED = "malformed pricing sidecar"
 _SNAPSHOT_MISMATCH = "rate-card snapshot mismatch"
 
-_AGENT_PROVIDERS = {"codex": "openai", "claude": "anthropic", "antigravity": "google"}
+_AGENT_PROVIDERS = {
+    "codex": "openai",
+    "claude": "anthropic",
+    "antigravity": "google",
+    "gemini": "google",
+}
 _MODEL_SOURCES = frozenset(
     {"runtime_observed", "configured_exact", "documented_alias", "agent_exact_mapping", "unavailable"}
 )

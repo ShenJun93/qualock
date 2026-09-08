@@ -146,6 +146,32 @@ def test_no_selected_cohort_is_unavailable_not_error() -> None:
     assert "error" not in text.lower()
 
 
+def test_unavailable_gemini_history_uses_normal_advisory_guidance() -> None:
+    analysis = CostAnalysis(
+        current_agent="gemini",
+        configured_model="gemini-3.8-flash",
+        reasoning_effort="provider-default",
+        selected_canonical_model=None,
+        selected_rate_card_id=None,
+        per_canary=(),
+        suite=SuiteCostEstimate(None, None, ()),
+        selected_cohort_runs=0,
+        priceable_qualification_runs=0,
+        older_unpinned_runs=0,
+        unavailable_pricing_runs=1,
+        excluded_config_runs=0,
+        excluded_cohort_runs=0,
+        pricing_failures=(),
+        limitations=(),
+    )
+
+    text = render_cost_text(analysis)
+
+    assert "Reference cost unavailable." in text
+    assert "Unavailable pricing runs: 1" in text
+    assert "error" not in text.lower()
+
+
 def test_basis_and_not_actual_bill_are_always_present() -> None:
     text = render_cost_text(
         cost_analysis(suite=SuiteCostEstimate(Decimal(1), Decimal(1), ()))

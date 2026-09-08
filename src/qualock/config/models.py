@@ -4,13 +4,15 @@ from pydantic import BaseModel, Field
 
 
 class AgentConfig(BaseModel):
-    name: Literal["codex", "claude", "antigravity"] = "codex"
+    name: Literal["codex", "claude", "antigravity", "gemini"] = "codex"
 
 
 class ModelConfig(BaseModel):
     id: str = "gpt-5.6-terra"
     snapshot: str | None = None
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] = "high"
+    reasoning_effort: Literal[
+        "low", "medium", "high", "xhigh", "provider-default"
+    ] = "high"
 
     @property
     def effective_model(self) -> str:
@@ -42,3 +44,14 @@ class QualockConfig(BaseModel):
     integrity: IntegrityConfig = Field(default_factory=IntegrityConfig)
     canary_globs: list[str] = Field(default_factory=lambda: [".qualock/canaries/*.yaml"])
     protections: list[ProjectProtectionConfig] = Field(default_factory=list)
+
+
+def validate_agent_model_contract(config: QualockConfig) -> None:
+    effort = config.model.reasoning_effort
+    if config.agent.name == "gemini":
+        if effort != "provider-default":
+            raise ValueError("Gemini requires reasoning_effort: provider-default")
+        if config.model.effective_model == "gpt-5.6-terra":
+            raise ValueError("Gemini requires an explicit Gemini CLI model")
+    elif effort == "provider-default":
+        raise ValueError("provider-default reasoning effort is only supported by Gemini")

@@ -7,7 +7,12 @@ from qualock.pricing.catalog import CATALOG_VERSION, RATE_CARDS, resolve_rate_ca
 from qualock.pricing.models import AttemptUsageTrust, ModelIdentity, RateComponents
 from qualock.qualification.models import QualificationResult
 
-_PROVIDERS = {"codex": "openai", "claude": "anthropic", "antigravity": "google"}
+_PROVIDERS = {
+    "codex": "openai",
+    "claude": "anthropic",
+    "antigravity": "google",
+    "gemini": "google",
+}
 _OPENAI_ALIASES = {"gpt-5.6": "gpt-5.6-sol"}
 _ANTIGRAVITY_MODELS = {
     "gemini-3.8-flash-low": "gemini-3.8-flash",
@@ -109,6 +114,65 @@ def _resolve_claude(configured_model: str, result: QualificationResult) -> Model
     return ModelIdentity(None, _UNAVAILABLE, _MISSING_OBSERVED_MODEL)
 
 
+def _scan_gemini_observations(
+    result: QualificationResult,
+) -> tuple[str | None, str | None]:
+    observed: set[str] = set()
+    for execution in result.executions:
+        for attempt in execution.attempts:
+            for raw_line in attempt.events_jsonl.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    return None, _MALFORMED_MODEL_EVIDENCE
+                if not isinstance(event, dict):
+                    return None, _MALFORMED_MODEL_EVIDENCE
+
+                event_type = event.get("type")
+                if event_type == "init":
+                    candidate, malformed = _extract_model_value(event)
+                    if malformed:
+                        return None, _MALFORMED_MODEL_EVIDENCE
+                    if candidate is not None:
+                        observed.add(candidate)
+                elif event_type == "result":
+                    stats = event.get("stats")
+                    if not isinstance(stats, dict):
+                        return None, _MALFORMED_MODEL_EVIDENCE
+                    models = stats.get("models")
+                    if not isinstance(models, dict):
+                        return None, _MALFORMED_MODEL_EVIDENCE
+                    for candidate in models:
+                        if not candidate.strip():
+                            return None, _MALFORMED_MODEL_EVIDENCE
+                        observed.add(candidate)
+
+    if not observed:
+        return None, None
+    if len(observed) > 1:
+        return None, _INCONSISTENT_OBSERVED_MODEL
+    return next(iter(observed)), None
+
+
+def _resolve_gemini(
+    configured_model: str, result: QualificationResult
+) -> ModelIdentity:
+    canonical_models = _canonical_models_for("google")
+    observed_model, failure = _scan_gemini_observations(result)
+    if failure is not None:
+        return ModelIdentity(None, _UNAVAILABLE, failure)
+    if observed_model is None:
+        return ModelIdentity(None, _UNAVAILABLE, _MISSING_OBSERVED_MODEL)
+    if configured_model in canonical_models and configured_model != observed_model:
+        return ModelIdentity(None, _UNAVAILABLE, _INCONSISTENT_OBSERVED_MODEL)
+    if observed_model not in canonical_models:
+        return ModelIdentity(None, _UNAVAILABLE, _UNKNOWN_MODEL)
+    return ModelIdentity(observed_model, "runtime_observed", None)
+
+
 def _resolve_openai(configured_model: str) -> ModelIdentity:
     canonical_models = _canonical_models_for("openai")
     if configured_model in canonical_models:
@@ -129,6 +193,8 @@ def _resolve_antigravity(configured_model: str) -> ModelIdentity:
 def resolve_model_identity(
     agent: str, configured_model: str, result: QualificationResult
 ) -> ModelIdentity:
+    if agent == "gemini":
+        return _resolve_gemini(configured_model, result)
     provider = provider_for_agent(agent)
     if provider == "anthropic":
         return _resolve_claude(configured_model, result)
@@ -202,10 +268,23 @@ def _antigravity_trust(events_jsonl: str) -> tuple[str, str]:
     return _OBSERVED, _KNOWN_ZERO
 
 
+def _gemini_trust(events_jsonl: str) -> tuple[str, str]:
+    results = [
+        event for event in _iter_json_objects(events_jsonl) if event.get("type") == "result"
+    ]
+    if len(results) != 1:
+        return _UNOBSERVED, _UNOBSERVED
+    stats = results[0].get("stats")
+    if not isinstance(stats, dict) or not _valid_nonneg_int(stats.get("cached")):
+        return _UNOBSERVED, _UNOBSERVED
+    return _OBSERVED, _UNOBSERVED
+
+
 _TRUST_EXTRACTORS = {
     "codex": _codex_trust,
     "claude": _claude_trust,
     "antigravity": _antigravity_trust,
+    "gemini": _gemini_trust,
 }
 
 
