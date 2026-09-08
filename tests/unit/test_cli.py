@@ -15,6 +15,7 @@ from qualock.history.models import (
     HistoryAnalysis,
     SuiteEstimate,
 )
+from qualock.pricing.models import CostAnalysis, SuiteCostEstimate
 from qualock.qualification.models import Verdict
 from tests.unit.test_report import sample_result
 
@@ -704,3 +705,208 @@ def test_history_real_invocation_preserves_artifact_bytes_and_mtimes(
 
     assert result.exit_code == 0
     assert after == before
+
+
+def _cost_analysis(
+    *,
+    selected_canonical_model: str | None = None,
+    selected_rate_card_id: str | None = None,
+    suite: SuiteCostEstimate | None = None,
+    per_canary: tuple = (),
+    selected_cohort_runs: int = 0,
+    priceable_qualification_runs: int = 0,
+    older_unpinned_runs: int = 0,
+    unavailable_pricing_runs: int = 0,
+    excluded_config_runs: int = 0,
+    excluded_cohort_runs: int = 0,
+) -> CostAnalysis:
+    return CostAnalysis(
+        current_agent="codex",
+        configured_model="gpt-5.6-terra",
+        reasoning_effort="high",
+        selected_canonical_model=selected_canonical_model,
+        selected_rate_card_id=selected_rate_card_id,
+        per_canary=per_canary,
+        suite=suite if suite is not None else SuiteCostEstimate(None, None, ()),
+        selected_cohort_runs=selected_cohort_runs,
+        priceable_qualification_runs=priceable_qualification_runs,
+        older_unpinned_runs=older_unpinned_runs,
+        unavailable_pricing_runs=unavailable_pricing_runs,
+        excluded_config_runs=excluded_config_runs,
+        excluded_cohort_runs=excluded_cohort_runs,
+        pricing_failures=(),
+        limitations=(),
+    )
+
+
+def test_cost_zero_history_exits_zero(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    analysis = _cost_analysis()
+    monkeypatch.setattr("qualock.cli.execute_cost", lambda root: analysis)
+    result = runner.invoke(app, ["cost"])
+    assert result.exit_code == 0
+    assert "Reference cost unavailable." in result.stdout
+
+
+def test_cost_no_matching_cohort_exits_zero_with_guidance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    analysis = _cost_analysis(older_unpinned_runs=5)
+    monkeypatch.setattr("qualock.cli.execute_cost", lambda root: analysis)
+    result = runner.invoke(app, ["cost"])
+    assert result.exit_code == 0
+    assert "Reference cost unavailable." in result.stdout
+    assert "Run a normal qualification after pricing provenance is available" in result.stdout
+
+
+def test_cost_unavailable_sidecars_exit_zero_with_truthful_guidance(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from qualock.pricing.models import CanaryCostEstimate
+
+    monkeypatch.chdir(tmp_path)
+    per_canary = (CanaryCostEstimate("sample", (), None, None),)
+    analysis = _cost_analysis(
+        selected_canonical_model="gpt-5.6-sol",
+        selected_rate_card_id="openai:gpt-5.6-sol:standard:2026-09-07",
+        suite=SuiteCostEstimate(None, None, ("sample",)),
+        per_canary=per_canary,
+        selected_cohort_runs=1,
+    )
+    monkeypatch.setattr("qualock.cli.execute_cost", lambda root: analysis)
+    result = runner.invoke(app, ["cost"])
+    assert result.exit_code == 0
+    assert "No trustworthy monetary samples are available" in result.stdout
+    assert "cohort." in result.stdout
+
+
+def test_cost_empty_suite_exits_3(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "qualock.cli.execute_cost",
+        lambda root: (_ for _ in ()).throw(CommandError("no canaries found")),
+    )
+    result = runner.invoke(app, ["cost"])
+    assert result.exit_code == 3
+    assert "no canaries found" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConfigError("bad config"),
+        CanaryLoadError("bad canary"),
+        CommandError("no canaries found"),
+        ValueError("bad input"),
+    ],
+)
+def test_cost_config_and_canary_errors_exit_3_without_markup(
+    tmp_path: Path, monkeypatch, exc: Exception
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qualock.cli.execute_cost", lambda root: (_ for _ in ()).throw(exc))
+    result = runner.invoke(app, ["cost"])
+    assert result.exit_code == 3
+    assert str(exc) in result.stdout
+
+
+def test_cost_unexpected_error_exits_1_with_safe_fixed_message(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "qualock.cli.execute_cost",
+        lambda root: (_ for _ in ()).throw(RuntimeError("/secret/path leaked traceback")),
+    )
+    result = runner.invoke(app, ["cost"])
+    assert result.exit_code == 1
+    assert result.stdout.strip() == "unable to analyze reference cost"
+    assert "/secret/path" not in result.stdout
+    assert "traceback" not in result.stdout.lower()
+
+
+def test_cost_rejects_extra_arguments_and_pricing_flags() -> None:
+    assert runner.invoke(app, ["cost", "extra"]).exit_code != 0
+    assert runner.invoke(app, ["cost", "--max-cost", "5"]).exit_code != 0
+    assert runner.invoke(app, ["cost", "--json"]).exit_code != 0
+    assert runner.invoke(app, ["cost", "--budget", "5"]).exit_code != 0
+
+
+def test_help_has_cost_but_no_max_cost_budget_json_or_pricing_options() -> None:
+    top_level = runner.invoke(app, ["--help"])
+    stdout = _strip_ansi(top_level.stdout)
+    assert top_level.exit_code == 0
+    assert "cost" in stdout
+
+    cost_help = runner.invoke(app, ["cost", "--help"])
+    cost_stdout = _strip_ansi(cost_help.stdout)
+    assert cost_help.exit_code == 0
+    assert "--max-cost" not in cost_stdout
+    assert "--budget" not in cost_stdout
+    assert "--json" not in cost_stdout
+    assert "--pricing" not in cost_stdout
+
+
+def test_cost_real_cold_start_does_not_create_results(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_valid_history_project(tmp_path)
+    results = tmp_path / ".qualock/results"
+    assert not results.exists()
+
+    result = runner.invoke(app, ["cost"])
+
+    assert result.exit_code == 0
+    assert "Reference cost unavailable." in result.stdout
+    assert not results.exists()
+
+
+def test_cost_real_invocation_preserves_all_artifact_bytes_and_mtimes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from qualock.evidence.storage import write_qualification_artifacts
+
+    monkeypatch.chdir(tmp_path)
+    _write_valid_history_project(tmp_path)
+    results = tmp_path / ".qualock/results"
+    write_qualification_artifacts(results, sample_result(), agent_display_name="Codex")
+
+    before = {
+        p.relative_to(results): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in results.rglob("*")
+        if p.is_file()
+    }
+    result = runner.invoke(app, ["cost"])
+    after = {
+        p.relative_to(results): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in results.rglob("*")
+        if p.is_file()
+    }
+
+    assert result.exit_code == 0
+    assert after == before
+
+
+def test_cost_real_invocation_succeeds_with_network_blocked(tmp_path: Path, monkeypatch) -> None:
+    import socket
+
+    monkeypatch.chdir(tmp_path)
+    _write_valid_history_project(tmp_path)
+
+    def _blocked_connect(*args, **kwargs):
+        raise OSError("network is blocked")
+
+    monkeypatch.setattr(socket.socket, "connect", _blocked_connect)
+    result = runner.invoke(app, ["cost"])
+
+    assert result.exit_code == 0
+
+
+def test_cost_sidecar_discovery_is_path_neutral_on_windows(tmp_path: Path, monkeypatch) -> None:
+    nested = tmp_path / "project with spaces"
+    nested.mkdir()
+    monkeypatch.chdir(nested)
+    _write_valid_history_project(nested)
+
+    result = runner.invoke(app, ["cost"])
+
+    assert result.exit_code == 0
+    assert "Reference cost unavailable." in result.stdout

@@ -20,11 +20,13 @@ from qualock.commands import (
     agent_display_name,
     execute_baseline,
     execute_check,
+    execute_cost,
     execute_history,
     parse_agent_spec,
 )
 from qualock.config.io import ConfigError, write_default_config
 from qualock.history.models import HistoryAnalysis, HistorySummary, SuiteEstimate
+from qualock.pricing.models import CostAnalysis, PricingHistory, SuiteCostEstimate
 from qualock.project import load_project
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.host import LinuxHostRunner
@@ -696,3 +698,161 @@ def test_execute_history_does_not_wrap_canary_load_failure(tmp_path: Path) -> No
 
     with pytest.raises(CanaryLoadError):
         execute_history(tmp_path)
+
+
+def test_execute_cost_composes_current_config_and_canary_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    setup_project(tmp_path)
+    seen: dict[str, object] = {}
+    summary = HistorySummary(loaded=(), ignored=())
+    pricing = PricingHistory(records=(), older_unpinned_qualification_ids=(), failures=())
+    expected = CostAnalysis(
+        current_agent="codex",
+        configured_model="gpt-5.6-terra",
+        reasoning_effort="high",
+        selected_canonical_model=None,
+        selected_rate_card_id=None,
+        per_canary=(),
+        suite=SuiteCostEstimate(None, None, ("sample",)),
+        selected_cohort_runs=0,
+        priceable_qualification_runs=0,
+        older_unpinned_runs=0,
+        unavailable_pricing_runs=0,
+        excluded_config_runs=0,
+        excluded_cohort_runs=0,
+        pricing_failures=(),
+        limitations=(),
+    )
+
+    def fake_scan_results(path: Path) -> HistorySummary:
+        seen["results_path"] = path
+        return summary
+
+    def fake_scan_pricing(value: HistorySummary) -> PricingHistory:
+        seen["scan_pricing_summary"] = value
+        return pricing
+
+    def fake_analyze_cost(
+        summary_arg: HistorySummary,
+        pricing_arg: PricingHistory,
+        canary_ids,
+        *,
+        agent: str,
+        configured_model: str,
+        reasoning_effort: str,
+    ) -> CostAnalysis:
+        seen["analyze_summary"] = summary_arg
+        seen["analyze_pricing"] = pricing_arg
+        seen["canary_ids"] = tuple(canary_ids)
+        seen["agent"] = agent
+        seen["configured_model"] = configured_model
+        seen["reasoning_effort"] = reasoning_effort
+        return expected
+
+    monkeypatch.setattr(commands_module, "scan_results", fake_scan_results)
+    monkeypatch.setattr(commands_module, "scan_pricing", fake_scan_pricing)
+    monkeypatch.setattr(commands_module, "analyze_cost", fake_analyze_cost)
+
+    assert execute_cost(tmp_path) is expected
+    assert seen["results_path"] == tmp_path.resolve() / ".qualock/results"
+    assert seen["scan_pricing_summary"] is summary
+    assert seen["analyze_summary"] is summary
+    assert seen["analyze_pricing"] is pricing
+    assert seen["canary_ids"] == ("sample",)
+    assert seen["agent"] == "codex"
+    assert seen["configured_model"] == "gpt-5.6-terra"
+    assert seen["reasoning_effort"] == "high"
+
+
+def test_execute_cost_rejects_empty_current_suite(tmp_path: Path) -> None:
+    ub = tmp_path / ".qualock"
+    (ub / "canaries").mkdir(parents=True)
+    (ub / "results").mkdir()
+    write_default_config(ub / "config.yaml")
+
+    with pytest.raises(CommandError, match="no canaries found"):
+        execute_cost(tmp_path)
+
+
+def test_execute_cost_missing_results_is_normal_and_does_not_create_directory(
+    tmp_path: Path,
+) -> None:
+    ub = tmp_path / ".qualock"
+    (ub / "canaries").mkdir(parents=True)
+    write_default_config(ub / "config.yaml")
+    grader = ub / "canaries/grader.patch"
+    grader.write_text("patch", encoding="utf-8")
+    (ub / "canaries/sample.yaml").write_text(
+        f"""schema_version: 1
+id: sample
+name: Sample
+repository:
+  url: https://example.invalid/repo.git
+  base_sha: {'a' * 40}
+runtime:
+  image: python:3.12-slim
+task: Fix it.
+setup: []
+agent:
+  timeout_seconds: 60
+grader:
+  patch: grader.patch
+  command:
+    - pytest -q
+constraints:
+  protected_paths:
+    - tests/**
+critical: true
+""",
+        encoding="utf-8",
+    )
+    results = ub / "results"
+    assert not results.exists()
+
+    analysis = execute_cost(tmp_path)
+
+    assert not results.exists()
+    assert analysis.selected_canonical_model is None
+    assert analysis.selected_cohort_runs == 0
+
+
+def test_execute_cost_uses_effective_snapshot_model(tmp_path: Path, monkeypatch) -> None:
+    setup_project(tmp_path)
+    config_path = tmp_path / ".qualock/config.yaml"
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["model"]["snapshot"] = "gpt-5.6-terra-2026-09-01"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    def fake_analyze_cost(
+        summary_arg,
+        pricing_arg,
+        canary_ids,
+        *,
+        agent: str,
+        configured_model: str,
+        reasoning_effort: str,
+    ) -> CostAnalysis:
+        seen["configured_model"] = configured_model
+        return CostAnalysis(
+            current_agent=agent,
+            configured_model=configured_model,
+            reasoning_effort=reasoning_effort,
+            selected_canonical_model=None,
+            selected_rate_card_id=None,
+            per_canary=(),
+            suite=SuiteCostEstimate(None, None, ()),
+            selected_cohort_runs=0,
+            priceable_qualification_runs=0,
+            older_unpinned_runs=0,
+            unavailable_pricing_runs=0,
+            excluded_config_runs=0,
+            excluded_cohort_runs=0,
+            pricing_failures=(),
+            limitations=(),
+        )
+
+    monkeypatch.setattr(commands_module, "analyze_cost", fake_analyze_cost)
+    execute_cost(tmp_path)
+    assert seen["configured_model"] == "gpt-5.6-terra-2026-09-01"

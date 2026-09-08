@@ -20,6 +20,7 @@ from qualock.pricing.models import (
     RateComponents,
     SuiteCostEstimate,
 )
+from qualock.pricing.render import render_cost_text
 from qualock.pricing.resolve import (
     build_pricing_payload,
     build_usage_detail_trust,
@@ -48,6 +49,7 @@ __all__ = [
     "parse_rate_components",
     "price_execution",
     "provider_for_agent",
+    "render_cost_text",
     "resolve_model_identity",
     "resolve_rate_card",
     "scan_pricing",
