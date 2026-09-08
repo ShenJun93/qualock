@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,81 @@ _SHELL_CONTRACT_JS = (
 
 _NO_CONTRACT_JS = "function noop() { return 1; }\n"
 
+# Link 1 broken: the Linux branch selects a shell other than bare 'bash', so
+# no function proves "Linux chooses bash" even though the value is still
+# PATH-resolved.
+_SHELL_CONTRACT_WRONG_SHELL_JS = (
+    "function pickShell() {\n"
+    "  if (platform() === 'linux') {\n"
+    "    var shellCommand = 'zsh';\n"
+    "    return resolveExecutable(shellCommand);\n"
+    "  }\n"
+    "  return null;\n"
+    "}\n"
+    "\n"
+    "function resolveExecutable(shellCommand) {\n"
+    "  var searchPaths = process.env.PATH.split(':');\n"
+    "  return searchPaths[0] + '/' + shellCommand;\n"
+    "}\n"
+)
+
+# Link 2 broken: bare 'bash' is selected on Linux, but that value is never
+# passed to any executable-resolution call, so nothing proves it is
+# PATH-resolved rather than used verbatim.
+_SHELL_CONTRACT_NOT_PASSED_JS = (
+    "function pickShell() {\n"
+    "  if (platform() === 'linux') {\n"
+    "    var shellCommand = 'bash';\n"
+    "    return shellCommand;\n"
+    "  }\n"
+    "  return null;\n"
+    "}\n"
+    "\n"
+    "function unrelatedPathLookup() {\n"
+    "  return process.env.PATH;\n"
+    "}\n"
+)
+
+# Link 3 broken: bare 'bash' is selected and passed to a call, but the called
+# function resolves it against a hardcoded path list instead of PATH.
+_SHELL_CONTRACT_NO_PATH_SEARCH_JS = (
+    "function pickShell() {\n"
+    "  if (platform() === 'linux') {\n"
+    "    var shellCommand = 'bash';\n"
+    "    return resolveExecutable(shellCommand);\n"
+    "  }\n"
+    "  return null;\n"
+    "}\n"
+    "\n"
+    "function resolveExecutable(shellCommand) {\n"
+    "  var knownPaths = ['/usr/bin', '/bin'];\n"
+    "  return knownPaths[0] + '/' + shellCommand;\n"
+    "}\n"
+)
+
+# Adversarial: all three raw tokens ('linux', bare 'bash', process.env.PATH)
+# co-occur in the file, in unrelated functions, while the actual Linux shell
+# selection uses an absolute /bin/bash path. Full-file token co-occurrence
+# would wrongly accept this; per-function causal linkage must reject it.
+_SHELL_CONTRACT_UNRELATED_COOCCURRENCE_JS = (
+    "function pickShell() {\n"
+    "  if (platform() === 'linux') {\n"
+    "    return '/bin/bash';\n"
+    "  }\n"
+    "  return null;\n"
+    "}\n"
+    "\n"
+    "function shellCompletionNames() {\n"
+    "  var names = ['bash', 'zsh', 'fish'];\n"
+    "  return names;\n"
+    "}\n"
+    "\n"
+    "function findGit() {\n"
+    "  var dirs = process.env.PATH.split(':');\n"
+    "  return dirs[0] + '/git';\n"
+    "}\n"
+)
+
 
 def install_fake_package(
     prefix: Path,
@@ -50,6 +126,7 @@ def install_fake_package(
     entrypoint_relpath: str = "dist/gemini.js",
     entrypoint_bytes: bytes = b"// fake gemini entrypoint\n",
     include_shell_contract: bool = True,
+    shell_contract_js: str | None = None,
     raw_package_json: str | None = None,
     symlink_target: Path | None = None,
 ) -> tuple[Path, Path]:
@@ -74,13 +151,13 @@ def install_fake_package(
     else:
         entrypoint.write_bytes(entrypoint_bytes)
 
-    if include_shell_contract:
-        contract = package_root / "dist" / "shell.js"
-        contract.parent.mkdir(parents=True, exist_ok=True)
+    contract = package_root / "dist" / "shell.js"
+    contract.parent.mkdir(parents=True, exist_ok=True)
+    if shell_contract_js is not None:
+        contract.write_text(shell_contract_js, encoding="utf-8")
+    elif include_shell_contract:
         contract.write_text(_SHELL_CONTRACT_JS, encoding="utf-8")
     else:
-        contract = package_root / "dist" / "shell.js"
-        contract.parent.mkdir(parents=True, exist_ok=True)
         contract.write_text(_NO_CONTRACT_JS, encoding="utf-8")
 
     return package_root, entrypoint
@@ -138,9 +215,19 @@ def make_fake_node(
     host_version: str = "v22.9.0",
     cli_version: str = "0.58.0",
     missing_flag: str | None = None,
+    prose_only_flags: tuple[str, ...] = (),
 ) -> Path:
-    flags = [flag for flag in _REQUIRED_FLAGS if flag != missing_flag]
+    flags = [
+        flag
+        for flag in _REQUIRED_FLAGS
+        if flag != missing_flag and flag not in prose_only_flags
+    ]
     help_lines = [f"  {flag} <value>  test option" for flag in flags]
+    if prose_only_flags:
+        mentions = ", ".join(prose_only_flags)
+        help_lines.append(
+            f"  --unrelated <value>  see also {mentions} for related flags"
+        )
     help_text = "\n".join(help_lines)
     log_line = (
         "if LOG_PATH:\n"
@@ -389,10 +476,58 @@ def test_help_must_advertise_required_flags(tmp_path: Path, missing_flag: str) -
         resolver.resolve("0.58.0")
 
 
+@pytest.mark.parametrize("prose_flag", ("--model", "--sandbox", "-e"))
+def test_help_prose_mentions_of_flags_do_not_count_as_options(
+    tmp_path: Path, prose_flag: str
+) -> None:
+    log_path = tmp_path / "npm.log"
+    fake_npm = make_fake_npm(tmp_path / "npm", log_path=log_path)
+    fake_node = make_fake_node(tmp_path / "node", prose_only_flags=(prose_flag,))
+    resolver = GeminiResolver(
+        tmp_path / "cache", npm_executable=str(fake_npm), node_executable=str(fake_node)
+    )
+
+    with pytest.raises(
+        GeminiResolveError, match=f"missing required CLI flag {re.escape(prose_flag)}"
+    ):
+        resolver.resolve("0.58.0")
+
+
 def test_shell_interception_contract_missing_fails_closed(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
     prefix = cache / "agents" / "gemini" / "0.58.0"
     install_fake_package(prefix, version="0.58.0", include_shell_contract=False)
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    with pytest.raises(
+        GeminiResolveError, match="does not prove PATH-resolved bash shell interception"
+    ):
+        resolver.resolve("0.58.0")
+
+
+@pytest.mark.parametrize(
+    "shell_contract_js",
+    [
+        pytest.param(_SHELL_CONTRACT_WRONG_SHELL_JS, id="link1-wrong-shell-selected"),
+        pytest.param(_SHELL_CONTRACT_NOT_PASSED_JS, id="link2-bash-not-passed-to-resolver"),
+        pytest.param(_SHELL_CONTRACT_NO_PATH_SEARCH_JS, id="link3-resolver-skips-path-search"),
+        pytest.param(
+            _SHELL_CONTRACT_UNRELATED_COOCCURRENCE_JS,
+            id="adversarial-unrelated-cooccurrence-absolute-bin-bash",
+        ),
+    ],
+)
+def test_shell_interception_contract_rejects_broken_causal_link(
+    tmp_path: Path, shell_contract_js: str
+) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    install_fake_package(prefix, version="0.58.0", shell_contract_js=shell_contract_js)
     fake_node = make_fake_node(tmp_path / "node")
     resolver = GeminiResolver(
         cache,
@@ -459,9 +594,20 @@ def test_install_commands_use_exact_pinned_flags(tmp_path: Path) -> None:
     } <= ci_flags
 
 
-def test_npm_and_node_probes_scrub_gemini_google_credentials_but_keep_proxy_vars(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+_SCRUBBED_VARS = (
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_PROJECT_ID",
+    "GOOGLE_CLOUD_LOCATION",
+    "GEMINI_CLI_HOME",
+    "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+    "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+)
+
+
+def _set_scrubbed_and_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "secret-api-key")
     monkeypatch.setenv("GOOGLE_API_KEY", "secret-google-key")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/creds.json")
@@ -475,6 +621,50 @@ def test_npm_and_node_probes_scrub_gemini_google_credentials_but_keep_proxy_vars
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.example.com:8080")
     monkeypatch.setenv("HTTPS_PROXY", "https://proxy.example.com:8443")
 
+
+def test_npm_probes_scrub_credentials_but_preserve_ambient_home_and_npm_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ambient_home = str(tmp_path / "ambient-home")
+    ambient_userprofile = str(tmp_path / "ambient-userprofile")
+    monkeypatch.setenv("HOME", ambient_home)
+    monkeypatch.setenv("USERPROFILE", ambient_userprofile)
+    _set_scrubbed_and_proxy_env(monkeypatch)
+
+    log_path = tmp_path / "npm.log"
+    fake_npm = make_fake_npm(tmp_path / "npm", log_path=log_path)
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        tmp_path / "cache", npm_executable=str(fake_npm), node_executable=str(fake_node)
+    )
+
+    resolver.resolve("0.58.0")
+
+    npm_calls = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert npm_calls
+    for call in npm_calls:
+        env = call["env"]
+        for name in _SCRUBBED_VARS:
+            assert name not in env
+        assert env.get("NPM_CONFIG_REGISTRY") == "https://registry.example.com"
+        assert env.get("HTTP_PROXY") == "http://proxy.example.com:8080"
+        assert env.get("HTTPS_PROXY") == "https://proxy.example.com:8443"
+        # npm view/install/ci must keep the caller's ambient HOME/USERPROFILE
+        # and npm config untouched, not redirect them into an isolated probe
+        # home the way node probes do.
+        assert env.get("HOME") == ambient_home
+        assert env.get("USERPROFILE") == ambient_userprofile
+
+
+def test_node_probes_scrub_credentials_and_use_isolated_created_probe_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ambient_home = str(tmp_path / "ambient-home")
+    ambient_userprofile = str(tmp_path / "ambient-userprofile")
+    monkeypatch.setenv("HOME", ambient_home)
+    monkeypatch.setenv("USERPROFILE", ambient_userprofile)
+    _set_scrubbed_and_proxy_env(monkeypatch)
+
     log_path = tmp_path / "npm.log"
     fake_npm = make_fake_npm(tmp_path / "npm", log_path=log_path)
     node_log_path = tmp_path / "node.log"
@@ -485,26 +675,19 @@ def test_npm_and_node_probes_scrub_gemini_google_credentials_but_keep_proxy_vars
 
     resolver.resolve("0.58.0")
 
-    npm_calls = [json.loads(line) for line in log_path.read_text().splitlines()]
     node_calls = [json.loads(line) for line in node_log_path.read_text().splitlines()]
-    assert npm_calls
     assert node_calls
-
-    scrubbed = (
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GOOGLE_CLOUD_PROJECT",
-        "GOOGLE_CLOUD_PROJECT_ID",
-        "GOOGLE_CLOUD_LOCATION",
-        "GEMINI_CLI_HOME",
-        "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
-        "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
-    )
-    for call in npm_calls + node_calls:
+    for call in node_calls:
         env = call["env"]
-        for name in scrubbed:
+        for name in _SCRUBBED_VARS:
             assert name not in env
         assert env.get("NPM_CONFIG_REGISTRY") == "https://registry.example.com"
         assert env.get("HTTP_PROXY") == "http://proxy.example.com:8080"
         assert env.get("HTTPS_PROXY") == "https://proxy.example.com:8443"
+        probe_home = env.get("HOME")
+        assert probe_home is not None
+        assert probe_home != ambient_home
+        assert env.get("USERPROFILE") == probe_home
+        # The isolated probe home must actually exist on disk, not be a
+        # dangling path handed to node/Gemini probes.
+        assert Path(probe_home).is_dir()
