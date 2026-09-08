@@ -3,7 +3,7 @@
 **Date:** 2026-09-08
 **Base:** `a98374d5c161ef96272e0a94a5f7584511e7f7f9` (`origin/main` after PR #40)
 **Branch:** `feat/gemini-cli-mainline-adapter`
-**Status:** Proposed design; implementation is not authorized until this spec is reviewed
+**Status:** Approved design; implementation planning in progress
 
 ## Goal
 
@@ -158,7 +158,7 @@ Normalization contract:
 - terminal aggregate/per-model stats provide token usage without summing intermediate message events.
 Token mapping must be fixture-driven. For the validated 0.58.0 contract, top-level `input_tokens`, `output_tokens`, and `cached` are accepted only as non-negative integers. If `stats.models` exposes per-model `tokens.thoughts`, QuaLock aggregates thoughts exactly once into `reasoning_output_tokens`; absent thought detail must never be inferred from prose or `total_tokens`. Tool-token fields are not silently added to billable output unless the pinned public rate card explicitly requires that category.
 
-A sanitized current real stream-json fixture is required before evidence implementation is complete. The fixture locks actual 0.58.0 event names, shell tool parameters, tool-result shape, model fields, and terminal stats. No authenticated fixture may be fabricated when a key is absent.
+Ordinary parser implementation uses official 0.58.0 schema/source snapshots plus clearly named synthetic protocol-conformance fixtures and the already-reviewed historical prototype observations. A sanitized real stream-json fixture is required only when the optional authenticated acceptance is explicitly authorized and run; it must lock the observed event names, shell parameters, tool-result shape, model fields, and terminal stats. No authenticated fixture may be fabricated when a key is absent.
 
 ## Routing and local command integration
 
