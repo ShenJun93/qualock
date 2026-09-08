@@ -16,11 +16,11 @@
 ## Next, only after v0.1 validation
 
 - Additional coding-agent adapters.
-- Provider-specific monetary cost estimates (#42), pending, advisory only, outside qualification pass/fail policy.
 
 ## Delivered
 
 - Historical canary effectiveness ranking and runtime/token-usage estimates (#41).
+- Provider-specific API-equivalent reference cost estimates (#42), advisory only and outside qualification pass/fail policy.
 
 ## Commercial layer
 
