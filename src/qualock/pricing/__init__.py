@@ -1,3 +1,5 @@
+from qualock.pricing.analysis import analyze_cost
+from qualock.pricing.calculate import price_execution
 from qualock.pricing.catalog import (
     CATALOG_VERSION,
     RATE_CARDS,
@@ -40,9 +42,11 @@ __all__ = [
     "RateCard",
     "RateComponents",
     "SuiteCostEstimate",
+    "analyze_cost",
     "build_pricing_payload",
     "build_usage_detail_trust",
     "parse_rate_components",
+    "price_execution",
     "provider_for_agent",
     "resolve_model_identity",
     "resolve_rate_card",
