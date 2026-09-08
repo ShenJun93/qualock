@@ -18,7 +18,13 @@ from qualock.pricing.models import (
     RateComponents,
     SuiteCostEstimate,
 )
-from qualock.pricing.resolve import provider_for_agent, resolve_model_identity
+from qualock.pricing.resolve import (
+    build_pricing_payload,
+    build_usage_detail_trust,
+    provider_for_agent,
+    resolve_model_identity,
+)
+from qualock.pricing.sidecar import write_pricing_sidecar
 
 __all__ = [
     "CATALOG_VERSION",
@@ -34,9 +40,12 @@ __all__ = [
     "RateCard",
     "RateComponents",
     "SuiteCostEstimate",
+    "build_pricing_payload",
+    "build_usage_detail_trust",
     "parse_rate_components",
     "provider_for_agent",
     "resolve_model_identity",
     "resolve_rate_card",
     "validate_effective_interval",
+    "write_pricing_sidecar",
 ]

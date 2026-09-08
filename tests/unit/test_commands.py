@@ -1,5 +1,6 @@
 import json
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -485,6 +486,164 @@ def test_check_baseline_agent_must_match_candidate_before_resolution(tmp_path: P
         )
 
     assert resolver.calls == []
+
+
+def test_execute_check_captures_window_around_run_and_after_canonical_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-pricing-window",
+        created_at="2026-09-08T00:00:00Z",
+    )
+
+    write_time_holder: dict[str, datetime] = {}
+    real_write = commands_module.write_qualification_artifacts
+
+    def spy_write(*args, **kwargs):
+        write_time_holder["at"] = commands_module.datetime.now(commands_module.UTC)
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(commands_module, "write_qualification_artifacts", spy_write)
+
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-pricing-window",
+    )
+
+    pricing_path = tmp_path / ".qualock/results/check-pricing-window/pricing.json"
+    payload = json.loads(pricing_path.read_text(encoding="utf-8"))
+    started = datetime.fromisoformat(payload["run_started_at"])
+    finished = datetime.fromisoformat(payload["run_finished_at"])
+    assert started <= write_time_holder["at"] <= finished
+    assert result.verdict is Verdict.BLOCK
+
+
+def test_check_pricing_writer_failure_is_advisory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-pricing-failure",
+        created_at="2026-09-08T00:00:00Z",
+    )
+
+    def fail_write(_directory: Path, _payload: dict[str, object]) -> Path:
+        raise OSError("sensitive writer detail")
+
+    monkeypatch.setattr(commands_module, "write_pricing_sidecar", fail_write)
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-pricing-failure",
+    )
+    artifact_root = tmp_path / ".qualock/results/check-pricing-failure"
+    assert result.verdict is Verdict.BLOCK
+    assert {path.name for path in artifact_root.iterdir()} == {
+        "report.md",
+        "report.json",
+        "qualification.json",
+    }
+
+
+def test_unknown_model_check_writes_unavailable_sidecar(tmp_path: Path) -> None:
+    setup_project(tmp_path, model_id="gpt-5.6-turbo")
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-unknown-model",
+        created_at="2026-09-08T00:00:00Z",
+    )
+
+    execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-unknown-model",
+    )
+
+    payload = json.loads(
+        (tmp_path / ".qualock/results/check-unknown-model/pricing.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["availability"] == "unavailable"
+    assert payload["unavailable_reason"] == "unknown_model"
+
+
+def test_existing_sidecar_failure_cannot_change_check_result(tmp_path: Path) -> None:
+    setup_project(tmp_path)
+    config, _ = load_project(tmp_path)
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-existing-sidecar",
+        created_at="2026-09-08T00:00:00Z",
+    )
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-existing-sidecar-source",
+    )
+
+    qualification_dir = tmp_path / ".qualock/results/existing-sidecar-target"
+    qualification_dir.mkdir(parents=True)
+    existing = qualification_dir / "pricing.json"
+    existing.write_bytes(b"pinned")
+
+    commands_module._write_pricing_sidecar_best_effort(
+        qualification_dir,
+        config,
+        result,
+        datetime.now(UTC),
+        datetime.now(UTC),
+    )
+
+    assert existing.read_bytes() == b"pinned"
+    assert result.verdict is Verdict.BLOCK
+
+
+def test_standalone_baseline_does_not_write_pricing_sidecar(tmp_path: Path) -> None:
+    setup_project(tmp_path)
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=FakeResolver(),
+        backend=FakeBackend(),
+        qualification_id="baseline-no-pricing",
+        created_at="2026-09-08T00:00:00Z",
+    )
+
+    baseline_dir = tmp_path / ".qualock/results/baseline-no-pricing"
+    assert {path.name for path in baseline_dir.iterdir()} == {"baseline.json"}
 
 
 def test_execute_history_uses_current_canaries_in_config_order(tmp_path: Path, monkeypatch) -> None:

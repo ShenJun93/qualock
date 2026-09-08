@@ -29,6 +29,8 @@ from qualock.evidence.storage import write_baseline_artifacts, write_qualificati
 from qualock.history.analysis import analyze_history
 from qualock.history.loader import scan_results
 from qualock.history.models import HistoryAnalysis
+from qualock.pricing.resolve import build_pricing_payload
+from qualock.pricing.sidecar import write_pricing_sidecar
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
 from qualock.qualification.models import AttemptResult, QualificationResult
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
@@ -226,6 +228,20 @@ def execute_baseline(
     return lock
 
 
+def _write_pricing_sidecar_best_effort(
+    qualification_dir: Path,
+    config: QualockConfig,
+    result: QualificationResult,
+    run_started_at: datetime,
+    run_finished_at: datetime,
+) -> None:
+    try:
+        payload = build_pricing_payload(config, result, run_started_at, run_finished_at)
+        write_pricing_sidecar(qualification_dir, payload)
+    except Exception:  # noqa: BLE001 - advisory boundary bounds any pricing-generation failure
+        return
+
+
 def execute_check(
     root: Path,
     candidate_spec: str,
@@ -263,6 +279,7 @@ def execute_check(
     backend = backend or _default_backend(root, config, agent_name)
     qid = qualification_id or _qualification_id("check")
 
+    run_started_at = datetime.now(UTC)
     result = QualificationExecutor(
         backend=backend,
         repetitions=config.qualification.repetitions,
@@ -274,10 +291,14 @@ def execute_check(
         max_attempts=max_attempts,
         max_tokens=max_tokens,
     )
-    write_qualification_artifacts(
+    qualification_dir = write_qualification_artifacts(
         project_dir(root) / "results",
         result,
         agent_display_name=agent_display_name(agent_name),
+    )
+    run_finished_at = datetime.now(UTC)
+    _write_pricing_sidecar_best_effort(
+        qualification_dir, config, result, run_started_at, run_finished_at
     )
     return result
 
