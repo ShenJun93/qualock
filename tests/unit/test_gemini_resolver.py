@@ -25,67 +25,210 @@ _REQUIRED_FLAGS = (
     "--version",
 )
 
-# Happy-path fixture: the exact reviewed 0.58.0 shell-interception chain --
-# getShellConfiguration selects bare, non-absolute 'bash' on Linux;
-# prepareExecution obtains that value from getShellConfiguration and
-# forwards it to resolveExecutable; resolveExecutable searches
-# process.env.PATH.
-_SHELL_CONTRACT_JS = (
+
+# Historical certified source chain. This is the exact reviewed Gemini
+# shell-interception prototype source preserved in the adapter worktree
+# (`/home/pacmap/qualock-gemini-adapter/tests/unit/test_gemini_resolver.py`,
+# `_shell_contract_source`), reproduced here verbatim as the happy-path
+# fixture. Every adversarial fixture below is this same source with exactly
+# one structural mutation, so each RED case isolates one broken link of the
+# certified chain:
+#   1. getShellConfiguration returns a non-Windows configuration object whose
+#      `executable` is the bare, PATH-resolvable "bash" (never "/bin/bash"),
+#      with the Windows configuration in its own separate branch.
+#   2. prepareShellExecution destructures `executable` directly out of
+#      getShellConfiguration(), and the very next executable-affecting
+#      statement forms `resolveExecutable(executable) ?? executable`.
+#   3. resolveExecutable handles absolute executables in their own branch and
+#      resolves everything else by searching process.env.PATH.
+def _shell_contract_source(mutate: str | None = None) -> str:
+    bash_literal = '"bash"'
+    resolve_call = "resolveExecutable(executable)"
+    resolve_fallback = "executable"
+    path_lookup = 'process.env.PATH || process.env["PATH"]'
+    prepare_name = "prepareShellExecution"
+    obtain = "  let { executable, argsPrefix, shell } = getShellConfiguration();\n"
+    between = ""
+    absolute_branch = (
+        "  if (path.isAbsolute(exe)) {\n"
+        "    return isExecutable(exe) ? exe : void 0;\n"
+        "  }\n"
+    )
+    windows_branch = (
+        "  if (isWindowsPlatform()) {\n"
+        "    return {\n"
+        '      executable: "powershell.exe",\n'
+        '      argsPrefix: ["-NoProfile", "-Command"],\n'
+        '      shell: "powershell"\n'
+        "    };\n"
+        "  }\n"
+    )
+
+    if mutate == "absolute_bash":
+        bash_literal = '"/bin/bash"'
+    elif mutate == "missing_resolve_call":
+        resolve_call = "resolveExecutableUnsafe(executable)"
+    elif mutate == "path_lookup_changed":
+        path_lookup = '"/usr/bin:/bin"'
+    elif mutate == "path_lookup_only_in_absolute_branch":
+        path_lookup = '"/usr/bin:/bin"'
+        absolute_branch = (
+            "  if (path.isAbsolute(exe)) {\n"
+            '    const absoluteEnv = process.env.PATH || process.env["PATH"];\n'
+            "    return isExecutable(exe) ? exe : void 0;\n"
+            "  }\n"
+        )
+    elif mutate == "no_absolute_branch":
+        absolute_branch = ""
+    elif mutate == "no_windows_branch":
+        windows_branch = ""
+    elif mutate == "generic_prepare_execution_name":
+        prepare_name = "prepareExecution"
+    elif mutate == "property_access_obtain":
+        obtain = "  const shellConfig = getShellConfiguration();\n"
+        resolve_call = "resolveExecutable(shellConfig.executable)"
+        resolve_fallback = "shellConfig.executable"
+    elif mutate == "forwards_other_value":
+        resolve_call = 'resolveExecutable("/bin/bash")'
+    elif mutate == "absolute_fallback":
+        resolve_fallback = '"/bin/bash"'
+    elif mutate == "plain_reassign_between":
+        between = '  executable = "/bin/bash";\n'
+    elif mutate == "destructuring_array_write_between":
+        between = '  [executable] = ["/bin/bash"];\n'
+    elif mutate == "destructuring_object_write_between":
+        between = '  ({ executable } = { executable: "/bin/bash" });\n'
+    elif mutate == "nested_block_write_between":
+        between = "  if (isDebugShell()) {\n" '    executable = "/bin/bash";\n' "  }\n"
+    elif mutate == "unrelated_statement_between":
+        between = "  const attemptCount = 0;\n"
+    elif mutate is not None:
+        raise ValueError(f"unknown shell contract mutation: {mutate!r}")
+
+    return (
+        '"use strict";\n'
+        "function isWindowsPlatform() {\n"
+        '  return os.platform() === "win32";\n'
+        "}\n"
+        "\n"
+        "function resolveExecutable(exe) {\n"
+        f"{absolute_branch}"
+        f"  const pathEnv = {path_lookup};\n"
+        "  if (!pathEnv) {\n"
+        "    return void 0;\n"
+        "  }\n"
+        "  for (const dir of pathEnv.split(path.delimiter)) {\n"
+        "    const candidate = path.join(dir, exe);\n"
+        "    if (fs.existsSync(candidate)) {\n"
+        "      return candidate;\n"
+        "    }\n"
+        "  }\n"
+        "  return void 0;\n"
+        "}\n"
+        "\n"
+        "function getShellConfiguration() {\n"
+        f"{windows_branch}"
+        "  return {\n"
+        f"    executable: {bash_literal},\n"
+        '    argsPrefix: ["-c"],\n'
+        '    shell: "bash"\n'
+        "  };\n"
+        "}\n"
+        "\n"
+        f"function {prepare_name}(commandToExecute) {{\n"
+        f"{obtain}"
+        f"{between}"
+        f"  const resolvedExecutable = {resolve_call} ?? {resolve_fallback};\n"
+        "  return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
+        "}\n"
+    )
+
+
+_SHELL_CONTRACT_JS = _shell_contract_source()
+
+# Same certified chain, differing only in quote style, indentation, line
+# wrapping, and an interleaved comment between the destructure and the
+# resolve statement -- all formatting-equivalent, so it must still be
+# accepted.
+_SHELL_CONTRACT_FORMATTING_VARIANT_JS = (
+    "'use strict';\n"
+    "function isWindowsPlatform() { return os.platform() === 'win32'; }\n"
+    "function resolveExecutable(exe) {\n"
+    "    if (path.isAbsolute(exe)) { return isExecutable(exe) ? exe : void 0; }\n"
+    "    const pathEnv = process.env['PATH'];\n"
+    "    if (!pathEnv) { return void 0; }\n"
+    "    for (const dir of pathEnv.split(path.delimiter)) {\n"
+    "        const candidate = path.join(dir, exe);\n"
+    "        if (fs.existsSync(candidate)) { return candidate; }\n"
+    "    }\n"
+    "    return void 0;\n"
+    "}\n"
     "function getShellConfiguration() {\n"
-    "  if (platform() === 'linux') {\n"
-    "    var shellCommand = 'bash';\n"
-    "    return shellCommand;\n"
-    "  }\n"
-    "  return 'cmd.exe';\n"
+    "    if (isWindowsPlatform()) {\n"
+    "        return { executable: 'powershell.exe', argsPrefix: ['-NoProfile'],"
+    " shell: 'powershell' };\n"
+    "    }\n"
+    "    return { executable: 'bash', argsPrefix: ['-c'], shell: 'bash' };\n"
     "}\n"
-    "\n"
-    "function prepareExecution() {\n"
-    "  var executable = getShellConfiguration();\n"
-    "  return resolveExecutable(executable);\n"
-    "}\n"
-    "\n"
-    "function resolveExecutable(executable) {\n"
-    "  var searchPaths = process.env.PATH.split(':');\n"
-    "  return searchPaths[0] + '/' + executable;\n"
+    "function prepareShellExecution(commandToExecute) {\n"
+    "    let { executable, argsPrefix, shell } = getShellConfiguration();\n"
+    "    /* resolve through PATH, keeping the bare name as the fallback */\n"
+    "    // upstream keeps the unresolved name when PATH lookup misses\n"
+    "    const resolvedExecutable = resolveExecutable(executable) ?? executable;\n"
+    "    return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
     "}\n"
 )
 
-# Equivalent happy path expressed via class/static method shorthand, with a
-# qualified receiver (`ShellResolver.getShellConfiguration()`) in the caller.
+# Same certified chain expressed with class/static method shorthand and a
+# qualified receiver in the caller -- also formatting-equivalent.
 _SHELL_CONTRACT_STATIC_METHOD_JS = (
     "class ShellResolver {\n"
-    "  static getShellConfiguration() {\n"
-    "    if (platform() === 'linux') {\n"
-    "      var shellCommand = 'bash';\n"
-    "      return shellCommand;\n"
+    "  static resolveExecutable(exe) {\n"
+    "    if (path.isAbsolute(exe)) {\n"
+    "      return isExecutable(exe) ? exe : void 0;\n"
     "    }\n"
-    "    return 'cmd.exe';\n"
+    '    const pathEnv = process.env.PATH || process.env["PATH"];\n'
+    "    for (const dir of pathEnv.split(path.delimiter)) {\n"
+    "      const candidate = path.join(dir, exe);\n"
+    "      if (fs.existsSync(candidate)) {\n"
+    "        return candidate;\n"
+    "      }\n"
+    "    }\n"
+    "    return void 0;\n"
     "  }\n"
-    "}\n"
     "\n"
-    "function prepareExecution() {\n"
-    "  var executable = ShellResolver.getShellConfiguration();\n"
-    "  return resolveExecutable(executable);\n"
-    "}\n"
+    "  static getShellConfiguration() {\n"
+    '    if (os.platform() === "win32") {\n'
+    "      return {\n"
+    '        executable: "powershell.exe",\n'
+    '        argsPrefix: ["-NoProfile", "-Command"],\n'
+    '        shell: "powershell"\n'
+    "      };\n"
+    "    }\n"
+    "    return {\n"
+    '      executable: "bash",\n'
+    '      argsPrefix: ["-c"],\n'
+    '      shell: "bash"\n'
+    "    };\n"
+    "  }\n"
     "\n"
-    "function resolveExecutable(executable) {\n"
-    "  var searchPaths = process.env.PATH.split(':');\n"
-    "  return searchPaths[0] + '/' + executable;\n"
+    "  static prepareShellExecution(commandToExecute) {\n"
+    "    let { executable, argsPrefix, shell } = ShellResolver.getShellConfiguration();\n"
+    "    const resolvedExecutable = resolveExecutable(executable) ?? executable;\n"
+    "    return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
+    "  }\n"
     "}\n"
 )
 
 _NO_CONTRACT_JS = "function noop() { return 1; }\n"
 
-# The literal historical counterexample from the scoped fix-round-1 review:
-# a single generically-named function's Linux branch genuinely returns the
+# The literal historical counterexample from the scoped fix-round-1 review: a
+# single generically-named function's Linux branch genuinely returns the
 # absolute '/bin/bash', while its own non-Linux branch assigns bare 'bash'
 # and passes it to a PATH-searching callee. Fix round 1's function-scoped
 # (rather than branch-scoped or named-unit) heuristic wrongly proved this
-# bundle PATH-resolved. It uses generic names (not getShellConfiguration/
-# prepareExecution), so under the round-2 named-chain validator it is
-# rejected simply because the required named units are absent -- this test
-# exists to pin the exact documented historical defect, independent of the
-# newer named-chain fixtures below.
+# bundle PATH-resolved. None of the certified named units are present, so the
+# certified-chain validator rejects it outright.
 _SHELL_CONTRACT_HISTORICAL_GENERIC_NAME_JS = (
     "function pickShell() {\n"
     "  if (platform() === 'linux') {\n"
@@ -101,130 +244,11 @@ _SHELL_CONTRACT_HISTORICAL_GENERIC_NAME_JS = (
     "}\n"
 )
 
-# Link 1a broken: getShellConfiguration's Linux branch selects a shell other
-# than bare 'bash', so it never proves "Linux chooses bash" even though the
-# value is still fully wired through prepareExecution/resolveExecutable.
-_SHELL_CONTRACT_WRONG_SHELL_JS = (
-    "function getShellConfiguration() {\n"
-    "  if (platform() === 'linux') {\n"
-    "    var shellCommand = 'zsh';\n"
-    "    return shellCommand;\n"
-    "  }\n"
-    "  return 'cmd.exe';\n"
-    "}\n"
-    "\n"
-    "function prepareExecution() {\n"
-    "  var executable = getShellConfiguration();\n"
-    "  return resolveExecutable(executable);\n"
-    "}\n"
-    "\n"
-    "function resolveExecutable(executable) {\n"
-    "  var searchPaths = process.env.PATH.split(':');\n"
-    "  return searchPaths[0] + '/' + executable;\n"
-    "}\n"
-)
-
-# Link 1b broken: the exact historical counterexample. getShellConfiguration's
-# Linux branch genuinely returns the absolute '/bin/bash', while a different,
-# non-Linux branch of the very same function assigns a bare 'bash' literal
-# that is (correctly, otherwise) wired through prepareExecution and
-# resolveExecutable's PATH search. A function-scoped (rather than
-# branch-scoped) heuristic would wrongly accept this; the validator must
-# reject it because the Linux branch itself never selects bare bash.
-_SHELL_CONTRACT_LINUX_BRANCH_ABSOLUTE_JS = (
-    "function getShellConfiguration() {\n"
-    "  if (platform() === 'linux') {\n"
-    "    return '/bin/bash';\n"
-    "  }\n"
-    "  var shellCommand = 'bash';\n"
-    "  return shellCommand;\n"
-    "}\n"
-    "\n"
-    "function prepareExecution() {\n"
-    "  var executable = getShellConfiguration();\n"
-    "  return resolveExecutable(executable);\n"
-    "}\n"
-    "\n"
-    "function resolveExecutable(executable) {\n"
-    "  var searchPaths = process.env.PATH.split(':');\n"
-    "  return searchPaths[0] + '/' + executable;\n"
-    "}\n"
-)
-
-# Link 2a broken: prepareExecution never obtains its value from
-# getShellConfiguration at all -- it passes a hardcoded literal straight to
-# resolveExecutable, so nothing proves the PATH-resolved value actually came
-# from the Linux shell-selection unit.
-_SHELL_CONTRACT_NOT_OBTAINED_JS = (
-    "function getShellConfiguration() {\n"
-    "  if (platform() === 'linux') {\n"
-    "    var shellCommand = 'bash';\n"
-    "    return shellCommand;\n"
-    "  }\n"
-    "  return 'cmd.exe';\n"
-    "}\n"
-    "\n"
-    "function prepareExecution() {\n"
-    "  return resolveExecutable('bash');\n"
-    "}\n"
-    "\n"
-    "function resolveExecutable(executable) {\n"
-    "  var searchPaths = process.env.PATH.split(':');\n"
-    "  return searchPaths[0] + '/' + executable;\n"
-    "}\n"
-)
-
-# Link 2b broken: prepareExecution does call getShellConfiguration, but the
-# value it forwards to resolveExecutable is a different, unrelated literal --
-# the obtained executable is never actually the one passed along.
-_SHELL_CONTRACT_NOT_FORWARDED_JS = (
-    "function getShellConfiguration() {\n"
-    "  if (platform() === 'linux') {\n"
-    "    var shellCommand = 'bash';\n"
-    "    return shellCommand;\n"
-    "  }\n"
-    "  return 'cmd.exe';\n"
-    "}\n"
-    "\n"
-    "function prepareExecution() {\n"
-    "  var executable = getShellConfiguration();\n"
-    "  return resolveExecutable('bash');\n"
-    "}\n"
-    "\n"
-    "function resolveExecutable(executable) {\n"
-    "  var searchPaths = process.env.PATH.split(':');\n"
-    "  return searchPaths[0] + '/' + executable;\n"
-    "}\n"
-)
-
-# Link 3 broken: bare 'bash' is obtained and forwarded correctly, but
-# resolveExecutable resolves it against a hardcoded path list instead of
-# process.env.PATH.
-_SHELL_CONTRACT_NO_PATH_SEARCH_JS = (
-    "function getShellConfiguration() {\n"
-    "  if (platform() === 'linux') {\n"
-    "    var shellCommand = 'bash';\n"
-    "    return shellCommand;\n"
-    "  }\n"
-    "  return 'cmd.exe';\n"
-    "}\n"
-    "\n"
-    "function prepareExecution() {\n"
-    "  var executable = getShellConfiguration();\n"
-    "  return resolveExecutable(executable);\n"
-    "}\n"
-    "\n"
-    "function resolveExecutable(executable) {\n"
-    "  var knownPaths = ['/usr/bin', '/bin'];\n"
-    "  return knownPaths[0] + '/' + executable;\n"
-    "}\n"
-)
-
-# Adversarial: the generic tokens ('linux', bare 'bash', process.env.PATH)
-# all appear in the file, and even a function literally named
-# resolveExecutable performs a PATH search, but no getShellConfiguration or
-# prepareExecution unit exists at all -- the named chain cannot be proven
-# from token soup alone.
+# Adversarial: the generic tokens ('linux', bare 'bash', process.env.PATH) all
+# appear in the file, and even a function literally named resolveExecutable
+# performs a PATH search, but no getShellConfiguration or
+# prepareShellExecution unit exists at all -- the certified chain cannot be
+# proven from token soup alone.
 _SHELL_CONTRACT_UNRELATED_COOCCURRENCE_JS = (
     "function chooseShell() {\n"
     "  if (platform() === 'linux') {\n"
@@ -244,13 +268,21 @@ _SHELL_CONTRACT_UNRELATED_COOCCURRENCE_JS = (
     "}\n"
 )
 
-# Link 2c broken (NC1 regression, exact fix-round-2-review reproduction):
-# prepareExecution correctly obtains its value from getShellConfiguration
-# via the assignment form, but then plainly reassigns that same identifier
-# to the absolute '/bin/bash' before forwarding it -- the value actually
-# forwarded to resolveExecutable is no longer provably the value
-# getShellConfiguration returned.
-_SHELL_CONTRACT_REASSIGNED_AFTER_OBTAIN_JS = (
+# Adversarial: the pre-round-4 generic dataflow shape that three review rounds
+# repeatedly bypassed -- a mutable `prepareExecution` local obtained from
+# getShellConfiguration and later handed to resolveExecutable. It is not the
+# certified historical structure (no configuration object, no destructure, no
+# `?? executable` fallback, generic unit name), so it must fail closed rather
+# than be re-certified by a generic co-occurrence or `prepareExecution`
+# fallback path.
+# Adversarial: the two exact fix-round-3 review reproductions that the
+# pre-round-4 generic dataflow scanner wrongly certified. Both are the
+# generic `prepareExecution` shape whose tracked executable is overwritten
+# with the absolute '/bin/bash' before it reaches resolveExecutable -- once
+# through a destructuring-assignment target, once through a plain
+# reassignment nested inside an `if` block. Neither is the certified
+# historical structure, so both must fail closed.
+_SHELL_CONTRACT_FIX3_DESTRUCTURING_WRITE_JS = (
     "function getShellConfiguration() {\n"
     "  if (platform() === 'linux') {\n"
     "    var shellCommand = 'bash';\n"
@@ -261,7 +293,7 @@ _SHELL_CONTRACT_REASSIGNED_AFTER_OBTAIN_JS = (
     "\n"
     "function prepareExecution() {\n"
     "  var executable = getShellConfiguration();\n"
-    "  executable = '/bin/bash';\n"
+    "  [executable] = ['/bin/bash'];\n"
     "  return resolveExecutable(executable);\n"
     "}\n"
     "\n"
@@ -271,11 +303,7 @@ _SHELL_CONTRACT_REASSIGNED_AFTER_OBTAIN_JS = (
     "}\n"
 )
 
-# Link 2d broken: same shape as link2c, but the intervening write uses a
-# compound assignment operator (`+=`) instead of a plain `=`. Any write to
-# the identifier between obtaining it and forwarding it must be rejected,
-# regardless of which assignment operator performs the write.
-_SHELL_CONTRACT_COMPOUND_ASSIGNED_AFTER_OBTAIN_JS = (
+_SHELL_CONTRACT_FIX3_NESTED_BLOCK_WRITE_JS = (
     "function getShellConfiguration() {\n"
     "  if (platform() === 'linux') {\n"
     "    var shellCommand = 'bash';\n"
@@ -286,7 +314,9 @@ _SHELL_CONTRACT_COMPOUND_ASSIGNED_AFTER_OBTAIN_JS = (
     "\n"
     "function prepareExecution() {\n"
     "  var executable = getShellConfiguration();\n"
-    "  executable += '';\n"
+    "  if (true) {\n"
+    "    executable = '/bin/bash';\n"
+    "  }\n"
     "  return resolveExecutable(executable);\n"
     "}\n"
     "\n"
@@ -296,14 +326,7 @@ _SHELL_CONTRACT_COMPOUND_ASSIGNED_AFTER_OBTAIN_JS = (
     "}\n"
 )
 
-# Link 2e broken: prepareExecution obtains the executable at its own top
-# level, but the actual forward call lives inside a nested block that
-# shadows the identifier with its own `let` declaration bound to the
-# absolute '/bin/bash'. The forward call reads the shadowed inner binding,
-# not the outer value obtained from getShellConfiguration -- a forward call
-# hidden inside a nested block/function that could bind a different
-# identifier must not count as proof.
-_SHELL_CONTRACT_SHADOWED_IN_NESTED_BLOCK_JS = (
+_SHELL_CONTRACT_GENERIC_DATAFLOW_JS = (
     "function getShellConfiguration() {\n"
     "  if (platform() === 'linux') {\n"
     "    var shellCommand = 'bash';\n"
@@ -314,38 +337,13 @@ _SHELL_CONTRACT_SHADOWED_IN_NESTED_BLOCK_JS = (
     "\n"
     "function prepareExecution() {\n"
     "  var executable = getShellConfiguration();\n"
-    "  {\n"
-    "    let executable = '/bin/bash';\n"
-    "    return resolveExecutable(executable);\n"
-    "  }\n"
-    "}\n"
-    "\n"
-    "function resolveExecutable(executable) {\n"
-    "  var searchPaths = process.env.PATH.split(':');\n"
-    "  return searchPaths[0] + '/' + executable;\n"
-    "}\n"
-)
-
-# Link 2f broken: the identifier is redeclared with `var` (legal in JS,
-# unlike `const`/`let`) rather than plainly reassigned, rebinding it to the
-# absolute '/bin/bash' before the forward call -- redeclaration must be
-# rejected the same way a plain reassignment is.
-_SHELL_CONTRACT_REDECLARED_WITH_VAR_AFTER_OBTAIN_JS = (
-    "function getShellConfiguration() {\n"
-    "  if (platform() === 'linux') {\n"
-    "    var shellCommand = 'bash';\n"
-    "    return shellCommand;\n"
-    "  }\n"
-    "  return 'cmd.exe';\n"
-    "}\n"
-    "\n"
-    "function prepareExecution() {\n"
-    "  var executable = getShellConfiguration();\n"
-    "  var executable = '/bin/bash';\n"
     "  return resolveExecutable(executable);\n"
     "}\n"
     "\n"
     "function resolveExecutable(executable) {\n"
+    "  if (path.isAbsolute(executable)) {\n"
+    "    return executable;\n"
+    "  }\n"
     "  var searchPaths = process.env.PATH.split(':');\n"
     "  return searchPaths[0] + '/' + executable;\n"
     "}\n"
@@ -766,45 +764,89 @@ def test_shell_interception_contract_missing_fails_closed(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param("absolute_bash", id="link1a-non-windows-executable-is-absolute-bin-bash"),
+        pytest.param("no_windows_branch", id="link1b-windows-branch-not-separate"),
+        pytest.param(
+            "property_access_obtain",
+            id="link2a-executable-not-destructured-from-get-shell-configuration",
+        ),
+        pytest.param("missing_resolve_call", id="link2b-resolve-executable-never-called"),
+        pytest.param("forwards_other_value", id="link2c-resolve-called-with-another-value"),
+        pytest.param("absolute_fallback", id="link2d-fallback-replaced-with-absolute-bin-bash"),
+        pytest.param("plain_reassign_between", id="link2e-plain-reassign-between-obtain-resolve"),
+        pytest.param(
+            "destructuring_array_write_between",
+            id="link2f-array-destructuring-write-between-obtain-resolve",
+        ),
+        pytest.param(
+            "destructuring_object_write_between",
+            id="link2g-object-destructuring-write-between-obtain-resolve",
+        ),
+        pytest.param(
+            "nested_block_write_between",
+            id="link2h-nested-block-outer-write-between-obtain-resolve",
+        ),
+        pytest.param(
+            "unrelated_statement_between",
+            id="link2i-intervening-statement-between-obtain-resolve",
+        ),
+        pytest.param(
+            "generic_prepare_execution_name",
+            id="link2j-generic-prepare-execution-unit-name",
+        ),
+        pytest.param("path_lookup_changed", id="link3a-path-lookup-replaced-with-fixed-list"),
+        pytest.param(
+            "path_lookup_only_in_absolute_branch",
+            id="link3b-path-searched-only-for-absolute-executables",
+        ),
+        pytest.param("no_absolute_branch", id="link3c-absolute-executables-not-handled-separately"),
+    ],
+)
+def test_shell_interception_contract_rejects_mutated_certified_chain(
+    tmp_path: Path, mutation: str
+) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    install_fake_package(
+        prefix, version="0.58.0", shell_contract_js=_shell_contract_source(mutation)
+    )
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    with pytest.raises(
+        GeminiResolveError, match="does not prove PATH-resolved bash shell interception"
+    ):
+        resolver.resolve("0.58.0")
+
+
+@pytest.mark.parametrize(
     "shell_contract_js",
     [
-        pytest.param(_SHELL_CONTRACT_WRONG_SHELL_JS, id="link1a-wrong-shell-selected"),
-        pytest.param(
-            _SHELL_CONTRACT_LINUX_BRANCH_ABSOLUTE_JS,
-            id="link1b-linux-branch-returns-absolute-bin-bash",
-        ),
-        pytest.param(
-            _SHELL_CONTRACT_NOT_OBTAINED_JS,
-            id="link2a-executable-not-obtained-from-get-shell-configuration",
-        ),
-        pytest.param(
-            _SHELL_CONTRACT_NOT_FORWARDED_JS,
-            id="link2b-obtained-executable-not-forwarded-to-resolve-executable",
-        ),
-        pytest.param(_SHELL_CONTRACT_NO_PATH_SEARCH_JS, id="link3-resolve-executable-skips-path"),
         pytest.param(
             _SHELL_CONTRACT_UNRELATED_COOCCURRENCE_JS,
-            id="adversarial-token-soup-without-named-chain",
+            id="adversarial-token-soup-without-certified-chain",
         ),
         pytest.param(
-            _SHELL_CONTRACT_REASSIGNED_AFTER_OBTAIN_JS,
-            id="link2c-executable-reassigned-after-obtain",
+            _SHELL_CONTRACT_GENERIC_DATAFLOW_JS,
+            id="adversarial-generic-prepare-execution-dataflow-shape",
         ),
         pytest.param(
-            _SHELL_CONTRACT_COMPOUND_ASSIGNED_AFTER_OBTAIN_JS,
-            id="link2d-executable-compound-assigned-after-obtain",
+            _SHELL_CONTRACT_FIX3_DESTRUCTURING_WRITE_JS,
+            id="fix3-bypass-destructuring-assignment-write-before-forward",
         ),
         pytest.param(
-            _SHELL_CONTRACT_SHADOWED_IN_NESTED_BLOCK_JS,
-            id="link2e-forward-shadowed-in-nested-block",
-        ),
-        pytest.param(
-            _SHELL_CONTRACT_REDECLARED_WITH_VAR_AFTER_OBTAIN_JS,
-            id="link2f-executable-redeclared-with-var-after-obtain",
+            _SHELL_CONTRACT_FIX3_NESTED_BLOCK_WRITE_JS,
+            id="fix3-bypass-nested-block-plain-reassign-before-forward",
         ),
     ],
 )
-def test_shell_interception_contract_rejects_broken_causal_link(
+def test_shell_interception_contract_rejects_uncertified_source_shapes(
     tmp_path: Path, shell_contract_js: str
 ) -> None:
     cache = tmp_path / "cache"
@@ -823,14 +865,26 @@ def test_shell_interception_contract_rejects_broken_causal_link(
         resolver.resolve("0.58.0")
 
 
-def test_shell_interception_contract_accepts_static_class_method_syntax(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "shell_contract_js",
+    [
+        pytest.param(_SHELL_CONTRACT_JS, id="preserved-historical-prototype-source"),
+        pytest.param(
+            _SHELL_CONTRACT_FORMATTING_VARIANT_JS,
+            id="formatting-and-quote-equivalent-source",
+        ),
+        pytest.param(
+            _SHELL_CONTRACT_STATIC_METHOD_JS,
+            id="class-static-method-shorthand-source",
+        ),
+    ],
+)
+def test_shell_interception_contract_accepts_certified_chain(
+    tmp_path: Path, shell_contract_js: str
 ) -> None:
     cache = tmp_path / "cache"
     prefix = cache / "agents" / "gemini" / "0.58.0"
-    install_fake_package(
-        prefix, version="0.58.0", shell_contract_js=_SHELL_CONTRACT_STATIC_METHOD_JS
-    )
+    install_fake_package(prefix, version="0.58.0", shell_contract_js=shell_contract_js)
     fake_node = make_fake_node(tmp_path / "node")
     resolver = GeminiResolver(
         cache,
