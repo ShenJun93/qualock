@@ -350,6 +350,77 @@ _SHELL_CONTRACT_GENERIC_DATAFLOW_JS = (
 )
 
 
+# Adversarial: the exact fix-round-4 review reproduction. Links 1 and 3 are
+# genuinely present, and the certified destructure/resolve pair does occur in
+# prepareShellExecution's body text -- but only inside a dead `if (false)`
+# block, whose local binding is never read. The function's real,
+# always-executed flow hardcodes the absolute "/bin/bash" and returns it, so
+# the pair proves nothing about what the unit actually forwards. Only a
+# top-level-statement requirement on link 2 can reject this bundle.
+_SHELL_CONTRACT_FIX4_DEAD_BRANCH_DECOY_JS = (
+    "function getShellConfiguration() {\n"
+    "  if (isWindowsPlatform()) {\n"
+    '    return { executable: "powershell.exe", argsPrefix: ["-NoProfile"],'
+    ' shell: "powershell" };\n'
+    "  }\n"
+    '  return { executable: "bash", argsPrefix: ["-c"], shell: "bash" };\n'
+    "}\n"
+    "\n"
+    "function resolveExecutable(exe) {\n"
+    "  if (path.isAbsolute(exe)) {\n"
+    "    return isExecutable(exe) ? exe : void 0;\n"
+    "  }\n"
+    "  const pathEnv = process.env.PATH;\n"
+    "  return pathEnv;\n"
+    "}\n"
+    "\n"
+    "function prepareShellExecution(commandToExecute) {\n"
+    "  if (false) {\n"
+    "    let { executable } = getShellConfiguration();\n"
+    "    const resolvedExecutable = resolveExecutable(executable) ?? executable;\n"
+    "  }\n"
+    '  const executable = "/bin/bash";\n'
+    '  return { resolvedExecutable: executable, argsPrefix: [], shell: "bash",'
+    " commandToExecute };\n"
+    "}\n"
+)
+
+# Adversarial: the same dead-decoy bypass expressed as a never-called nested
+# function declaration instead of an `if (false)` block -- the far more
+# innocuous-looking shape in a real bundle (dead helper, feature-flagged
+# variant, tree-shaking remnant). The certified pair again sits outside
+# prepareShellExecution's own top-level statement flow while the live flow
+# returns the absolute "/bin/bash".
+_SHELL_CONTRACT_FIX4_NESTED_FUNCTION_DECOY_JS = (
+    "function getShellConfiguration() {\n"
+    "  if (isWindowsPlatform()) {\n"
+    '    return { executable: "powershell.exe", argsPrefix: ["-NoProfile"],'
+    ' shell: "powershell" };\n'
+    "  }\n"
+    '  return { executable: "bash", argsPrefix: ["-c"], shell: "bash" };\n'
+    "}\n"
+    "\n"
+    "function resolveExecutable(exe) {\n"
+    "  if (path.isAbsolute(exe)) {\n"
+    "    return isExecutable(exe) ? exe : void 0;\n"
+    "  }\n"
+    "  const pathEnv = process.env.PATH;\n"
+    "  return pathEnv;\n"
+    "}\n"
+    "\n"
+    "function prepareShellExecution(commandToExecute) {\n"
+    "  function neverCalled() {\n"
+    "    let { executable } = getShellConfiguration();\n"
+    "    const resolvedExecutable = resolveExecutable(executable) ?? executable;\n"
+    "    return resolvedExecutable;\n"
+    "  }\n"
+    '  const executable = "/bin/bash";\n'
+    '  return { resolvedExecutable: executable, argsPrefix: [], shell: "bash",'
+    " commandToExecute };\n"
+    "}\n"
+)
+
+
 def install_fake_package(
     prefix: Path,
     *,
@@ -843,6 +914,14 @@ def test_shell_interception_contract_rejects_mutated_certified_chain(
         pytest.param(
             _SHELL_CONTRACT_FIX3_NESTED_BLOCK_WRITE_JS,
             id="fix3-bypass-nested-block-plain-reassign-before-forward",
+        ),
+        pytest.param(
+            _SHELL_CONTRACT_FIX4_DEAD_BRANCH_DECOY_JS,
+            id="fix4-bypass-dead-if-false-decoy-destructure-resolve-pair",
+        ),
+        pytest.param(
+            _SHELL_CONTRACT_FIX4_NESTED_FUNCTION_DECOY_JS,
+            id="fix4-bypass-never-called-nested-function-decoy-pair",
         ),
     ],
 )
