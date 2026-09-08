@@ -87,9 +87,6 @@ _UNIT_PATTERN_TEMPLATE = r"(?:function\s+|static\s+)?(?<![\w.$]){name}\s*\([^)]*
 _EXECUTABLE_LITERAL_RE = re.compile(r"(?<![\w$.])executable\s*:\s*(['\"])([^'\"]*)\1")
 # The `executable` binding introduced by an object destructuring pattern,
 # optionally renamed (`executable: exe`).
-_EXECUTABLE_PROPERTY_RE = re.compile(
-    r"(?<![\w$])executable(?:\s*:\s*(?P<alias>[\w$]+))?\s*(?=,|$)"
-)
 _RETURN_OBJECT_RE = re.compile(r"\breturn\s*\(?\s*\{")
 _WINDOWS_CONDITION_RE = re.compile(r"isWindows[A-Za-z]*\s*\(|['\"]win32['\"]")
 _ABSOLUTE_CONDITION_RE = re.compile(r"(?<![\w$])isAbsolute\s*\(")
@@ -236,21 +233,55 @@ def _returns_bare_bash_outside_windows(get_shell_configuration_body: str) -> boo
     return bool(executables) and all(value == "bash" for value in executables)
 
 
-def _top_level_offsets(body: str) -> set[int]:
-    # Offsets of `body` (a unit body including its own outer braces) that sit
-    # directly in the unit's own top-level statement flow, i.e. at brace depth
-    # 1: not inside a nested block, a dead `if (false) {...}` branch, or a
-    # nested (possibly never-called) function declaration. Strings and
-    # comments are skipped so their braces cannot shift the depth; an
-    # unterminated string or comment ends the scan, which drops the remaining
-    # offsets and therefore fails closed.
-    offsets: set[int] = set()
-    depth = 0
+def _resolve_statement_pattern(name: str) -> re.Pattern[str]:
+    identifier = re.escape(name)
+    return re.compile(
+        r"(?:const|let|var)\s+(?P<resolved>[\w$]+)\s*=\s*"
+        rf"(?:[\w$]+\s*\.\s*)?{_RESOLVE_EXECUTABLE}\s*\(\s*{identifier}\s*\)"
+        rf"\s*\?\?\s*{identifier}(?![\w$])"
+    )
+
+
+def _trivia_end(text: str, index: int = 0) -> tuple[int, bool] | None:
+    saw_line_terminator = False
+    while index < len(text):
+        char = text[index]
+        if char.isspace():
+            saw_line_terminator |= char in "\r\n\u2028\u2029"
+            index += 1
+            continue
+        if text.startswith("//", index):
+            end = index + 2
+            while end < len(text) and text[end] not in "\r\n\u2028\u2029":
+                end += 1
+            if end == len(text):
+                return end, saw_line_terminator
+            saw_line_terminator = True
+            index = end + 1
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end == -1:
+                return None
+            saw_line_terminator |= any(
+                marker in text[index : end + 2] for marker in "\r\n\u2028\u2029"
+            )
+            index = end + 2
+            continue
+        break
+    return index, saw_line_terminator
+
+
+def _top_level_object_properties(text: str, open_index: int) -> list[str] | None:
+    properties: list[str] = []
+    start = open_index + 1
+    index = start
+    braces = 1
+    brackets = 0
+    parens = 0
     in_string: str | None = None
-    index = 0
-    length = len(body)
-    while index < length:
-        char = body[index]
+    while index < len(text):
+        char = text[index]
         if in_string is not None:
             if char == "\\":
                 index += 2
@@ -259,92 +290,178 @@ def _top_level_offsets(body: str) -> set[int]:
                 in_string = None
             index += 1
             continue
-        if body.startswith("//", index):
-            end = body.find("\n", index)
-            index = length if end == -1 else end + 1
+        if text.startswith("//", index):
+            end = index + 2
+            while end < len(text) and text[end] not in "\r\n\u2028\u2029":
+                end += 1
+            index = end
             continue
-        if body.startswith("/*", index):
-            end = body.find("*/", index)
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
             if end == -1:
-                break
+                return None
             index = end + 2
             continue
-        if char == "{":
-            depth += 1
+        if char in ("'", '"', "`"):
+            in_string = char
+        elif char == "{":
+            braces += 1
         elif char == "}":
-            depth -= 1
-        else:
-            if depth == 1:
-                offsets.add(index)
-            if char in ("'", '"', "`"):
-                in_string = char
+            braces -= 1
+            if braces == 0:
+                if brackets or parens:
+                    return None
+                properties.append(text[start:index])
+                return properties
+        elif char == "[":
+            brackets += 1
+        elif char == "]":
+            brackets -= 1
+            if brackets < 0:
+                return None
+        elif char == "(":
+            parens += 1
+        elif char == ")":
+            parens -= 1
+            if parens < 0:
+                return None
+        elif char == "," and braces == 1 and brackets == 0 and parens == 0:
+            properties.append(text[start:index])
+            start = index + 1
         index += 1
-    return offsets
+    return None
 
 
-def _resolve_statement_pattern(name: str) -> re.Pattern[str]:
-    identifier = re.escape(name)
-    return re.compile(
-        r"(?:const|let|var)\s+(?P<resolved>[\w$]+)\s*=\s*"
-        rf"(?:[\w$]+\s*\.\s*)?{_RESOLVE_EXECUTABLE}\s*\(\s*{identifier}\s*\)"
-        rf"\s*\?\?\s*{identifier}\s*(?:;|$)"
-    )
+def _property_tokens(property_text: str) -> list[str] | None:
+    tokens: list[str] = []
+    index = 0
+    while index < len(property_text):
+        trivia = _trivia_end(property_text, index)
+        if trivia is None:
+            return None
+        index = trivia[0]
+        if index == len(property_text):
+            break
+        if property_text.startswith("...", index):
+            tokens.append("...")
+            index += 3
+            continue
+        char = property_text[index]
+        if char.isalpha() or char in "_$":
+            end = index + 1
+            while end < len(property_text) and (
+                property_text[end].isalnum() or property_text[end] in "_$"
+            ):
+                end += 1
+            tokens.append(property_text[index:end])
+            index = end
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+            end = index + 1
+            while end < len(property_text):
+                if property_text[end] == "\\":
+                    end += 2
+                    continue
+                if property_text[end] == quote:
+                    break
+                end += 1
+            if end == len(property_text):
+                return None
+            tokens.append(property_text[index : end + 1])
+            index = end + 1
+            continue
+        tokens.append(char)
+        index += 1
+    return tokens
+
+
+def _destructured_executable_binding(properties_text: str) -> str | None:
+    properties = _top_level_object_properties("{" + properties_text + "}", 0)
+    if properties is None:
+        return None
+    bindings: list[str] = []
+    for property_text in properties:
+        tokens = _property_tokens(property_text)
+        if tokens is None:
+            return None
+        if tokens == ["executable"]:
+            bindings.append("executable")
+        elif (
+            len(tokens) == 3
+            and tokens[:2] == ["executable", ":"]
+            and re.fullmatch(r"[\w$]+", tokens[2])
+        ):
+            bindings.append(tokens[2])
+        elif tokens and tokens[0] == "executable":
+            return None
+    return bindings[0] if len(bindings) == 1 else None
 
 
 def _return_object_forwards_binding(statement: str, binding: str) -> bool:
-    returned = _RETURN_OBJECT_RE.match(statement)
-    if returned is None:
+    if not statement.startswith("return") or (
+        len(statement) > len("return")
+        and (statement[len("return")].isalnum() or statement[len("return")] in "_$")
+    ):
         return False
-    returned_object = _match_brace_scope(statement, returned.end() - 1)
-    if returned_object is None:
+    trivia = _trivia_end(statement, len("return"))
+    if trivia is None or trivia[1]:
         return False
-    property_pattern = re.compile(
-        r"(?<![\w$])resolvedExecutable"
-        r"(?:\s*:\s*(?P<value>[\w$]+))?\s*(?=,|})"
-    )
-    object_top_level = _top_level_offsets(returned_object)
-    for property_match in property_pattern.finditer(returned_object):
-        if property_match.start() not in object_top_level:
+    open_index = trivia[0]
+    if open_index == len(statement) or statement[open_index] != "{":
+        return False
+    properties = _top_level_object_properties(statement, open_index)
+    if properties is None:
+        return False
+
+    resolved_properties = 0
+    for property_text in properties:
+        tokens = _property_tokens(property_text)
+        if tokens is None:
+            return False
+        if not tokens:
             continue
-        forwarded = property_match.group("value") or "resolvedExecutable"
-        if forwarded == binding:
-            return True
-    return False
+        if tokens[0] == "..." or tokens[0] == "[" or tokens[0][0] in "'\"`":
+            return False
+        if len(tokens) > 1 and tokens[1] != ":":
+            return False
+        if tokens[0] != "resolvedExecutable":
+            continue
+        resolved_properties += 1
+        if tokens == ["resolvedExecutable"]:
+            if binding != "resolvedExecutable":
+                return False
+        elif tokens != ["resolvedExecutable", ":", binding]:
+            return False
+    return resolved_properties == 1
 
 
 def _destructures_then_resolves_executable(prepare_shell_execution_body: str) -> bool:
-    # Both statements of the certified pair must belong to the unit's own
-    # top-level statement flow. A pair found only inside a nested block, a
-    # dead `if (false)` branch, or a never-called nested function proves
-    # nothing about what the unit actually forwards, so it must not certify
-    # link 2 while the live flow selects some other executable.
-    top_level = _top_level_offsets(prepare_shell_execution_body)
-    for destructure in _DESTRUCTURE_RE.finditer(prepare_shell_execution_body):
-        bound = _EXECUTABLE_PROPERTY_RE.search(destructure.group("properties"))
-        if bound is None or destructure.start() not in top_level:
-            continue
-        name = bound.group("alias") or "executable"
-        tail = prepare_shell_execution_body[destructure.end() :]
-        following = _strip_leading_trivia(tail)
-        resolve_offset = destructure.end() + len(tail) - len(following)
-        if resolve_offset not in top_level:
-            continue
-        resolve = _resolve_statement_pattern(name).match(following)
-        if resolve is None:
-            continue
-        after_resolve = following[resolve.end() :]
-        returned = _strip_leading_trivia(after_resolve)
-        return_offset = (
-            resolve_offset
-            + resolve.end()
-            + len(after_resolve)
-            - len(returned)
-        )
-        if return_offset not in top_level:
-            continue
-        if _return_object_forwards_binding(returned, resolve.group("resolved")):
-            return True
-    return False
+    if not prepare_shell_execution_body.startswith("{"):
+        return False
+    prefix = _strip_leading_trivia(prepare_shell_execution_body[1:])
+    destructure = _DESTRUCTURE_RE.match(prefix)
+    if destructure is None:
+        return False
+    name = _destructured_executable_binding(destructure.group("properties"))
+    if name is None:
+        return False
+
+    following = _strip_leading_trivia(prefix[destructure.end() :])
+    resolve = _resolve_statement_pattern(name).match(following)
+    if resolve is None:
+        return False
+    terminator = _trivia_end(following, resolve.end())
+    if terminator is None:
+        return False
+    after_expression, saw_line_terminator = terminator
+    if after_expression < len(following) and following[after_expression] == ";":
+        after_expression += 1
+    elif not saw_line_terminator:
+        return False
+
+    returned = _strip_leading_trivia(following[after_expression:])
+    return _return_object_forwards_binding(returned, resolve.group("resolved"))
 
 
 def _resolves_absolute_separately_and_searches_path(resolve_executable_body: str) -> bool:
