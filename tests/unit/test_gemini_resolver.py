@@ -244,6 +244,113 @@ _SHELL_CONTRACT_UNRELATED_COOCCURRENCE_JS = (
     "}\n"
 )
 
+# Link 2c broken (NC1 regression, exact fix-round-2-review reproduction):
+# prepareExecution correctly obtains its value from getShellConfiguration
+# via the assignment form, but then plainly reassigns that same identifier
+# to the absolute '/bin/bash' before forwarding it -- the value actually
+# forwarded to resolveExecutable is no longer provably the value
+# getShellConfiguration returned.
+_SHELL_CONTRACT_REASSIGNED_AFTER_OBTAIN_JS = (
+    "function getShellConfiguration() {\n"
+    "  if (platform() === 'linux') {\n"
+    "    var shellCommand = 'bash';\n"
+    "    return shellCommand;\n"
+    "  }\n"
+    "  return 'cmd.exe';\n"
+    "}\n"
+    "\n"
+    "function prepareExecution() {\n"
+    "  var executable = getShellConfiguration();\n"
+    "  executable = '/bin/bash';\n"
+    "  return resolveExecutable(executable);\n"
+    "}\n"
+    "\n"
+    "function resolveExecutable(executable) {\n"
+    "  var searchPaths = process.env.PATH.split(':');\n"
+    "  return searchPaths[0] + '/' + executable;\n"
+    "}\n"
+)
+
+# Link 2d broken: same shape as link2c, but the intervening write uses a
+# compound assignment operator (`+=`) instead of a plain `=`. Any write to
+# the identifier between obtaining it and forwarding it must be rejected,
+# regardless of which assignment operator performs the write.
+_SHELL_CONTRACT_COMPOUND_ASSIGNED_AFTER_OBTAIN_JS = (
+    "function getShellConfiguration() {\n"
+    "  if (platform() === 'linux') {\n"
+    "    var shellCommand = 'bash';\n"
+    "    return shellCommand;\n"
+    "  }\n"
+    "  return 'cmd.exe';\n"
+    "}\n"
+    "\n"
+    "function prepareExecution() {\n"
+    "  var executable = getShellConfiguration();\n"
+    "  executable += '';\n"
+    "  return resolveExecutable(executable);\n"
+    "}\n"
+    "\n"
+    "function resolveExecutable(executable) {\n"
+    "  var searchPaths = process.env.PATH.split(':');\n"
+    "  return searchPaths[0] + '/' + executable;\n"
+    "}\n"
+)
+
+# Link 2e broken: prepareExecution obtains the executable at its own top
+# level, but the actual forward call lives inside a nested block that
+# shadows the identifier with its own `let` declaration bound to the
+# absolute '/bin/bash'. The forward call reads the shadowed inner binding,
+# not the outer value obtained from getShellConfiguration -- a forward call
+# hidden inside a nested block/function that could bind a different
+# identifier must not count as proof.
+_SHELL_CONTRACT_SHADOWED_IN_NESTED_BLOCK_JS = (
+    "function getShellConfiguration() {\n"
+    "  if (platform() === 'linux') {\n"
+    "    var shellCommand = 'bash';\n"
+    "    return shellCommand;\n"
+    "  }\n"
+    "  return 'cmd.exe';\n"
+    "}\n"
+    "\n"
+    "function prepareExecution() {\n"
+    "  var executable = getShellConfiguration();\n"
+    "  {\n"
+    "    let executable = '/bin/bash';\n"
+    "    return resolveExecutable(executable);\n"
+    "  }\n"
+    "}\n"
+    "\n"
+    "function resolveExecutable(executable) {\n"
+    "  var searchPaths = process.env.PATH.split(':');\n"
+    "  return searchPaths[0] + '/' + executable;\n"
+    "}\n"
+)
+
+# Link 2f broken: the identifier is redeclared with `var` (legal in JS,
+# unlike `const`/`let`) rather than plainly reassigned, rebinding it to the
+# absolute '/bin/bash' before the forward call -- redeclaration must be
+# rejected the same way a plain reassignment is.
+_SHELL_CONTRACT_REDECLARED_WITH_VAR_AFTER_OBTAIN_JS = (
+    "function getShellConfiguration() {\n"
+    "  if (platform() === 'linux') {\n"
+    "    var shellCommand = 'bash';\n"
+    "    return shellCommand;\n"
+    "  }\n"
+    "  return 'cmd.exe';\n"
+    "}\n"
+    "\n"
+    "function prepareExecution() {\n"
+    "  var executable = getShellConfiguration();\n"
+    "  var executable = '/bin/bash';\n"
+    "  return resolveExecutable(executable);\n"
+    "}\n"
+    "\n"
+    "function resolveExecutable(executable) {\n"
+    "  var searchPaths = process.env.PATH.split(':');\n"
+    "  return searchPaths[0] + '/' + executable;\n"
+    "}\n"
+)
+
 
 def install_fake_package(
     prefix: Path,
@@ -678,6 +785,22 @@ def test_shell_interception_contract_missing_fails_closed(tmp_path: Path) -> Non
         pytest.param(
             _SHELL_CONTRACT_UNRELATED_COOCCURRENCE_JS,
             id="adversarial-token-soup-without-named-chain",
+        ),
+        pytest.param(
+            _SHELL_CONTRACT_REASSIGNED_AFTER_OBTAIN_JS,
+            id="link2c-executable-reassigned-after-obtain",
+        ),
+        pytest.param(
+            _SHELL_CONTRACT_COMPOUND_ASSIGNED_AFTER_OBTAIN_JS,
+            id="link2d-executable-compound-assigned-after-obtain",
+        ),
+        pytest.param(
+            _SHELL_CONTRACT_SHADOWED_IN_NESTED_BLOCK_JS,
+            id="link2e-forward-shadowed-in-nested-block",
+        ),
+        pytest.param(
+            _SHELL_CONTRACT_REDECLARED_WITH_VAR_AFTER_OBTAIN_JS,
+            id="link2f-executable-redeclared-with-var-after-obtain",
         ),
     ],
 )
