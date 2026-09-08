@@ -117,6 +117,8 @@ def _validate_availability_semantics(
     rate_card_id: str | None,
     source_url: str | None,
     source_checked_at: date | None,
+    effective_from: date | None,
+    effective_until: date | None,
     rates: object,
     limitations: tuple[str, ...],
     unavailable_reason: str | None,
@@ -135,6 +137,8 @@ def _validate_availability_semantics(
     if unavailable_reason is None or unavailable_reason not in _UNAVAILABLE_REASONS:
         raise ValueError
     if rate_card_id is not None or source_url is not None or source_checked_at is not None:
+        raise ValueError
+    if effective_from is not None or effective_until is not None:
         raise ValueError
     if rates is not None:
         raise ValueError
@@ -251,6 +255,8 @@ def _parse_body(loaded: LoadedReport, payload: dict[str, object]) -> PricingSide
         rate_card_id=rate_card_id,
         source_url=source_url,
         source_checked_at=source_checked_at,
+        effective_from=effective_from,
+        effective_until=effective_until,
         rates=rates,
         limitations=limitations,
         unavailable_reason=unavailable_reason,
