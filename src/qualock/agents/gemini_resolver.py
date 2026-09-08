@@ -31,7 +31,7 @@ _REQUIRED_CLI_FLAGS = (
     "--version",
 )
 
-_OPTION_TOKEN_RE = re.compile(r"(?<!\S)(--?[A-Za-z][A-Za-z0-9-]*)")
+_HELP_OPTION_RE = re.compile(r"(?<!\S)(--?[A-Za-z][A-Za-z0-9-]*)(?=[,\s]|$)")
 
 # Vars that must never reach an npm/node subprocess probing or installing the
 # pinned CLI: automation credentials, ambient Google auth state, and Gemini's
@@ -50,6 +50,90 @@ _SCRUBBED_ENV_VARS = (
 )
 
 
+# Shell-interception source-contract proof: rather than checking whether
+# three tokens ('linux', bare 'bash', process.env.PATH) merely co-occur
+# anywhere in a bundle file, this anchors each signal to a named function's
+# bounded brace scope and follows the actual call graph, so the check only
+# passes when the value chosen on Linux is bare 'bash' (not an absolute
+# path), that value is passed into a call to another function defined in the
+# same file, and that callee's body itself references process.env.PATH.
+_FUNCTION_DEF_RE = re.compile(r"function\s+(\w+)\s*\([^)]*\)\s*\{")
+_LINUX_SELECT_RE = re.compile(r"platform\(\)\s*===\s*['\"]linux['\"]")
+_BASH_ASSIGN_RE = re.compile(r"(?:var|let|const)\s+(\w+)\s*=\s*['\"]bash['\"]")
+_BASH_LITERAL_RE = re.compile(r"['\"]bash['\"]")
+_PATH_LOOKUP_RE = re.compile(r"process\.env\.PATH")
+_CALL_EXPR_RE = re.compile(r"(\w+)\s*\(([^()]*)\)")
+
+
+def _match_brace_scope(text: str, open_index: int) -> str | None:
+    depth = 0
+    in_string: str | None = None
+    index = open_index
+    while index < len(text):
+        char = text[index]
+        if in_string is not None:
+            if char == "\\":
+                index += 2
+                continue
+            if char == in_string:
+                in_string = None
+        elif char in ("'", '"', "`"):
+            in_string = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_index : index + 1]
+        index += 1
+    return None
+
+
+def _extract_named_functions(text: str) -> dict[str, str]:
+    functions: dict[str, str] = {}
+    for match in _FUNCTION_DEF_RE.finditer(text):
+        brace_index = match.end() - 1
+        body = _match_brace_scope(text, brace_index)
+        if body is not None:
+            functions[match.group(1)] = body
+    return functions
+
+
+def _proves_path_resolved_bash_shell(text: str) -> bool:
+    functions = _extract_named_functions(text)
+    for body in functions.values():
+        if _function_selects_path_resolved_bash(body, functions):
+            return True
+    return False
+
+
+def _function_selects_path_resolved_bash(body: str, functions: dict[str, str]) -> bool:
+    if not _LINUX_SELECT_RE.search(body):
+        return False
+
+    bash_vars = set(_BASH_ASSIGN_RE.findall(body))
+    has_bare_bash_literal = bool(bash_vars) or bool(_BASH_LITERAL_RE.search(body))
+    if not has_bare_bash_literal:
+        return False
+
+    # The selected bash value must actually be handed to another named
+    # function (the upstream executable resolver) whose own body performs
+    # the PATH search — mere co-occurrence within this function's scope is
+    # not proof that the value is PATH-resolved rather than used verbatim.
+    for call_match in _CALL_EXPR_RE.finditer(body):
+        callee, args = call_match.group(1), call_match.group(2)
+        callee_body = functions.get(callee)
+        if callee_body is None:
+            continue
+        references_bash_value = any(var in args for var in bash_vars) or bool(
+            _BASH_LITERAL_RE.search(args)
+        )
+        if references_bash_value and _PATH_LOOKUP_RE.search(callee_body):
+            return True
+
+    return False
+
+
 def _core_version(version: str) -> tuple[int, int, int]:
     core = version.split("+", 1)[0].split("-", 1)[0]
     major, minor, patch = core.split(".")
@@ -62,7 +146,11 @@ def _help_options(help_text: str) -> set[str]:
         stripped = line.strip()
         if not stripped.startswith("-"):
             continue
-        options.update(_OPTION_TOKEN_RE.findall(stripped))
+        # Only the synopsis column (before the first 2+ space gap that
+        # separates it from the description) counts; a flag name mentioned
+        # in another option's description text must not register as present.
+        synopsis = re.split(r"\s{2,}", stripped, maxsplit=1)[0]
+        options.update(_HELP_OPTION_RE.findall(synopsis))
     return options
 
 
@@ -78,19 +166,33 @@ class GeminiResolver:
         self.npm_executable = npm_executable
         self.node_executable = node_executable
 
-    def _probe_environment(self) -> dict[str, str]:
+    def _scrubbed_environment(self) -> dict[str, str]:
         environment = dict(os.environ)
         for name in _SCRUBBED_ENV_VARS:
             environment.pop(name, None)
-        probe_home = str(self.cache_root / ".gemini-probe-home")
-        environment["HOME"] = probe_home
-        environment["USERPROFILE"] = probe_home
+        return environment
+
+    def _npm_probe_environment(self) -> dict[str, str]:
+        # npm view/install/ci scrub Gemini/Google credential state but keep
+        # the caller's ambient HOME/USERPROFILE and npm config untouched, so
+        # existing npm cache/registry/auth configuration keeps working.
+        return self._scrubbed_environment()
+
+    def _node_probe_environment(self) -> dict[str, str]:
+        # node/Gemini version and help probes run against an isolated,
+        # actually-created probe home so they can never read/write the
+        # caller's real home directory (e.g. ~/.gemini, ~/.npmrc).
+        environment = self._scrubbed_environment()
+        probe_home = self.cache_root / ".gemini-probe-home"
+        probe_home.mkdir(parents=True, exist_ok=True)
+        environment["HOME"] = str(probe_home)
+        environment["USERPROFILE"] = str(probe_home)
         return environment
 
     def latest_version(self) -> str:
         result = run_process(
             [self.npm_executable, "view", _PACKAGE_NAME, "version"],
-            env=self._probe_environment(),
+            env=self._npm_probe_environment(),
             timeout_seconds=30,
         )
         if result.timed_out:
@@ -107,7 +209,7 @@ class GeminiResolver:
     def _check_host_node_version(self) -> None:
         result = run_process(
             [self.node_executable, "--version"],
-            env=self._probe_environment(),
+            env=self._node_probe_environment(),
             timeout_seconds=10,
         )
         if result.timed_out or result.exit_code != 0:
@@ -128,7 +230,7 @@ class GeminiResolver:
         prefix.mkdir(parents=True, exist_ok=True)
         manifest = {"name": "qualock-gemini-cache", "private": True, "version": "0.0.0"}
         (prefix / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
-        env = self._probe_environment()
+        env = self._npm_probe_environment()
 
         install_result = run_process(
             [
@@ -206,11 +308,7 @@ class GeminiResolver:
                 text = js_path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            if (
-                re.search(r"platform\(\)\s*===\s*['\"]linux['\"]", text)
-                and re.search(r"['\"]bash['\"]", text)
-                and re.search(r"process\.env\.PATH", text)
-            ):
+            if _proves_path_resolved_bash_shell(text):
                 return
         raise GeminiResolveError(
             "Gemini package bundle does not prove PATH-resolved bash shell "
@@ -220,7 +318,7 @@ class GeminiResolver:
     def _validate_binary_contract(
         self, entrypoint: Path, package_root: Path, version: str
     ) -> None:
-        env = self._probe_environment()
+        env = self._node_probe_environment()
 
         version_result = run_process(
             [self.node_executable, str(entrypoint), "--version"],
