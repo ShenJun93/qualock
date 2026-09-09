@@ -19,6 +19,7 @@ from qualock.agents.gemini import GeminiAdapter, select_gemini_automation_creden
 from qualock.agents.gemini_resolver import GeminiResolver
 from qualock.agents.releases import default_agent_cache_root
 from qualock.agents.resolver import CodexResolver
+from qualock.agents.support_integrity import agent_support_fingerprint
 from qualock.baseline.io import (
     BaselineStaleError,
     assert_suite_fresh,
@@ -223,10 +224,19 @@ def execute_baseline(
         binary.version,
         attempt_evidence,
     )
+    support_sha256 = agent_support_fingerprint(binary) if agent_name == "gemini" else None
+    if agent_name == "gemini" and support_sha256 is None:
+        raise CommandError("Gemini baseline requires runtime support fingerprint")
+
     lock = BaselineLock(
         schema_version=1,
         created_at=created_at or datetime.now(UTC).isoformat(),
-        agent=AgentPin(name=agent_name, version=binary.version, binary_sha256=binary.sha256),
+        agent=AgentPin(
+            name=agent_name,
+            version=binary.version,
+            binary_sha256=binary.sha256,
+            support_sha256=support_sha256,
+        ),
         model=ModelPin(
             id=config.model.id,
             snapshot=config.model.snapshot,
@@ -288,6 +298,12 @@ def execute_check(
     baseline_binary = resolver.resolve(lock.agent.version)
     if baseline_binary.sha256 != lock.agent.binary_sha256:
         raise BaselineStaleError("baseline binary fingerprint changed")
+    if agent_name == "gemini":
+        if lock.agent.support_sha256 is None:
+            raise BaselineStaleError("baseline support fingerprint missing")
+        support_sha256 = agent_support_fingerprint(baseline_binary)
+        if support_sha256 != lock.agent.support_sha256:
+            raise BaselineStaleError("baseline support fingerprint changed")
     candidate_binary = resolver.resolve(candidate_version)
     backend = backend or _default_backend(root, config, agent_name)
     qid = qualification_id or _qualification_id("check")

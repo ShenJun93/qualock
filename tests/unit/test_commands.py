@@ -9,9 +9,10 @@ import yaml
 import qualock.commands as commands_module
 from qualock.agents.antigravity import AntigravityAdapter
 from qualock.agents.antigravity_resolver import AntigravityResolver
-from qualock.agents.base import AgentBinary
+from qualock.agents.base import AgentBinary, AgentSupportTree
 from qualock.agents.gemini import GeminiAdapter
 from qualock.agents.gemini_resolver import GeminiResolver
+from qualock.agents.support_integrity import agent_support_fingerprint
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock, write_baseline_lock
 from qualock.canary.loader import CanaryLoadError
 from qualock.commands import (
@@ -45,11 +46,21 @@ class FakeResolver:
     def resolve(self, version: str) -> AgentBinary:
         self.calls.append(version)
         exact = "0.151.0" if version == "latest" else version
+        support_trees = ()
+        if self.agent_name == "gemini":
+            support_trees = (
+                AgentSupportTree(
+                    root=Path(f"/fake/{self.agent_name}/{exact}/package"),
+                    sha256=f"support-tree-sha-{exact}",
+                    container_root="/opt/qualock/gemini-package",
+                ),
+            )
         return AgentBinary(
             self.agent_name,
             exact,
             Path(f"/fake/{self.agent_name}/{exact}/agent"),
             f"sha-{exact}",
+            support_trees=support_trees,
         )
 
 
@@ -300,6 +311,120 @@ def test_gemini_baseline_and_check_pin_exact_agent_and_versions(tmp_path: Path) 
     assert result.baseline_version == "0.58.0"
     assert result.candidate_version == "0.59.0"
     assert resolver.calls == ["0.58.0", "0.58.0", "0.59.0"]
+
+
+def test_gemini_baseline_writes_support_fingerprint(tmp_path: Path) -> None:
+    setup_project(tmp_path, agent_name="gemini", model_id="gemini-3.8-flash")
+    resolver = FakeResolver("gemini")
+
+    lock = execute_baseline(
+        tmp_path,
+        "gemini@0.58.0",
+        resolver=resolver,
+        backend=FakeBackend({"0.58.0"}),
+        qualification_id="gemini-support-baseline",
+        created_at="2026-09-08T00:00:00Z",
+    )
+
+    resolved = FakeResolver("gemini").resolve("0.58.0")
+    assert lock.agent.support_sha256 == agent_support_fingerprint(resolved)
+    assert lock.agent.support_sha256 is not None
+
+
+def test_gemini_check_rejects_missing_support_fingerprint_before_candidate_resolution(
+    tmp_path: Path,
+) -> None:
+    setup_project(tmp_path, agent_name="gemini", model_id="gemini-3.8-flash")
+    execute_baseline(
+        tmp_path,
+        "gemini@0.58.0",
+        resolver=FakeResolver("gemini"),
+        backend=FakeBackend({"0.58.0"}),
+        qualification_id="gemini-support-missing",
+        created_at="2026-09-08T00:00:00Z",
+    )
+    lock_path = tmp_path / ".qualock/baseline.lock"
+    lock = read_baseline_lock(lock_path)
+    write_baseline_lock(
+        lock_path,
+        lock.model_copy(
+            update={"agent": lock.agent.model_copy(update={"support_sha256": None})}
+        ),
+    )
+    resolver = FakeResolver("gemini")
+
+    with pytest.raises(BaselineStaleError, match="baseline support fingerprint missing"):
+        execute_check(
+            tmp_path,
+            "gemini@0.59.0",
+            resolver=resolver,
+            backend=FakeBackend({"0.58.0"}),
+        )
+
+    assert resolver.calls == ["0.58.0"]
+
+
+def test_gemini_check_rejects_changed_support_fingerprint_before_candidate_resolution(
+    tmp_path: Path,
+) -> None:
+    setup_project(tmp_path, agent_name="gemini", model_id="gemini-3.8-flash")
+    execute_baseline(
+        tmp_path,
+        "gemini@0.58.0",
+        resolver=FakeResolver("gemini"),
+        backend=FakeBackend({"0.58.0"}),
+        qualification_id="gemini-support-changed",
+        created_at="2026-09-08T00:00:00Z",
+    )
+    lock_path = tmp_path / ".qualock/baseline.lock"
+    lock = read_baseline_lock(lock_path)
+    write_baseline_lock(
+        lock_path,
+        lock.model_copy(
+            update={
+                "agent": lock.agent.model_copy(update={"support_sha256": "support-tampered"})
+            }
+        ),
+    )
+    resolver = FakeResolver("gemini")
+
+    with pytest.raises(BaselineStaleError, match="baseline support fingerprint changed"):
+        execute_check(
+            tmp_path,
+            "gemini@0.59.0",
+            resolver=resolver,
+            backend=FakeBackend({"0.58.0"}),
+        )
+
+    assert resolver.calls == ["0.58.0"]
+
+
+def test_codex_check_accepts_legacy_missing_support_fingerprint(tmp_path: Path) -> None:
+    setup_project(tmp_path)
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=FakeResolver(),
+        backend=FakeBackend(),
+        qualification_id="codex-legacy-support",
+        created_at="2026-08-31T00:00:00Z",
+    )
+    lock_path = tmp_path / ".qualock/baseline.lock"
+    lock = read_baseline_lock(lock_path)
+    payload = lock.model_dump(mode="json")
+    payload["agent"].pop("support_sha256", None)
+    write_baseline_lock(lock_path, type(lock).model_validate(payload))
+
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=FakeResolver(),
+        backend=FakeBackend(),
+        qualification_id="codex-legacy-support-check",
+    )
+
+    assert result.baseline_version == "0.150.0"
+    assert result.candidate_version == "0.151.0"
 
 
 def test_gemini_check_rejects_baseline_sha_before_candidate_resolution(
