@@ -98,6 +98,39 @@ _DESTRUCTURE_RE = re.compile(
     rf"(?:[\w$]+\s*\.\s*)?{_GET_SHELL_CONFIGURATION}\s*\(\s*\)\s*;"
 )
 
+# Published Gemini CLI 0.58.0 compatibility path.  This deliberately does not
+# feed `prepareExecution` into the historical generic unit matcher: only the
+# exact static/async five-parameter method shape is eligible.
+_PUBLISHED_058_PREPARE_METHOD_RE = re.compile(
+    r"(?<![\w$])static\s+async\s+prepareExecution\s*\(\s*"
+    r"commandToExecute\s*,\s*cwd\s*,\s*shellExecutionConfig\s*,\s*"
+    r"isInteractive\s*,\s*usingPty\s*\)\s*\{"
+)
+_PUBLISHED_058_SANDBOX_MANAGER_RE = re.compile(
+    r"const\s+sandboxManager\s*=\s*shellExecutionConfig\s*\.\s*"
+    r"sandboxManager\s*\?\?\s*new\s+NoopSandboxManager\s*\(\s*\)\s*;"
+)
+_PUBLISHED_058_WINDOWS_RE = re.compile(
+    r"const\s+(?P<windows>[\w$]+)\s*=\s*[\w$]+\s*\.\s*platform\s*\(\s*\)"
+    r"\s*===\s*(['\"])win32\2\s*;"
+)
+_PUBLISHED_058_STRICT_RE = re.compile(
+    r"const\s+(?P<strict>[\w$]+)\s*=\s*(?P<expression>[^;]+);"
+)
+_PUBLISHED_058_GUARD_RE_TEMPLATE = r"if\s*\(\s*{strict}\s*\)\s*\{{"
+_PUBLISHED_058_CMD_BRANCH_RE = re.compile(
+    r"\{\s*shell\s*=\s*(['\"])cmd\1\s*;\s*"
+    r"argsPrefix\s*=\s*\[\s*(['\"])/c\2\s*\]\s*;\s*"
+    r"executable\s*=\s*(['\"])cmd\.exe\3\s*;\s*\}"
+)
+_CMD_EXECUTABLE_WRITE_RE = re.compile(
+    r"(?<![\w$])executable\s*=\s*(['\"])cmd\.exe\1\s*;"
+)
+_PUBLISHED_058_PREPARE_COMMAND_ASSIGNMENT_RE = re.compile(
+    r"(?:const|let)\s+[\w$]+\s*=\s*await\s+sandboxManager\s*\.\s*"
+    r"prepareCommand\s*\("
+)
+
 
 def _match_brace_scope(text: str, open_index: int) -> str | None:
     depth = 0
@@ -156,6 +189,190 @@ def _find_unit_bodies(text: str, name: str) -> list[str]:
         if body is not None:
             bodies.append(body)
     return bodies
+
+
+def _lexical_matches(text: str, pattern: re.Pattern[str]) -> list[re.Match[str]]:
+    """Find pattern matches in code, never inside strings or comments."""
+    matches: list[re.Match[str]] = []
+    in_string: str | None = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string is not None:
+            if char == "\\":
+                index += 2
+                continue
+            if char == in_string:
+                in_string = None
+            index += 1
+            continue
+        if text.startswith("//", index):
+            end = index + 2
+            while end < len(text) and text[end] not in "\r\n\u2028\u2029":
+                end += 1
+            index = end
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end == -1:
+                return []
+            index = end + 2
+            continue
+        if char in ("'", '"', "`"):
+            in_string = char
+            index += 1
+            continue
+        match = pattern.match(text, index)
+        if match is not None:
+            matches.append(match)
+        index += 1
+    return matches
+
+
+def _find_published_058_prepare_bodies(text: str) -> list[str]:
+    bodies: list[str] = []
+    for match in _lexical_matches(text, _PUBLISHED_058_PREPARE_METHOD_RE):
+        brace_index = match.end() - 1
+        body = _match_brace_scope(text, brace_index)
+        if body is not None:
+            bodies.append(body)
+    return bodies
+
+
+def _top_level_matches(text: str, pattern: re.Pattern[str]) -> list[re.Match[str]]:
+    """Find pattern matches outside nested delimiters, strings, and comments."""
+    matches: list[re.Match[str]] = []
+    braces = 0
+    brackets = 0
+    parens = 0
+    in_string: str | None = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string is not None:
+            if char == "\\":
+                index += 2
+                continue
+            if char == in_string:
+                in_string = None
+            index += 1
+            continue
+        if text.startswith("//", index):
+            end = index + 2
+            while end < len(text) and text[end] not in "\r\n\u2028\u2029":
+                end += 1
+            index = end
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end == -1:
+                return []
+            index = end + 2
+            continue
+        if char in ("'", '"', "`"):
+            in_string = char
+            index += 1
+            continue
+        if braces == 0 and brackets == 0 and parens == 0:
+            match = pattern.match(text, index)
+            if match is not None:
+                matches.append(match)
+        if char == "{":
+            braces += 1
+        elif char == "}":
+            braces -= 1
+        elif char == "[":
+            brackets += 1
+        elif char == "]":
+            brackets -= 1
+        elif char == "(":
+            parens += 1
+        elif char == ")":
+            parens -= 1
+        if braces < 0 or brackets < 0 or parens < 0:
+            return []
+        index += 1
+    if in_string is not None or braces or brackets or parens:
+        return []
+    return matches
+
+
+def _top_level_member_call_openings(
+    text: str, receiver: str, member: str
+) -> list[int] | None:
+    """Locate direct member calls, ignoring trivia and grouping parentheses."""
+    openings: list[int] = []
+    previous_tokens: list[str] = []
+    braces = 0
+    brackets = 0
+    parens = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if text.startswith("//", index):
+            end = index + 2
+            while end < len(text) and text[end] not in "\r\n\u2028\u2029":
+                end += 1
+            index = end
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end == -1:
+                return None
+            index = end + 2
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+            index += 1
+            while index < len(text) and text[index] != quote:
+                if text[index] == "\\":
+                    index += 2
+                else:
+                    index += 1
+            if index == len(text):
+                return None
+            index += 1
+            token = "<literal>"
+        elif char.isalpha() or char in "_$":
+            end = index + 1
+            while end < len(text) and (text[end].isalnum() or text[end] in "_$"):
+                end += 1
+            token = text[index:end]
+            index = end
+        else:
+            token = char
+            if (
+                token == "("
+                and braces == 0
+                and brackets == 0
+                and previous_tokens[-3:] == [receiver, ".", member]
+            ):
+                openings.append(index)
+            index += 1
+
+        if token == "{":
+            braces += 1
+        elif token == "}":
+            braces -= 1
+        elif token == "[":
+            brackets += 1
+        elif token == "]":
+            brackets -= 1
+        elif token == "(":
+            parens += 1
+        elif token == ")":
+            parens -= 1
+        if braces < 0 or brackets < 0 or parens < 0:
+            return None
+        previous_tokens.append(token)
+        previous_tokens = previous_tokens[-3:]
+
+    if braces or brackets or parens:
+        return None
+    return openings
 
 
 def _conditional_branch(body: str, condition_pattern: re.Pattern[str]) -> str | None:
@@ -436,6 +653,40 @@ def _return_object_forwards_binding(statement: str, binding: str) -> bool:
     return resolved_properties == 1
 
 
+def _object_forwards_unique_binding(
+    object_text: str, property_name: str, binding: str
+) -> bool:
+    if not object_text.startswith("{"):
+        return False
+    properties = _top_level_object_properties(object_text, 0)
+    if properties is None:
+        return False
+
+    matching_properties = 0
+    for property_text in properties:
+        tokens = _property_tokens(property_text)
+        if tokens is None:
+            return False
+        if not tokens:
+            continue
+        # A top-level spread, computed key, or quoted key could obscure or
+        # override `command`, so this exact compatibility proof rejects the
+        # whole call object when any one is present.
+        if tokens[0] == "..." or tokens[0] == "[" or tokens[0][0] in "'\"`":
+            return False
+        # Apart from ordinary `key: value` entries, only identifier shorthand
+        # is accepted. Accessors and methods can define a later `command` key
+        # while placing `get`, `set`, `async`, or `*` in the first token.
+        if len(tokens) > 1 and tokens[1] != ":":
+            return False
+        if tokens[0] != property_name:
+            continue
+        matching_properties += 1
+        if tokens != [property_name, ":", binding]:
+            return False
+    return matching_properties == 1
+
+
 def _destructures_then_resolves_executable(prepare_shell_execution_body: str) -> bool:
     if not prepare_shell_execution_body.startswith("{"):
         return False
@@ -472,6 +723,124 @@ def _resolves_absolute_separately_and_searches_path(resolve_executable_body: str
     return bool(_PATH_LOOKUP_RE.search(non_absolute))
 
 
+def _proves_published_058_prepare_execution(
+    prepare_execution_body: str,
+) -> bool:
+    if not prepare_execution_body.startswith("{"):
+        return False
+    following = _strip_leading_trivia(prepare_execution_body[1:-1])
+
+    sandbox_manager = _PUBLISHED_058_SANDBOX_MANAGER_RE.match(following)
+    if sandbox_manager is None:
+        return False
+    following = _strip_leading_trivia(following[sandbox_manager.end() :])
+
+    windows_declaration = _PUBLISHED_058_WINDOWS_RE.match(following)
+    if windows_declaration is None:
+        return False
+    windows_binding = windows_declaration.group("windows")
+    following = _strip_leading_trivia(following[windows_declaration.end() :])
+
+    strict_declaration = _PUBLISHED_058_STRICT_RE.match(following)
+    if strict_declaration is None:
+        return False
+    strict_expression = strict_declaration.group("expression").strip()
+    if re.fullmatch(
+        rf"{re.escape(windows_binding)}\s*&&\s*"
+        r"shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*enabled\s*"
+        r"&&\s*shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*"
+        r"command\s*===\s*(['\"])windows-native\1\s*&&\s*!\s*"
+        r"shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*"
+        r"networkAccess",
+        strict_expression,
+    ) is None:
+        return False
+    strict_binding = strict_declaration.group("strict")
+    following = _strip_leading_trivia(following[strict_declaration.end() :])
+
+    destructure = _DESTRUCTURE_RE.match(following)
+    if destructure is None:
+        return False
+    destructured_properties = _top_level_object_properties(
+        "{" + destructure.group("properties") + "}", 0
+    )
+    if destructured_properties is None:
+        return False
+    property_tokens = [_property_tokens(item) for item in destructured_properties]
+    if property_tokens != [["executable"], ["argsPrefix"], ["shell"]]:
+        return False
+    following = _strip_leading_trivia(following[destructure.end() :])
+
+    guard_pattern = re.compile(
+        _PUBLISHED_058_GUARD_RE_TEMPLATE.format(strict=re.escape(strict_binding))
+    )
+    guard = guard_pattern.match(following)
+    if guard is None:
+        return False
+    windows_only_branch = _match_brace_scope(following, guard.end() - 1)
+    if windows_only_branch is None or not _PUBLISHED_058_CMD_BRANCH_RE.fullmatch(
+        windows_only_branch
+    ):
+        return False
+    outside_windows_guard = _blank_out(prepare_execution_body, windows_only_branch)
+    if _CMD_EXECUTABLE_WRITE_RE.search(outside_windows_guard):
+        return False
+    branch_end = guard.end() - 1 + len(windows_only_branch)
+    following = _strip_leading_trivia(following[branch_end:])
+
+    resolve = _resolve_statement_pattern("executable").match(following)
+    if resolve is None or resolve.group("resolved") != "resolvedExecutable":
+        return False
+    terminator = _trivia_end(following, resolve.end())
+    if terminator is None:
+        return False
+    semicolon_index = terminator[0]
+    if semicolon_index == len(following) or following[semicolon_index] != ";":
+        return False
+    remaining = following[semicolon_index + 1 :]
+
+    prepare_call_openings = _top_level_member_call_openings(
+        remaining, "sandboxManager", "prepareCommand"
+    )
+    if prepare_call_openings is None or len(prepare_call_openings) != 1:
+        return False
+    prepare_assignments = _top_level_matches(
+        remaining, _PUBLISHED_058_PREPARE_COMMAND_ASSIGNMENT_RE
+    )
+    if len(prepare_assignments) != 1:
+        return False
+    prepare_call_opening = prepare_call_openings[0]
+    prepare_assignment = prepare_assignments[0]
+    if prepare_assignment.end() - 1 != prepare_call_opening:
+        return False
+    if re.search(
+        r"(?<![\w$])resolvedExecutable(?![\w$])",
+        remaining[: prepare_assignment.start()],
+    ):
+        return False
+    call_scope = _match_paren_scope(remaining, prepare_call_opening)
+    if call_scope is None:
+        return False
+    arguments = _strip_leading_trivia(call_scope[1:-1])
+    if not arguments.startswith("{"):
+        return False
+    command_object = _match_brace_scope(arguments, 0)
+    if command_object is None:
+        return False
+    if _strip_leading_trivia(arguments[len(command_object) :]):
+        return False
+    return _object_forwards_unique_binding(
+        command_object, "command", "resolvedExecutable"
+    )
+
+
+def _proves_published_058_interception_chain(text: str) -> bool:
+    return any(
+        _proves_published_058_prepare_execution(body)
+        for body in _find_published_058_prepare_bodies(text)
+    )
+
+
 def _proves_shell_interception_chain(text: str) -> bool:
     link1 = any(
         _returns_bare_bash_outside_windows(body)
@@ -479,11 +848,12 @@ def _proves_shell_interception_chain(text: str) -> bool:
     )
     if not link1:
         return False
-    link2 = any(
+    historical_link2 = any(
         _destructures_then_resolves_executable(body)
         for body in _find_unit_bodies(text, _PREPARE_SHELL_EXECUTION)
     )
-    if not link2:
+    published_058_link2 = _proves_published_058_interception_chain(text)
+    if not historical_link2 and not published_058_link2:
         return False
     return any(
         _resolves_absolute_separately_and_searches_path(body)
