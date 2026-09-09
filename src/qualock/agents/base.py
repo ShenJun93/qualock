@@ -15,6 +15,13 @@ class AgentSupportBinary:
 
 
 @dataclass(frozen=True)
+class AgentSupportTree:
+    root: Path
+    sha256: str
+    container_root: str
+
+
+@dataclass(frozen=True)
 class AgentRuntimeDependency:
     command: str
     apt_package: str
@@ -35,6 +42,7 @@ class AgentBinary:
     path: Path
     sha256: str
     support_binaries: tuple[AgentSupportBinary, ...] = ()
+    support_trees: tuple[AgentSupportTree, ...] = ()
 
 
 @dataclass(frozen=True)

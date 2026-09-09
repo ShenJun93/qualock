@@ -3,8 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from qualock.agents.base import AgentBinary, AgentRuntimeOverlay
+from qualock.agents.base import AgentBinary, AgentRuntimeOverlay, AgentSupportTree
 from qualock.agents.gemini import GeminiAdapter, select_gemini_automation_credential
+from qualock.agents.support_integrity import fingerprint_support_tree
 from qualock.evidence.gemini_stream_json import parse_gemini_stream_json
 from qualock.evidence.models import AgentEvidence
 
@@ -81,6 +82,26 @@ def binary(tmp_path: Path) -> AgentBinary:
     return AgentBinary(name="gemini", version="0.58.0", path=path, sha256="sha")
 
 
+def gemini_binary_with_support_tree(tmp_path: Path) -> AgentBinary:
+    package_root = tmp_path / "gemini-package"
+    entrypoint = package_root / "bundle/gemini.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("fake", encoding="utf-8")
+    return AgentBinary(
+        name="gemini",
+        version="0.58.0",
+        path=entrypoint,
+        sha256="sha",
+        support_trees=(
+            AgentSupportTree(
+                root=package_root,
+                sha256=fingerprint_support_tree(package_root),
+                container_root="/opt/qualock/gemini-package",
+            ),
+        ),
+    )
+
+
 def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
     adapter = GeminiAdapter()
     with adapter.invocation(
@@ -89,7 +110,7 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
         reasoning_effort="provider-default",
         prompt="Fix it",
     ) as invocation:
-        assert invocation.container_binary_path == "/opt/qualock/gemini"
+        assert invocation.container_binary_path == "/opt/qualock/gemini-package/bundle/gemini.js"
 
         argv = list(invocation.argv)
         assert argv[0] == str(tmp_path / "gemini")
@@ -117,6 +138,17 @@ def test_invocation_builds_isolated_headless_command(tmp_path: Path) -> None:
         path_entries = env["PATH"].split(":")
         assert path_entries[0] == "/opt/qualock/bin"
         assert path_entries[1] == "/opt/qualock/node-runtime/bin"
+
+
+def test_gemini_entrypoint_uses_support_tree_layout(tmp_path: Path) -> None:
+    adapter = GeminiAdapter()
+    with adapter.invocation(
+        gemini_binary_with_support_tree(tmp_path),
+        model="gemini-3.5-flash",
+        reasoning_effort="provider-default",
+        prompt="Fix it",
+    ) as invocation:
+        assert invocation.container_binary_path == "/opt/qualock/gemini-package/bundle/gemini.js"
 
 
 def test_invocation_mounts_settings_wrapper_and_empty_project_dir(tmp_path: Path) -> None:
@@ -175,11 +207,14 @@ def test_wrapper_script_bubblewrap_invocations_are_well_formed() -> None:
 def test_non_provider_default_reasoning_effort_raises_before_yielding(tmp_path: Path) -> None:
     adapter = GeminiAdapter()
 
-    with pytest.raises(ValueError), adapter.invocation(
-        binary(tmp_path),
-        model="gemini-3.5-flash",
-        reasoning_effort="high",
-        prompt="Fix it",
+    with (
+        pytest.raises(ValueError),
+        adapter.invocation(
+            binary(tmp_path),
+            model="gemini-3.5-flash",
+            reasoning_effort="high",
+            prompt="Fix it",
+        ),
     ):
         pytest.fail("invocation body must not run for non provider-default effort")
 
@@ -281,3 +316,31 @@ def test_parse_evidence_ignores_stderr_and_delegates_to_gemini_stream_parser() -
     assert evidence.thread_id == expected.thread_id
     assert evidence.input_tokens == expected.input_tokens
     assert evidence.output_tokens == expected.output_tokens
+
+
+def test_gemini_entrypoint_preserves_resolved_package_relative_path(tmp_path: Path) -> None:
+    package_root = tmp_path / "gemini-package"
+    entrypoint = package_root / "dist/main.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("fake", encoding="utf-8")
+    gemini = AgentBinary(
+        name="gemini",
+        version="0.58.0",
+        path=entrypoint,
+        sha256="sha",
+        support_trees=(
+            AgentSupportTree(
+                root=package_root,
+                sha256=fingerprint_support_tree(package_root),
+                container_root="/opt/qualock/gemini-package",
+            ),
+        ),
+    )
+
+    with GeminiAdapter().invocation(
+        gemini,
+        model="gemini-3.5-flash",
+        reasoning_effort="provider-default",
+        prompt="Fix it",
+    ) as invocation:
+        assert invocation.container_binary_path == "/opt/qualock/gemini-package/dist/main.js"

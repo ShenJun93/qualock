@@ -8,6 +8,7 @@ import pytest
 
 import qualock.agents.gemini_resolver as gemini_resolver_module
 from qualock.agents.gemini_resolver import GeminiResolveError, GeminiResolver
+from qualock.agents.support_integrity import fingerprint_support_tree
 from qualock.run.process import ProcessResult
 
 from ._platform_helpers import write_python_launcher
@@ -51,13 +52,9 @@ def _shell_contract_source(mutate: str | None = None) -> str:
     obtain = "  let { executable, argsPrefix, shell } = getShellConfiguration();\n"
     between = ""
     resolve_terminator = ";\n"
-    return_statement = (
-        "  return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
-    )
+    return_statement = "  return { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
     absolute_branch = (
-        "  if (path.isAbsolute(exe)) {\n"
-        "    return isExecutable(exe) ? exe : void 0;\n"
-        "  }\n"
+        "  if (path.isAbsolute(exe)) {\n    return isExecutable(exe) ? exe : void 0;\n  }\n"
     )
     windows_branch = (
         "  if (isWindowsPlatform()) {\n"
@@ -104,7 +101,7 @@ def _shell_contract_source(mutate: str | None = None) -> str:
     elif mutate == "destructuring_object_write_between":
         between = '  ({ executable } = { executable: "/bin/bash" });\n'
     elif mutate == "nested_block_write_between":
-        between = "  if (isDebugShell()) {\n" '    executable = "/bin/bash";\n' "  }\n"
+        between = '  if (isDebugShell()) {\n    executable = "/bin/bash";\n  }\n'
     elif mutate == "unrelated_statement_between":
         between = "  const attemptCount = 0;\n"
     elif mutate == "hardcoded_resolved_executable_return":
@@ -150,8 +147,7 @@ def _shell_contract_source(mutate: str | None = None) -> str:
         )
     elif mutate == "return_object_after_line_terminator":
         return_statement = (
-            "  return\n"
-            "  { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
+            "  return\n  { resolvedExecutable, argsPrefix, shell, commandToExecute };\n"
         )
     elif mutate == "semicolonless_resolve_declaration":
         resolve_terminator = "\n"
@@ -286,9 +282,7 @@ _SHELL_CONTRACT_STATIC_METHOD_JS = (
 # is reserved for the separate end-to-end verification.
 def _published_058_shell_contract_source(mutate: str | None = None) -> str:
     method_prefix = "static async"
-    parameters = (
-        "commandToExecute, cwd, shellExecutionConfig, isInteractive, usingPty"
-    )
+    parameters = "commandToExecute, cwd, shellExecutionConfig, isInteractive, usingPty"
     windows_declaration = 'const isWindows3 = os28.platform() === "win32";'
     strict_declaration = (
         "const isStrictSandbox = isWindows3 && "
@@ -322,9 +316,7 @@ def _published_058_shell_contract_source(mutate: str | None = None) -> str:
     elif mutate == "windows_not_derived_from_platform":
         windows_declaration = "const isWindows3 = isWindows();"
     elif mutate == "strict_sandbox_omits_windows_flag":
-        strict_declaration = (
-            "const isStrictSandbox = shellExecutionConfig.sandboxConfig?.enabled;"
-        )
+        strict_declaration = "const isStrictSandbox = shellExecutionConfig.sandboxConfig?.enabled;"
     elif mutate == "guard_does_not_use_strict_sandbox":
         guard = "shellExecutionConfig.sandboxConfig?.enabled"
     elif mutate == "cmd_mutation_outside_windows_guard":
@@ -360,13 +352,9 @@ def _published_058_shell_contract_source(mutate: str | None = None) -> str:
             '      get command() { return "/bin/sh"; },\n      args: spawnArgs,\n',
         )
     elif mutate == "second_top_level_prepare_command_return":
-        return_statement = (
-            'return await sandboxManager.prepareCommand({ command: "/bin/sh" });'
-        )
+        return_statement = 'return await sandboxManager.prepareCommand({ command: "/bin/sh" });'
     elif mutate == "second_top_level_prepare_command_parenthesized":
-        return_statement = (
-            'return await (sandboxManager.prepareCommand({ command: "/bin/sh" }));'
-        )
+        return_statement = 'return await (sandboxManager.prepareCommand({ command: "/bin/sh" }));'
     elif mutate == "second_top_level_prepare_command_comment_trivia":
         return_statement = (
             "return await sandboxManager /* receiver */ . /* member */ "
@@ -399,7 +387,9 @@ def _published_058_shell_contract_source(mutate: str | None = None) -> str:
         f"    {return_statement}\n"
         "  }\n"
     )
-    method_container = method[2:] if free_function else "class ShellExecutionService {\n" + method + "}\n"
+    method_container = (
+        method[2:] if free_function else "class ShellExecutionService {\n" + method + "}\n"
+    )
 
     return (
         "function resolveExecutable(exe) {\n"
@@ -722,16 +712,12 @@ def make_fake_node(
     prose_only_flags: tuple[str, ...] = (),
 ) -> Path:
     flags = [
-        flag
-        for flag in _REQUIRED_FLAGS
-        if flag != missing_flag and flag not in prose_only_flags
+        flag for flag in _REQUIRED_FLAGS if flag != missing_flag and flag not in prose_only_flags
     ]
     help_lines = [f"  {flag} <value>  test option" for flag in flags]
     if prose_only_flags:
         mentions = ", ".join(prose_only_flags)
-        help_lines.append(
-            f"  --unrelated <value>  see also {mentions} for related flags"
-        )
+        help_lines.append(f"  --unrelated <value>  see also {mentions} for related flags")
     help_text = "\n".join(help_lines)
     log_line = (
         "if LOG_PATH:\n"
@@ -746,9 +732,7 @@ def make_fake_node(
         "import pathlib\n"
         "import sys\n"
         f"LOG_PATH = {str(log_path)!r}\n"
-        "args = sys.argv[1:]\n"
-        + log_line
-        + f"HOST_VERSION = {host_version!r}\n"
+        "args = sys.argv[1:]\n" + log_line + f"HOST_VERSION = {host_version!r}\n"
         f"CLI_VERSION = {cli_version!r}\n"
         f"HELP_TEXT = {help_text!r}\n"
         "if args == ['--version']:\n"
@@ -779,6 +763,9 @@ def test_resolves_exact_installed_bin_entrypoint(tmp_path: Path) -> None:
     assert binary.version == "0.58.0"
     assert binary.path.name == "gemini.js"
     assert binary.sha256 == hashlib.sha256(binary.path.read_bytes()).hexdigest()
+    assert binary.support_binaries == ()
+    assert len(binary.support_trees) == 1
+    assert binary.support_trees[0].container_root == "/opt/qualock/gemini-package"
 
 
 def test_latest_queries_npm_view_and_resolves_exact_stable_version(tmp_path: Path) -> None:
@@ -807,9 +794,7 @@ def test_latest_queries_npm_view_and_resolves_exact_stable_version(tmp_path: Pat
 def test_latest_version_rejects_bad_registry_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: ProcessResult, message: str
 ) -> None:
-    monkeypatch.setattr(
-        gemini_resolver_module, "run_process", lambda *args, **kwargs: result
-    )
+    monkeypatch.setattr(gemini_resolver_module, "run_process", lambda *args, **kwargs: result)
 
     with pytest.raises(GeminiResolveError, match=message):
         GeminiResolver(tmp_path / "cache").latest_version()
@@ -910,7 +895,7 @@ def test_symlink_escape_entrypoint_is_rejected(tmp_path: Path) -> None:
         node_executable=str(fake_node),
     )
 
-    with pytest.raises(GeminiResolveError, match="escapes package root"):
+    with pytest.raises(GeminiResolveError, match="escapes package root|support tree.*symlink"):
         resolver.resolve("0.58.0")
 
 
@@ -974,9 +959,7 @@ def test_help_must_advertise_required_flags(tmp_path: Path, missing_flag: str) -
         tmp_path / "cache", npm_executable=str(fake_npm), node_executable=str(fake_node)
     )
 
-    with pytest.raises(
-        GeminiResolveError, match=f"missing required CLI flag {missing_flag}"
-    ):
+    with pytest.raises(GeminiResolveError, match=f"missing required CLI flag {missing_flag}"):
         resolver.resolve("0.58.0")
 
 
@@ -1409,6 +1392,82 @@ def test_shell_interception_contract_accepts_certified_chain(
     assert binary.version == "0.58.0"
 
 
+def test_resolver_pins_complete_package_tree(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    package_root, entrypoint = install_fake_package(
+        prefix,
+        version="0.58.0",
+        bin_gemini="bundle/gemini.js",
+        entrypoint_relpath="bundle/gemini.js",
+    )
+    nested = package_root / "bundle/worker/worker-entry.js"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_text("worker", encoding="utf-8")
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    binary = resolver.resolve("0.58.0")
+
+    assert binary.path == entrypoint.resolve()
+    assert binary.support_binaries == ()
+    assert len(binary.support_trees) == 1
+    tree = binary.support_trees[0]
+    assert tree.root == package_root.resolve()
+    assert tree.container_root == "/opt/qualock/gemini-package"
+    assert tree.sha256 == fingerprint_support_tree(package_root)
+
+
+def test_nested_symlink_in_support_tree_fails_closed(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    package_root, _entrypoint = install_fake_package(prefix, version="0.58.0")
+    outside = tmp_path / "outside.js"
+    outside.write_text("export const outside = true;\n", encoding="utf-8")
+    nested = package_root / "bundle/worker"
+    nested.mkdir(parents=True)
+    os.symlink(outside, nested / "worker-entry.js")
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    with pytest.raises(GeminiResolveError, match="support tree.*symlink"):
+        resolver.resolve("0.58.0")
+
+
+def test_support_tree_changed_during_contract_validation_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    package_root, _entrypoint = install_fake_package(prefix, version="0.58.0")
+    nested = package_root / "bundle/worker/worker-entry.js"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("export const before = true;\n", encoding="utf-8")
+    resolver = GeminiResolver(
+        cache, npm_executable=str(tmp_path / "no-such-npm-binary"), node_executable="node"
+    )
+
+    def mutate_support(entrypoint_path: Path, package_root: Path, version: str) -> None:
+        nested.write_text("export const after = true;\n", encoding="utf-8")
+
+    monkeypatch.setattr(resolver, "_check_host_node_version", lambda: None)
+    monkeypatch.setattr(resolver, "_validate_binary_contract", mutate_support)
+
+    with pytest.raises(
+        GeminiResolveError,
+        match="Gemini support tree changed during contract validation",
+    ):
+        resolver.resolve("0.58.0")
+
+
 def test_binary_mutation_during_contract_validation_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1559,3 +1618,23 @@ def test_node_probes_scrub_credentials_and_use_isolated_created_probe_home(
         # The isolated probe home must actually exist on disk, not be a
         # dangling path handed to node/Gemini probes.
         assert Path(probe_home).is_dir()
+
+
+def test_package_root_symlink_fails_closed_before_resolution(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    target_prefix = tmp_path / "target" / "0.58.0"
+    target_root, _entrypoint = install_fake_package(target_prefix, version="0.58.0")
+    package_root = (
+        cache / "agents" / "gemini" / "0.58.0" / "node_modules" / "@google" / "gemini-cli"
+    )
+    package_root.parent.mkdir(parents=True)
+    package_root.symlink_to(target_root, target_is_directory=True)
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    with pytest.raises(GeminiResolveError, match="support tree.*symlink|package root.*symlink"):
+        resolver.resolve("0.58.0")

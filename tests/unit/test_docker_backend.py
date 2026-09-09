@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,6 +12,11 @@ from qualock.agents.base import (
     AgentRuntimeDependency,
     AgentRuntimeOverlay,
     AgentSupportBinary,
+    AgentSupportTree,
+)
+from qualock.agents.support_integrity import (
+    AgentSupportIntegrityError,
+    fingerprint_support_tree,
 )
 from qualock.canary.models import CanarySpec, RuntimeSpec
 from qualock.evidence.claude_stream_json import parse_claude_stream_json
@@ -96,6 +102,10 @@ class FakeDocker:
         self.removed_containers: list[str] = []
         self.runtime_dependencies: tuple[AgentRuntimeDependency, ...] = ()
         self.runtime_overlays: tuple[AgentRuntimeOverlay, ...] = ()
+        self.run_agent_calls = 0
+        self.agent_binary: Path | None = None
+        self.agent_binary_bytes: bytes | None = None
+        self.mount_bytes: dict[str, dict[str, bytes] | bytes] = {}
 
     def prepare(
         self,
@@ -112,6 +122,7 @@ class FakeDocker:
         return PreparedTarget(reference=image_tag, digest="sha256:prepared")
 
     def run_agent(self, **kwargs: object) -> FrozenAgentState:
+        self.run_agent_calls += 1
         mounts = kwargs.get("extra_mounts", ())
         environment = kwargs.get("environment", {})
         tmpfs_mounts = kwargs.get("tmpfs_mounts", ())
@@ -119,10 +130,12 @@ class FakeDocker:
         stdin_bootstrap = kwargs.get("stdin_bootstrap")
         stdin_secret_env = kwargs.get("stdin_secret_env")
         agent_container_path = kwargs.get("agent_container_path")
+        agent_binary = kwargs.get("agent_binary")
         assert isinstance(mounts, (tuple, list))
         assert isinstance(environment, dict)
         assert isinstance(tmpfs_mounts, (tuple, list))
         assert isinstance(agent_container_path, str)
+        assert isinstance(agent_binary, Path)
         self.mounts = tuple(mounts)
         self.environment = {str(key): str(value) for key, value in environment.items()}
         self.tmpfs_mounts = tuple(str(item) for item in tmpfs_mounts)
@@ -130,6 +143,18 @@ class FakeDocker:
         self.stdin_bootstrap = stdin_bootstrap if isinstance(stdin_bootstrap, tuple) else None
         self.stdin_secret_env = stdin_secret_env if isinstance(stdin_secret_env, tuple) else None
         self.agent_container_path = agent_container_path
+        self.agent_binary = agent_binary
+        self.agent_binary_bytes = agent_binary.read_bytes()
+        self.mount_bytes = {}
+        for host_path, container_path, _mode in self.mounts:
+            if host_path.is_dir():
+                self.mount_bytes[container_path] = {
+                    path.relative_to(host_path).as_posix(): path.read_bytes()
+                    for path in host_path.rglob("*")
+                    if path.is_file()
+                }
+            else:
+                self.mount_bytes[container_path] = host_path.read_bytes()
         return FrozenAgentState(
             reference="frozen",
             digest="sha256:frozen",
@@ -181,6 +206,27 @@ def binary(tmp_path: Path) -> AgentBinary:
     return AgentBinary("codex", "0.150.0", path, "abc")
 
 
+def binary_with_support_tree(tmp_path: Path) -> AgentBinary:
+    package_root = tmp_path / "gemini-package"
+    entrypoint = package_root / "bundle/gemini.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("entry", encoding="utf-8")
+    (package_root / "nested.js").write_text("nested", encoding="utf-8")
+    return AgentBinary(
+        "gemini",
+        "0.58.0",
+        entrypoint,
+        hashlib.sha256(entrypoint.read_bytes()).hexdigest(),
+        support_trees=(
+            AgentSupportTree(
+                package_root,
+                fingerprint_support_tree(package_root),
+                "/opt/qualock/gemini-package",
+            ),
+        ),
+    )
+
+
 def backend(
     tmp_path: Path,
     docker: FakeDocker,
@@ -209,9 +255,7 @@ def test_prepared_target_is_backend_neutral() -> None:
 def test_prepare_rejects_non_container_runtime(tmp_path: Path) -> None:
     docker = FakeDocker()
     service = backend(tmp_path, docker)
-    spec = canary(tmp_path).model_copy(
-        update={"runtime": RuntimeSpec(execution="linux-host")}
-    )
+    spec = canary(tmp_path).model_copy(update={"runtime": RuntimeSpec(execution="linux-host")})
 
     with pytest.raises(UnsupportedRuntimeError):
         service.prepare(spec, "q1")
@@ -363,7 +407,9 @@ def test_backend_forwards_generic_invocation_runtime(tmp_path: Path) -> None:
         container_binary_path="/opt/qualock/fake",
     )
     docker = FakeDocker()
-    result = run_once(tmp_path, backend(tmp_path, docker, adapter=FakeAdapter(invocation=invocation)))
+    result = run_once(
+        tmp_path, backend(tmp_path, docker, adapter=FakeAdapter(invocation=invocation))
+    )
     assert result.valid is True
     assert docker.environment == {"FAKE_HOME": "/opt/fake/home"}
     assert (seed, "/opt/fake/seed.json", "ro") in docker.mounts
@@ -455,7 +501,7 @@ def test_agent_support_binary_is_mounted_read_only(tmp_path: Path) -> None:
             AgentSupportBinary(
                 name="codex-code-mode-host",
                 path=host,
-                sha256="host-sha",
+                sha256=hashlib.sha256(host.read_bytes()).hexdigest(),
                 container_path="/opt/qualock/codex-code-mode-host",
             ),
         ),
@@ -471,4 +517,92 @@ def test_agent_support_binary_is_mounted_read_only(tmp_path: Path) -> None:
         repetition=1,
     )
     assert result.valid is True
-    assert (host, "/opt/qualock/codex-code-mode-host", "ro") in docker.mounts
+    assert len(docker.mounts) == 1
+    snapshot_host, destination, mode = docker.mounts[0]
+    assert snapshot_host != host
+    assert destination == "/opt/qualock/codex-code-mode-host"
+    assert mode == "ro"
+    assert docker.mount_bytes[destination] == b"host"
+
+
+def test_backend_forwards_support_tree_and_nested_entrypoint_once(tmp_path: Path) -> None:
+    gemini = binary_with_support_tree(tmp_path)
+    invocation = AgentInvocation(
+        argv=(str(gemini.path), "--version"),
+        container_binary_path="/opt/qualock/gemini-package/bundle/gemini.js",
+    )
+    docker = FakeDocker(stdout="0.58.0\n")
+    service = backend(tmp_path, docker, adapter=FakeAdapter(invocation=invocation))
+
+    result = service.run_attempt(
+        canary=canary(tmp_path),
+        prepared=PreparedTarget("p", "sha256:p"),
+        binary=gemini,
+        side=Side.BASELINE,
+        repetition=1,
+    )
+
+    tree = gemini.support_trees[0]
+    assert result.valid is True
+    assert len(docker.mounts) == 1
+    snapshot_root, destination, mode = docker.mounts[0]
+    assert snapshot_root != tree.root
+    assert destination == tree.container_root
+    assert mode == "ro"
+    assert docker.mount_bytes[destination] == {
+        "bundle/gemini.js": b"entry",
+        "nested.js": b"nested",
+    }
+    assert docker.agent_binary != gemini.path
+    assert docker.agent_binary_bytes == gemini.path.read_bytes()
+    assert docker.agent_container_path == "/opt/qualock/gemini-package/bundle/gemini.js"
+
+
+def test_backend_rejects_support_tree_tamper_before_run_agent(tmp_path: Path) -> None:
+    gemini = binary_with_support_tree(tmp_path)
+    (gemini.support_trees[0].root / "nested.js").write_text("tampered", encoding="utf-8")
+    docker = FakeDocker()
+    service = backend(tmp_path, docker)
+
+    with pytest.raises(AgentSupportIntegrityError, match="fingerprint"):
+        service.run_attempt(
+            canary=canary(tmp_path),
+            prepared=PreparedTarget("p", "sha256:p"),
+            binary=gemini,
+            side=Side.BASELINE,
+            repetition=1,
+        )
+
+    assert docker.run_agent_calls == 0
+
+
+def test_backend_snapshot_is_immune_to_post_verification_source_mutation(
+    tmp_path: Path,
+) -> None:
+    gemini = binary_with_support_tree(tmp_path)
+    original_nested = gemini.support_trees[0].root / "nested.js"
+    invocation = AgentInvocation(
+        argv=(str(gemini.path), "--version"),
+        container_binary_path="/opt/qualock/gemini-package/bundle/gemini.js",
+    )
+
+    class MutatingDocker(FakeDocker):
+        def run_agent(self, **kwargs: object) -> FrozenAgentState:
+            original_nested.write_text("mutated-after-snapshot", encoding="utf-8")
+            return super().run_agent(**kwargs)
+
+    docker = MutatingDocker(stdout="0.58.0\n")
+    service = backend(tmp_path, docker, adapter=FakeAdapter(invocation=invocation))
+    result = service.run_attempt(
+        canary=canary(tmp_path),
+        prepared=PreparedTarget("p", "sha256:p"),
+        binary=gemini,
+        side=Side.BASELINE,
+        repetition=1,
+    )
+
+    assert result.valid is True
+    assert docker.mount_bytes["/opt/qualock/gemini-package"] == {
+        "bundle/gemini.js": b"entry",
+        "nested.js": b"nested",
+    }
