@@ -279,6 +279,148 @@ _SHELL_CONTRACT_STATIC_METHOD_JS = (
     "}\n"
 )
 
+
+# Synthetic, self-contained reproduction of the shell-execution structure in
+# the published Gemini CLI 0.58.0 bundle.  It deliberately does not read the
+# developer cache: the fixture is stable test input, while the cached artifact
+# is reserved for the separate end-to-end verification.
+def _published_058_shell_contract_source(mutate: str | None = None) -> str:
+    method_prefix = "static async"
+    parameters = (
+        "commandToExecute, cwd, shellExecutionConfig, isInteractive, usingPty"
+    )
+    windows_declaration = 'const isWindows3 = os28.platform() === "win32";'
+    strict_declaration = (
+        "const isStrictSandbox = isWindows3 && "
+        "shellExecutionConfig.sandboxConfig?.enabled && "
+        'shellExecutionConfig.sandboxConfig?.command === "windows-native" && '
+        "!shellExecutionConfig.sandboxConfig?.networkAccess;"
+    )
+    guard = "isStrictSandbox"
+    guarded_executable_mutation = '      executable = "cmd.exe";\n'
+    outside_executable_mutation = ""
+    resolved_expression = "resolveExecutable(executable) ?? executable"
+    after_resolved = ""
+    return_statement = "return { sandboxedCommand, shell, isInteractive, usingPty };"
+    command_properties = (
+        "      command: resolvedExecutable,\n"
+        "      args: spawnArgs,\n"
+        "      env: baseEnv,\n"
+        "      cwd\n"
+    )
+    free_function = False
+
+    if mutate == "generic_free_function":
+        method_prefix = "async function"
+        free_function = True
+    elif mutate == "non_static_method":
+        method_prefix = "async"
+    elif mutate == "non_async_method":
+        method_prefix = "static"
+    elif mutate == "wrong_parameter_signature":
+        parameters = "commandToExecute, cwd, shellExecutionConfig, usingPty"
+    elif mutate == "windows_not_derived_from_platform":
+        windows_declaration = "const isWindows3 = isWindows();"
+    elif mutate == "strict_sandbox_omits_windows_flag":
+        strict_declaration = (
+            "const isStrictSandbox = shellExecutionConfig.sandboxConfig?.enabled;"
+        )
+    elif mutate == "guard_does_not_use_strict_sandbox":
+        guard = "shellExecutionConfig.sandboxConfig?.enabled"
+    elif mutate == "cmd_mutation_outside_windows_guard":
+        guarded_executable_mutation = ""
+        outside_executable_mutation = '    executable = "cmd.exe";\n'
+    elif mutate == "resolved_expression_wrong_fallback":
+        resolved_expression = 'resolveExecutable(executable) ?? "/bin/bash"'
+    elif mutate == "resolved_expression_wrong_callee":
+        resolved_expression = "resolveExecutableUnsafe(executable) ?? executable"
+    elif mutate == "resolved_expression_wrong_argument":
+        resolved_expression = 'resolveExecutable("bash") ?? executable'
+    elif mutate == "resolved_binding_reassigned_before_prepare_command":
+        after_resolved = '    resolvedExecutable = "/bin/bash";\n'
+    elif mutate == "prepare_command_literal":
+        command_properties = command_properties.replace(
+            "command: resolvedExecutable", 'command: "/bin/bash"'
+        )
+    elif mutate == "prepare_command_other_binding":
+        command_properties = command_properties.replace(
+            "command: resolvedExecutable", "command: executable"
+        )
+    elif mutate == "prepare_command_spread_ambiguity":
+        command_properties = command_properties.replace(
+            "      args: spawnArgs,\n", "      ...commandOverrides,\n      args: spawnArgs,\n"
+        )
+    elif mutate == "prepare_command_duplicate_command":
+        command_properties = command_properties.replace(
+            "      args: spawnArgs,\n", '      command: "bash",\n      args: spawnArgs,\n'
+        )
+    elif mutate == "prepare_command_trailing_command_getter":
+        command_properties = command_properties.replace(
+            "      args: spawnArgs,\n",
+            '      get command() { return "/bin/sh"; },\n      args: spawnArgs,\n',
+        )
+    elif mutate == "second_top_level_prepare_command_return":
+        return_statement = (
+            'return await sandboxManager.prepareCommand({ command: "/bin/sh" });'
+        )
+    elif mutate == "second_top_level_prepare_command_parenthesized":
+        return_statement = (
+            'return await (sandboxManager.prepareCommand({ command: "/bin/sh" }));'
+        )
+    elif mutate == "second_top_level_prepare_command_comment_trivia":
+        return_statement = (
+            "return await sandboxManager /* receiver */ . /* member */ "
+            'prepareCommand /* call */ ({ command: "/bin/sh" });'
+        )
+    elif mutate is not None:
+        raise ValueError(f"unknown published 0.58.0 contract mutation: {mutate!r}")
+
+    method = (
+        f"  {method_prefix} prepareExecution({parameters}) {{\n"
+        "    const sandboxManager = shellExecutionConfig.sandboxManager ?? "
+        "new NoopSandboxManager();\n"
+        f"    {windows_declaration}\n"
+        f"    {strict_declaration}\n"
+        "    let { executable, argsPrefix, shell } = getShellConfiguration();\n"
+        f"    if ({guard}) {{\n"
+        '      shell = "cmd";\n'
+        '      argsPrefix = ["/c"];\n'
+        f"{guarded_executable_mutation}"
+        "    }\n"
+        f"{outside_executable_mutation}"
+        f"    const resolvedExecutable = {resolved_expression};\n"
+        f"{after_resolved}"
+        "    const finalCommand = commandToExecute;\n"
+        "    const spawnArgs = [...argsPrefix, finalCommand];\n"
+        "    const baseEnv = shellExecutionConfig.env ?? process.env;\n"
+        "    const sandboxedCommand = await sandboxManager.prepareCommand({\n"
+        f"{command_properties}"
+        "    });\n"
+        f"    {return_statement}\n"
+        "  }\n"
+    )
+    method_container = method[2:] if free_function else "class ShellExecutionService {\n" + method + "}\n"
+
+    return (
+        "function resolveExecutable(exe) {\n"
+        "  if (path.isAbsolute(exe)) {\n"
+        "    return isExecutable(exe) ? exe : void 0;\n"
+        "  }\n"
+        '  const pathEnv = process.env["PATH"];\n'
+        "  return searchPath(pathEnv, exe);\n"
+        "}\n"
+        "function getShellConfiguration() {\n"
+        "  if (isWindows()) {\n"
+        '    return { executable: "powershell.exe", argsPrefix: [], shell: "powershell" };\n'
+        "  }\n"
+        '  return { executable: "bash", argsPrefix: ["-c"], shell: "bash" };\n'
+        "}\n"
+        f"{method_container}"
+    )
+
+
+_PUBLISHED_058_SHELL_CONTRACT_JS = _published_058_shell_contract_source()
+
 _NO_CONTRACT_JS = "function noop() { return 1; }\n"
 
 # The literal historical counterexample from the scoped fix-round-1 review: a
@@ -851,6 +993,194 @@ def test_help_prose_mentions_of_flags_do_not_count_as_options(
 
     with pytest.raises(
         GeminiResolveError, match=f"missing required CLI flag {re.escape(prose_flag)}"
+    ):
+        resolver.resolve("0.58.0")
+
+
+def test_shell_interception_contract_accepts_published_058_static_async_shape(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    install_fake_package(
+        prefix,
+        version="0.58.0",
+        shell_contract_js=_PUBLISHED_058_SHELL_CONTRACT_JS,
+    )
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    binary = resolver.resolve("0.58.0")
+
+    assert binary.version == "0.58.0"
+
+
+def test_published_058_rejects_trailing_command_getter_override(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    install_fake_package(
+        prefix,
+        version="0.58.0",
+        shell_contract_js=_published_058_shell_contract_source(
+            "prepare_command_trailing_command_getter"
+        ),
+    )
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    with pytest.raises(
+        GeminiResolveError, match="does not prove PATH-resolved bash shell interception"
+    ):
+        resolver.resolve("0.58.0")
+
+
+def test_published_058_rejects_second_top_level_prepare_command_return(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    install_fake_package(
+        prefix,
+        version="0.58.0",
+        shell_contract_js=_published_058_shell_contract_source(
+            "second_top_level_prepare_command_return"
+        ),
+    )
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    with pytest.raises(
+        GeminiResolveError, match="does not prove PATH-resolved bash shell interception"
+    ):
+        resolver.resolve("0.58.0")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(
+            "second_top_level_prepare_command_parenthesized",
+            id="parenthesized-call",
+        ),
+        pytest.param(
+            "second_top_level_prepare_command_comment_trivia",
+            id="comment-separated-member-access",
+        ),
+    ],
+)
+def test_published_058_rejects_obscured_second_top_level_prepare_command(
+    tmp_path: Path, mutation: str
+) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    install_fake_package(
+        prefix,
+        version="0.58.0",
+        shell_contract_js=_published_058_shell_contract_source(mutation),
+    )
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    with pytest.raises(
+        GeminiResolveError, match="does not prove PATH-resolved bash shell interception"
+    ):
+        resolver.resolve("0.58.0")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param("generic_free_function", id="generic-free-function-is-not-method"),
+        pytest.param("non_static_method", id="method-must-be-static"),
+        pytest.param("non_async_method", id="method-must-be-async"),
+        pytest.param("wrong_parameter_signature", id="exact-five-parameter-signature"),
+        pytest.param(
+            "windows_not_derived_from_platform",
+            id="windows-flag-must-be-derived-from-platform-equals-win32",
+        ),
+        pytest.param(
+            "strict_sandbox_omits_windows_flag",
+            id="strict-sandbox-must-causally-include-windows-flag",
+        ),
+        pytest.param(
+            "guard_does_not_use_strict_sandbox",
+            id="cmd-mutation-guard-must-use-strict-sandbox-binding",
+        ),
+        pytest.param(
+            "cmd_mutation_outside_windows_guard",
+            id="cmd-mutation-outside-windows-only-guard",
+        ),
+        pytest.param(
+            "resolved_expression_wrong_fallback",
+            id="resolved-executable-expression-must-be-exact",
+        ),
+        pytest.param(
+            "resolved_expression_wrong_callee",
+            id="resolved-executable-callee-must-be-exact",
+        ),
+        pytest.param(
+            "resolved_expression_wrong_argument",
+            id="resolved-executable-argument-must-be-exact",
+        ),
+        pytest.param(
+            "resolved_binding_reassigned_before_prepare_command",
+            id="resolved-executable-binding-must-flow-unchanged",
+        ),
+        pytest.param(
+            "prepare_command_literal",
+            id="prepare-command-rejects-literal-command",
+        ),
+        pytest.param(
+            "prepare_command_other_binding",
+            id="prepare-command-rejects-other-command-binding",
+        ),
+        pytest.param(
+            "prepare_command_spread_ambiguity",
+            id="prepare-command-rejects-top-level-spread",
+        ),
+        pytest.param(
+            "prepare_command_duplicate_command",
+            id="prepare-command-rejects-duplicate-command",
+        ),
+    ],
+)
+def test_shell_interception_contract_rejects_published_058_shape_drift(
+    tmp_path: Path, mutation: str
+) -> None:
+    cache = tmp_path / "cache"
+    prefix = cache / "agents" / "gemini" / "0.58.0"
+    install_fake_package(
+        prefix,
+        version="0.58.0",
+        shell_contract_js=_published_058_shell_contract_source(mutation),
+    )
+    fake_node = make_fake_node(tmp_path / "node")
+    resolver = GeminiResolver(
+        cache,
+        npm_executable=str(tmp_path / "no-such-npm-binary"),
+        node_executable=str(fake_node),
+    )
+
+    with pytest.raises(
+        GeminiResolveError, match="does not prove PATH-resolved bash shell interception"
     ):
         resolver.resolve("0.58.0")
 
