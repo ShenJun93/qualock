@@ -4,11 +4,11 @@
 
 **Goal:** Add Gemini CLI 0.58.0+ as QuaLock's fourth local qualification agent on current main without changing qualification policy, grading, historical analysis, pricing mathematics, or the existing Codex/Claude/Antigravity execution contracts.
 
-**Architecture:** Keep `DockerQualificationBackend` agent-generic. Add one generic digest-pinned Node runtime-overlay primitive, then implement Gemini-owned resolver, stream-json parser, isolated invocation adapter, and mainline routing. The parent Gemini process may reach the model API, while every model-launched shell command is intercepted through a QuaLock-owned Bubblewrap wrapper with fresh user/network namespaces and explicit exit-code evidence.
+**Architecture:** Keep `DockerQualificationBackend` agent-generic. Add the digest-pinned Node runtime-overlay primitive plus one generic fingerprinted read-only support-tree primitive so a chunked JavaScript package can preserve its exact published runtime layout. Gemini owns resolution, stream-json parsing, isolation, and routing; the generic backend revalidates declared support integrity immediately before container execution. The parent Gemini process may reach the model API, while every model-launched shell command is intercepted through a QuaLock-owned Bubblewrap wrapper with fresh user/network namespaces and explicit exit-code evidence.
 
 **Tech Stack:** Python 3.11+, Pydantic v2, Typer, Docker/BuildKit, npm, Node.js 22 Bookworm, Bubblewrap, pytest, Ruff, strict mypy.
 
-**Spec:** `docs/superpowers/specs/2026-09-08-gemini-cli-adapter-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-08-gemini-cli-adapter-design.md` (runtime-support correction frozen at spec commit `560db54d800f37eb3d91c3e0a82ddbc0e53409f0`).
 
 ## Global Constraints
 
@@ -30,13 +30,15 @@
 
 ## File Structure
 
-- `src/qualock/agents/base.py`: generic immutable `AgentRuntimeOverlay` contract and adapter protocol property.
-- `src/qualock/run/backend.py`: forwards runtime overlays without agent-name branching.
+- `src/qualock/agents/base.py`: generic immutable `AgentRuntimeOverlay`, `AgentSupportBinary`, and `AgentSupportTree` contracts.
+- `src/qualock/agents/support_integrity.py`: canonical support-tree hashing, support identity derivation, and execution-time digest/symlink verification.
+- `src/qualock/run/backend.py`: forwards runtime overlays and read-only support mounts without agent-name branching; revalidates declared support integrity immediately before `run_agent`.
 - `src/qualock/run/docker.py`: validates overlays and renders deterministic multi-stage Dockerfiles.
-- `src/qualock/agents/gemini_resolver.py`: exact/latest npm resolution, cache integrity, bin-entrypoint and shell-interception contract checks.
+- `src/qualock/agents/gemini_resolver.py`: exact/latest npm resolution, cache integrity, bin-entrypoint and shell-interception checks, plus one fingerprinted package-root support tree.
 - `src/qualock/evidence/gemini_stream_json.py`: strict Gemini 0.58.0 protocol normalization.
 - `src/qualock/agents/gemini.py`: API-key selection, isolated settings/home/project state, Node overlay, Bubblewrap wrapper, invocation construction.
 - `src/qualock/config/models.py` + `src/qualock/config/io.py`: add `gemini`/`provider-default` values and one pure semantic validator invoked immediately after model validation.
+- `src/qualock/baseline/models.py` + `src/qualock/commands.py`: optional baseline support fingerprint for Gemini while legacy non-Gemini locks remain valid.
 - `src/qualock/commands.py` + `src/qualock/cli.py`: local baseline/check/doctor/display routing only.
 - `src/qualock/pricing/resolve.py` + `src/qualock/pricing/sidecar.py`: distinguish Gemini CLI from Antigravity while mapping both to Google provider; Gemini unknown models fail pricing closed.
 - Gemini-focused tests live in `tests/unit/test_gemini_*.py`; generic regression tests prove no non-Gemini behavior changes.
@@ -165,6 +167,10 @@ def test_resolves_exact_installed_bin_entrypoint(tmp_path: Path) -> None:
     assert binary.version == "0.58.0"
     assert binary.path.name == "gemini.js"
     assert binary.sha256 == hashlib.sha256(binary.path.read_bytes()).hexdigest()
+    assert len(binary.support_trees) == 1
+    support = binary.support_trees[0]
+    assert support.container_root == "/opt/qualock/gemini-package"
+    assert len(support.sha256) == 64
 ```
 
 - `latest` queries `npm view @google/gemini-cli version`, then resolves/cache-keys the returned exact stable version.
@@ -197,7 +203,7 @@ Expected: import failure because `gemini_resolver.py` does not exist.
 
 - [ ] **Step 4: Implement exact resolution/cache layout**
 
-Use `<cache>/agents/gemini/<version>/` with a generated private package manifest. Resolve `latest` before entering this path; never cache under the literal `latest`. Read `node_modules/@google/gemini-cli/package.json`, resolve `bin.gemini` relative to that package root, require the resolved path to stay inside the package root, and hash only the validated executable file for `AgentBinary.sha256`.
+Use `<cache>/agents/gemini/<version>/` with a generated private package manifest. Resolve `latest` before entering this path; never cache under the literal `latest`. Read `node_modules/@google/gemini-cli/package.json`, resolve `bin.gemini` relative to that package root, require the resolved path to stay inside the package root, and hash only the validated executable file for `AgentBinary.sha256`. Task 6A corrects the runtime closure discovered by mandatory acceptance: the complete package root becomes one `AgentSupportTree` mounted at `/opt/qualock/gemini-package`, with canonical tree hashing and symlink rejection.
 
 Use isolated probe HOME/USERPROFILE and run the installed entrypoint as:
 
@@ -209,7 +215,7 @@ Use isolated probe HOME/USERPROFILE and run the installed entrypoint as:
 
 Scan regular JavaScript files under the installed package bundle and require one implementation unit to prove all three behaviors used by the reviewed 0.58.0 runtime contract: Linux chooses executable `bash`, that executable is passed through the upstream executable resolver, and the resolver searches `process.env.PATH` for non-absolute commands. Do not patch/vendor Gemini CLI. Cache reuse reruns this source-contract check without registry access.
 
-Compute the executable SHA before and after version/help/source validation; if it changes, raise `GeminiResolveError("Gemini executable changed during contract validation")`.
+Compute the executable SHA before and after version/help/source validation. Task 6A additionally computes the complete package support-tree fingerprint before and after those probes; any tree path/content/symlink change fails closed with `GeminiResolveError("Gemini support tree changed during contract validation")`.
 
 - [ ] **Step 6: Run GREEN + static checks**
 
@@ -317,7 +323,7 @@ git commit -m "feat: parse Gemini stream evidence"
 Require `select_gemini_automation_credential` to accept only a non-empty `GEMINI_API_KEY`. For an invocation, assert:
 
 ```python
-assert invocation.container_binary_path == "/opt/qualock/gemini"
+assert invocation.container_binary_path == "/opt/qualock/gemini-package/bundle/gemini.js"
 assert invocation.stdin_secret_env == ("GEMINI_API_KEY", "test-only")
 env = dict(invocation.environment)
 assert env["HOME"] == "/opt/qualock/gemini-home"
@@ -329,7 +335,7 @@ assert invocation.tmpfs_mounts == ("/opt/qualock/gemini-home",)
 
 Assert argv contains `--prompt`, exact prompt, `--output-format stream-json`, `--model`, exact model, `--approval-mode yolo`, and `-e none`; it must not contain the secret, resume/session flags, response recording, include directories, policy files, or extension names. Non-`provider-default` reasoning effort raises before yielding.
 
-Mount assertions: system settings -> `/opt/qualock/gemini-settings.json:ro`; empty directory -> `/workspace/.gemini:ro`; wrapper -> `/opt/qualock/bin/bash:ro`. All temporary source paths disappear when the context manager exits.
+Mount assertions: system settings -> `/opt/qualock/gemini-settings.json:ro`; empty directory -> `/workspace/.gemini:ro`; wrapper -> `/opt/qualock/bin/bash:ro`. Task 6A moves the real package runtime layout into `binary.support_trees`, mounted read-only at `/opt/qualock/gemini-package`; the adapter entrypoint becomes `/opt/qualock/gemini-package/bundle/gemini.js`. All temporary adapter-owned source paths disappear when the context manager exits.
 
 - [ ] **Step 2: Pin the enforced settings payload in tests**
 
@@ -543,68 +549,355 @@ git add src/qualock/config/models.py src/qualock/config/io.py src/qualock/comman
 git commit -m "feat: route Gemini local qualification"
 ```
 
-### Task 6: Prove the Mandatory No-Auth Runtime Contract
+### Task 6A: Add Fingerprinted Support Trees and Execution-Time Integrity
 
 **Files:**
-- Create: `tests/integration/test_gemini_noauth_contract.py`
-- No production changes unless the no-auth proof exposes a real contract defect; any such defect starts a fresh scoped fix/re-review loop in the owning Task 1–5 area.
+- Modify: `src/qualock/agents/base.py`
+- Create: `src/qualock/agents/support_integrity.py`
+- Modify: `src/qualock/agents/gemini_resolver.py`
+- Modify: `src/qualock/agents/gemini.py`
+- Modify: `src/qualock/run/backend.py`
+- Test: `tests/unit/test_gemini_resolver.py`
+- Test: `tests/unit/test_gemini_adapter.py`
+- Test: `tests/unit/test_docker_backend.py`
+- Create: `tests/unit/test_agent_support_integrity.py`
+- Modify: `tests/integration/test_gemini_noauth_contract.py` (add the production `run_attempt` version-probe RED before backend implementation)
 
 **Interfaces:**
-- Local opt-in gate: `QUALOCK_RUN_GEMINI_NOAUTH_CONTRACT=1`.
-- Exact package contract: Gemini CLI `0.58.0` already present in QuaLock's resolver cache or supplied as a pre-existing extracted package root; the test must not install dependencies.
-- No `GEMINI_API_KEY` is read or required.
-- [ ] **Step 1: Add an explicit prerequisite check before writing/running the integration proof**
+- Produces `AgentSupportTree(root: Path, sha256: str, container_root: str)` and `AgentBinary.support_trees: tuple[AgentSupportTree, ...] = ()`.
+- Produces `fingerprint_support_tree(root: Path) -> str`, `agent_support_fingerprint(binary: AgentBinary) -> str | None`, and `verify_agent_supports(binary: AgentBinary) -> None`.
+- Gemini declares exactly one support tree rooted at the resolved `@google/gemini-cli` package root and mounted at `/opt/qualock/gemini-package`.
+- `AgentBinary.sha256` continues to mean only the validated `bin.gemini` entrypoint SHA.
+- Existing `AgentSupportBinary` remains available for Codex's single support executable.
 
-Controller checks for exact `0.58.0` in the resolver cache. Current-machine reconnaissance found no WSL Gemini resolver cache and the unrelated Windows global Gemini is `0.54.4`; therefore do not silently reuse it. If exact `0.58.0` is absent, record the gate as BLOCKED and stop before any `npm install`. A registry/package fetch requires separate user authorization under the no-install constraint.
+- [ ] **Step 1: Write RED tests for canonical tree hashing and fail-closed path handling**
 
-- [ ] **Step 2: Write the no-auth Docker contract test**
+```python
+def test_support_tree_digest_is_path_and_content_deterministic(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    (root / "bundle/worker").mkdir(parents=True)
+    (root / "bundle/gemini.js").write_text("entry", encoding="utf-8")
+    (root / "bundle/worker/worker-entry.js").write_text("worker", encoding="utf-8")
+    first = fingerprint_support_tree(root)
+    assert first == fingerprint_support_tree(root)
+    (root / "bundle/worker/worker-entry.js").write_text("changed", encoding="utf-8")
+    assert fingerprint_support_tree(root) != first
 
-Use the existing pinned Bookworm-compatible test image:
 
-```text
-ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm@sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248
+def test_support_tree_rejects_nested_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    root.mkdir()
+    outside = tmp_path / "outside.js"
+    outside.write_text("outside", encoding="utf-8")
+    (root / "nested").mkdir()
+    (root / "nested/link.js").symlink_to(outside)
+    with pytest.raises(AgentSupportIntegrityError, match="symlink"):
+        fingerprint_support_tree(root)
 ```
 
-Seed a temporary repository with hostile `GEMINI.md`, `.gemini/settings.json`, and `.gemini/.env` sentinel values. Build a `CanarySpec` with `execution="container"`, instantiate the real `GeminiAdapter(None)`, and prepare via `DockerQualificationBackend` so the actual Node overlay/runtime dependency path is exercised.
+Canonical digest input is the sorted sequence `relative_posix_path + NUL + file_sha256 + LF` for every regular file below the root. Do not include absolute host paths, mtimes, modes, uid/gid, or directory order.
 
-Resolve `0.58.0` from the pre-existing cache with an intentionally nonexistent npm executable; this proves the mandatory contract uses no registry. Assert the resolved path/version/help/bin/source contract before Docker execution.
-
-- [ ] **Step 3: Prove Node and project-state isolation without provider access**
-
-Inside the prepared image, run `/opt/qualock/node-runtime/bin/node --version` and require major 22. Mount the adapter's empty project-Gemini directory at `/workspace/.gemini` and assert the hostile repository settings/env files are not visible during the agent phase while the source tree itself remains unchanged on disk.
-
-Run the cached Gemini executable only with `--version`/`--help`; never pass `--prompt` and never set a provider credential in this no-auth test.
-- [ ] **Step 4: Prove the Bubblewrap network/exit contract**
-
-Using the exact wrapper file produced by `GeminiAdapter.invocation` and the same prepared image/security mode:
-
-1. `/opt/qualock/bin/bash -c 'cat /dev/null; printf dev-ok'` exits 0, prints `dev-ok`, and emits one `QUALOCK_GEMINI_EXIT_CODE=0` marker.
-2. `/opt/qualock/bin/bash -c 'exit 7'` exits 7 and emits exactly one `QUALOCK_GEMINI_EXIT_CODE=7` marker.
-3. A parent Python direct-IP TCP probe to `1.1.1.1:443` succeeds.
-4. The same direct-IP probe through the wrapper fails with network-unreachable/no-route semantics and a non-zero marker.
-5. No `QUALOCK_GEMINI_SHELL_SANDBOX_FAILURE` appears during normal namespace operation.
-
-Inspect the Docker create argv and assert it contains no `--privileged`, `--cap-add`, `--network host`, Docker socket mount, or host-device passthrough; the only security option remains the pre-existing `seccomp=unconfined`.
-
-- [ ] **Step 5: Run the opt-in no-auth gate**
+- [ ] **Step 2: Run the support-integrity RED tests**
 
 ```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_agent_support_integrity.py
+```
+
+Expected: import/type/function failures because the support-tree primitive does not exist.
+
+- [ ] **Step 3: Implement the immutable support-tree type and hashing helpers**
+
+```python
+@dataclass(frozen=True)
+class AgentSupportTree:
+    root: Path
+    sha256: str
+    container_root: str
+```
+
+`fingerprint_support_tree` uses `os.scandir`/`Path.lstat` semantics without following links. Reject every symlink and every non-directory/non-regular filesystem node. `agent_support_fingerprint(binary)` hashes a sorted canonical record stream: `B\0<container_path>\0<sha256>\n` for each support binary and `T\0<container_root>\0<sha256>\n` for each support tree, returning `None` only when both collections are empty. `verify_agent_supports()` re-hashes every support binary and support tree and rejects path disappearance, symlink replacement, digest mismatch, duplicate/overlapping container destinations, or a support tree whose root ceases to be a real directory.
+
+- [ ] **Step 4: Write RED resolver tests for complete package-tree closure**
+
+```python
+def test_resolver_pins_complete_package_tree(tmp_path: Path) -> None:
+    package_root, entrypoint = install_fake_package(prefix, version="0.58.0")
+    nested = package_root / "bundle/worker/worker-entry.js"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_text("worker", encoding="utf-8")
+    binary = resolver.resolve("0.58.0")
+    assert binary.path == entrypoint.resolve()
+    assert len(binary.support_trees) == 1
+    tree = binary.support_trees[0]
+    assert tree.root == package_root.resolve()
+    assert tree.container_root == "/opt/qualock/gemini-package"
+    assert tree.sha256 == fingerprint_support_tree(package_root)
+```
+
+Also add a nested-symlink rejection test and a mutation-during-`_validate_binary_contract` test that changes a nested regular file and requires `GeminiResolveError("Gemini support tree changed during contract validation")`.
+
+- [ ] **Step 5: Run resolver RED against the current immediate-sibling implementation**
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_gemini_resolver.py -k 'complete_package_tree or nested_symlink or support_tree_changed'
+```
+
+Expected: FAIL because the current uncommitted compatibility attempt exposes only immediate sibling `AgentSupportBinary` files.
+
+- [ ] **Step 6: Replace Gemini sibling support binaries with one package support tree**
+
+In `GeminiResolver.resolve`, compute `tree_before = fingerprint_support_tree(package_root)` before version/help/source validation and `tree_after` afterward. Require equality and return:
+
+```python
+return AgentBinary(
+    name="gemini",
+    version=version,
+    path=entrypoint,
+    sha256=digest_after,
+    support_trees=(
+        AgentSupportTree(
+            root=package_root.resolve(),
+            sha256=tree_after,
+            container_root="/opt/qualock/gemini-package",
+        ),
+    ),
+)
+```
+
+Remove the Gemini-only sibling `AgentSupportBinary` enumeration; do not alter Codex support-binary behavior.
+
+- [ ] **Step 7: Write RED adapter/backend tests and the real production-`run_attempt` no-auth probe**
+
+```python
+def test_gemini_entrypoint_uses_support_tree_layout(tmp_path: Path) -> None:
+    binary = gemini_binary_with_support_tree(tmp_path)
+    with GeminiAdapter().invocation(binary, model="gemini-3.5-flash",
+                                    reasoning_effort="provider-default", prompt="Fix") as inv:
+        assert inv.container_binary_path == "/opt/qualock/gemini-package/bundle/gemini.js"
+
+
+def test_backend_rejects_support_tree_tamper_before_run_agent(tmp_path: Path) -> None:
+    binary = binary_with_support_tree(tmp_path)
+    (binary.support_trees[0].root / "nested.js").write_text("tampered", encoding="utf-8")
+    with pytest.raises(AgentSupportIntegrityError, match="fingerprint"):
+        service.run_attempt(canary=spec, prepared=prepared, binary=binary,
+                            side=Side.BASELINE, repetition=1)
+    assert docker.run_agent_calls == 0
+```
+
+Add a positive backend assertion that the support root is forwarded exactly once as `(tree.root, tree.container_root, "ro")` and the existing entrypoint file mount still targets the nested `container_binary_path`. In `tests/integration/test_gemini_noauth_contract.py`, also add `_GeminiVersionProbeAdapter` and `test_production_run_attempt_version_probe` exactly as specified in Task 6C Step 2, but do it **before** changing backend support-tree plumbing.
+
+Run RED:
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_gemini_adapter.py tests/unit/test_docker_backend.py -k 'support_tree or support_tamper'
+QUALOCK_RUN_GEMINI_NOAUTH_CONTRACT=1 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/integration/test_gemini_noauth_contract.py -k 'production_run_attempt_version_probe'
+```
+
+Expected: unit and Docker-backed production-path failures because the current backend has neither `AgentSupportTree` plumbing nor pre-create tree verification. No provider credential or `--prompt` is used.
+
+- [ ] **Step 8: Implement backend support mounts and immediate pre-create verification**
+
+`DockerQualificationBackend.run_attempt` must call `verify_agent_supports(binary)` after the adapter invocation has been constructed and immediately before `docker_runner.run_agent`. Extend the mount list with declared support binaries and support trees, all read-only. No agent-name branch belongs in the backend.
+
+- [ ] **Step 9: Run Task 6A GREEN and static gates**
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_agent_support_integrity.py tests/unit/test_gemini_resolver.py tests/unit/test_gemini_adapter.py tests/unit/test_docker_backend.py tests/unit/test_agent_resolver.py
+PYTHONPATH=src /home/pacmap/qualock-easy/.venv/bin/python -c 'from qualock.agents.gemini_resolver import GeminiResolver; from qualock.agents.releases import default_agent_cache_root; b=GeminiResolver(default_agent_cache_root(), npm_executable="/definitely/nonexistent/npm").resolve("0.58.0"); assert len(b.support_trees)==1; print(b.version, b.sha256, b.support_trees[0].sha256)'
+/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/agents/base.py src/qualock/agents/support_integrity.py src/qualock/agents/gemini_resolver.py src/qualock/agents/gemini.py src/qualock/run/backend.py tests/unit/test_agent_support_integrity.py tests/unit/test_gemini_resolver.py tests/unit/test_gemini_adapter.py tests/unit/test_docker_backend.py
+/home/pacmap/qualock-easy/.venv/bin/mypy --strict src/qualock/agents/base.py src/qualock/agents/support_integrity.py src/qualock/agents/gemini_resolver.py src/qualock/agents/gemini.py src/qualock/run/backend.py
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock
+git diff --check
+```
+
+Expected: all PASS; offline exact-cache resolve performs no npm registry access.
+
+- [ ] **Step 10: Fresh scoped review and local commit**
+
+Reviewer range is `560db54..WORKTREE` plus the Task 6A report. Critical/Important findings return to a fresh fixer before commit. When review is clean:
+
+```bash
+git add src/qualock/agents/base.py src/qualock/agents/support_integrity.py src/qualock/agents/gemini_resolver.py src/qualock/agents/gemini.py src/qualock/run/backend.py tests/unit/test_agent_support_integrity.py tests/unit/test_gemini_resolver.py tests/unit/test_gemini_adapter.py tests/unit/test_docker_backend.py
+git commit -m "fix: pin Gemini runtime support tree"
+```
+
+### Task 6B: Pin Gemini Runtime Support Identity in Baseline Locks
+
+**Files:**
+- Modify: `src/qualock/baseline/models.py`
+- Modify: `src/qualock/commands.py`
+- Test: `tests/unit/test_baseline_lock.py`
+- Test: `tests/unit/test_commands.py`
+
+**Interfaces:**
+- Adds `AgentPin.support_sha256: str | None = None`; schema version remains `1`.
+- Uses `agent_support_fingerprint(binary)` from Task 6A.
+- New Gemini baselines require a non-null support fingerprint; Gemini checks reject missing/mismatched support identity as stale.
+- Existing non-Gemini locks with no field remain valid and keep their current executable-only identity semantics.
+
+- [ ] **Step 1: Write RED compatibility and Gemini lock tests**
+
+```python
+def test_legacy_lock_without_support_sha256_still_loads() -> None:
+    payload = make_lock().model_dump(mode="json")
+    payload["agent"].pop("support_sha256", None)
+    loaded = BaselineLock.model_validate(payload)
+    assert loaded.agent.support_sha256 is None
+```
+
+Add `test_gemini_baseline_writes_support_fingerprint`, plus check-path tests requiring `BaselineStaleError` when a Gemini lock has `support_sha256=None` or a different support fingerprint. Add a Codex regression proving `support_sha256=None` remains accepted when executable SHA matches.
+
+- [ ] **Step 2: Run RED**
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_baseline_lock.py tests/unit/test_commands.py -k 'support_sha256 or support_fingerprint or legacy_lock'
+```
+
+Expected: failures because `AgentPin` and command routing do not yet persist/require support identity.
+
+- [ ] **Step 3: Implement optional lock field and Gemini-only enforcement**
+
+```python
+class AgentPin(BaseModel):
+    name: str
+    version: str
+    binary_sha256: str
+    support_sha256: str | None = None
+```
+
+When `agent_name == "gemini"`, baseline creation computes `agent_support_fingerprint(binary)` and requires a non-null value before writing the lock. During `execute_check`, resolve the baseline binary, first enforce existing `binary_sha256`, then require the Gemini lock support fingerprint to exist and equal the freshly resolved support fingerprint. Do not require this field for Codex, Claude Code, or Antigravity.
+
+- [ ] **Step 4: Run Task 6B GREEN + lock regressions**
+
+```bash
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_baseline_lock.py tests/unit/test_commands.py tests/unit/test_release_monitor_state.py tests/unit/test_release_monitor_flow.py tests/unit/test_version_bisect_commands.py tests/unit/test_github_pr_commands.py
+/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock/baseline/models.py src/qualock/commands.py tests/unit/test_baseline_lock.py tests/unit/test_commands.py
+/home/pacmap/qualock-easy/.venv/bin/mypy --strict src/qualock/baseline/models.py src/qualock/commands.py
+git diff --check
+```
+
+Expected: PASS; Batch #44 surfaces remain behaviorally unchanged.
+
+- [ ] **Step 5: Fresh scoped review and local commit**
+
+Critical/Important findings require a fresh fix/re-review. When clean:
+
+```bash
+git add src/qualock/baseline/models.py src/qualock/commands.py tests/unit/test_baseline_lock.py tests/unit/test_commands.py
+git commit -m "fix: pin Gemini runtime support identity"
+```
+
+### Task 6C: Prove the Mandatory No-Auth Contract Through Production Run Plumbing
+
+**Files:**
+- Modify/Create: `tests/integration/test_gemini_noauth_contract.py`
+- Regression: `tests/unit/test_gemini_resolver.py`
+- Regression: `tests/unit/test_gemini_adapter.py`
+- Regression: `tests/unit/test_gemini_stream_json.py`
+- Regression: `tests/unit/test_docker_backend.py`
+
+**Interfaces:**
+- Opt-in gate remains `QUALOCK_RUN_GEMINI_NOAUTH_CONTRACT=1`.
+- Uses exact cached Gemini CLI `0.58.0`, the digest-pinned Node overlay, and real `DockerQualificationBackend`.
+- Never passes `--prompt`, never sets/reads `GEMINI_API_KEY`, and never invokes the Gemini provider.
+- A test-only `_GeminiVersionProbeAdapter` delegates the real Gemini invocation environment/mounts/runtime overlays but substitutes argv with exact cached `--version`; `parse_evidence` returns neutral `AgentEvidence()`.
+
+- [ ] **Step 1: Preserve the existing no-auth isolation/Bubblewrap assertions and update support-tree expectations**
+
+Replace any harness assertions for `/opt/qualock/gemini-bundle/*` per-file mounts with exactly one read-only `/opt/qualock/gemini-package` support-tree mount. Assert nested cached path `bundle/worker/worker-entry.js` exists in the host tree and is visible at the corresponding container path in a no-auth container probe.
+
+- [ ] **Step 2: Keep the production-`run_attempt` probe on the real backend path**
+
+```python
+class _GeminiVersionProbeAdapter:
+    def __init__(self) -> None:
+        self.real = GeminiAdapter(None)
+
+    @property
+    def runtime_dependencies(self):
+        return self.real.runtime_dependencies
+
+    @property
+    def runtime_overlays(self):
+        return self.real.runtime_overlays
+
+    @contextmanager
+    def invocation(self, binary, *, model, reasoning_effort, prompt):
+        with self.real.invocation(binary, model=model,
+                                  reasoning_effort=reasoning_effort,
+                                  prompt=prompt) as inv:
+            yield dataclasses.replace(inv, argv=(str(binary.path), "--version"))
+
+    def parse_evidence(self, stdout: str, stderr: str) -> AgentEvidence:
+        assert stdout.strip().splitlines()[0] == "0.58.0"
+        return AgentEvidence()
+```
+
+Build a real `DockerQualificationBackend` with this adapter and a canary whose grader command is `true`. Call `backend.prepare(...)`, then `backend.run_attempt(...)`. Assert the returned attempt is valid/successful, source integrity inspection ran, grader ran, container cleanup ran, and captured Docker create argv contains the production support-tree mount. Inspect the full argv/environment and assert no `--prompt`, `GEMINI_API_KEY`, Google credential variable, privileged/capability/host-network/device/docker-socket exposure.
+
+- [ ] **Step 3: Re-run the focused production-path GREEN on the exact 6A/6B implementation**
+
+```bash
+QUALOCK_RUN_GEMINI_NOAUTH_CONTRACT=1 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/integration/test_gemini_noauth_contract.py -k 'production_run_attempt'
+```
+
+Expected: PASS. The corresponding RED was captured in Task 6A Step 7 before backend support-tree implementation.
+
+- [ ] **Step 4: Run the complete mandatory no-auth gate**
+
+```bash
+unset GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_APPLICATION_CREDENTIALS GOOGLE_CLOUD_PROJECT GOOGLE_CLOUD_PROJECT_ID GOOGLE_CLOUD_LOCATION
 QUALOCK_RUN_GEMINI_NOAUTH_CONTRACT=1 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/integration/test_gemini_noauth_contract.py
 ```
 
-Expected: PASS only when exact cached 0.58.0 prerequisite exists. If prerequisite is absent, do not turn the test into a fake pass; record the controller gate as blocked pending explicit artifact-fetch authorization.
+Required PASS evidence includes: exact offline cache resolve; Node major 22; hostile user/project state hidden; source unchanged; real Gemini `--version`/`--help`; Bubblewrap `/dev/null`, exit `0`, exit `7`, direct-IP network denial with parent network reachable; no sandbox-failure marker; safe Docker create argv; complete support-tree layout; and real production `prepare + run_attempt + inspect + grader + cleanup` with the no-provider version probe.
 
-- [ ] **Step 6: Run focused regression tests and commit the test harness**
+- [ ] **Step 5: Run focused/full regressions and static gates**
 
 ```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_gemini_resolver.py tests/unit/test_gemini_adapter.py tests/unit/test_gemini_stream_json.py
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_gemini_resolver.py tests/unit/test_gemini_adapter.py tests/unit/test_gemini_stream_json.py tests/unit/test_docker_backend.py tests/unit/test_agent_support_integrity.py tests/unit/test_baseline_lock.py tests/unit/test_commands.py
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q
+/home/pacmap/qualock-easy/.venv/bin/ruff check src/qualock tests/integration/test_gemini_noauth_contract.py tests/unit/test_agent_support_integrity.py tests/unit/test_gemini_resolver.py tests/unit/test_gemini_adapter.py tests/unit/test_docker_backend.py tests/unit/test_baseline_lock.py tests/unit/test_commands.py
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock
+git diff --check
 ```
-Expected: PASS.
+
+For full-tree Ruff, compare diagnostics against base `a98374d5c161ef96272e0a94a5f7584511e7f7f9`; no new diagnostic on unchanged code is allowed.
+
+- [ ] **Step 6: Fresh Task 6 whole-correction review and local commit**
+
+Reviewer must read spec commit `560db54`, all Task 6A/6B/6C reports, and the exact diff since `560db54`. It must explicitly audit the prior fresh-review findings: support SHA trust/TOCTOU, nested runtime closure, and production `run_attempt` proof. Critical/Important count must be zero before commit.
 
 ```bash
-git add tests/integration/test_gemini_noauth_contract.py tests/unit/test_gemini_resolver.py
+git add tests/integration/test_gemini_noauth_contract.py docs/superpowers/plans/2026-09-08-gemini-cli-mainline-adapter.md
 git commit -m "test: lock Gemini no-auth runtime contract"
 ```
+
+### Task 6D: Task-6 Controller Ledger and Exact-Head Gate
+
+**Files:**
+- Controller-only ignored artifacts: `.superpowers/sdd/2026-09-08-gemini-cli-mainline-adapter/progress.md`
+- Controller-only ignored report: `.superpowers/sdd/2026-09-08-gemini-cli-mainline-adapter/task-6-report.md`
+
+**Interfaces:**
+- Records the real 0.58.0 single-file assumption failure, exact Node-image authorization, Bubblewrap build authorization, 43/43 pre-correction no-auth result, fresh review `C1/I2/M1`, spec correction `560db54`, and final Task 6A–6C verification/review evidence.
+- Does not create a tracked production commit.
+
+- [ ] **Step 1: Update ledger with exact SHAs and verification outputs**
+
+Record exact command/results rather than generic summaries. Include the final support-tree SHA for cached 0.58.0 and the exact mandatory no-auth test count.
+
+- [ ] **Step 2: Require clean tracked tree and exact task commits before Task 7**
+
+```bash
+git status --short
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q
+/home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock
+git diff --check 560db54..HEAD
+```
+
+Expected: tracked tree clean; only ignored SDD reports may remain; full suite/static gate PASS.
 
 ### Task 7: Gate the Exact Implementation Head, Review, CI, Document, and Merge
 
@@ -634,7 +927,7 @@ Expected: clean worktree and successful ancestry.
 - [ ] **Step 2: Run fresh implementation-head local gates**
 
 ```bash
-/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_gemini_resolver.py tests/unit/test_gemini_stream_json.py tests/unit/test_gemini_adapter.py tests/unit/test_config.py tests/unit/test_commands.py tests/unit/test_cli.py tests/unit/test_pricing_resolve.py tests/unit/test_pricing_provenance.py tests/unit/test_pricing_sidecar_loader.py tests/unit/test_history_render.py
+/home/pacmap/qualock-easy/.venv/bin/python -m pytest -q tests/unit/test_agent_support_integrity.py tests/unit/test_gemini_resolver.py tests/unit/test_gemini_stream_json.py tests/unit/test_gemini_adapter.py tests/unit/test_docker_backend.py tests/unit/test_baseline_lock.py tests/unit/test_config.py tests/unit/test_commands.py tests/unit/test_cli.py tests/unit/test_pricing_resolve.py tests/unit/test_pricing_provenance.py tests/unit/test_pricing_sidecar_loader.py tests/unit/test_history_render.py
 /home/pacmap/qualock-easy/.venv/bin/python -m pytest -q
 /home/pacmap/qualock-easy/.venv/bin/python -m compileall -q src/qualock
 git diff --check "$BASE"..HEAD
@@ -665,7 +958,7 @@ Dispatch one read-only Sonnet-high reviewer on exact range:
 a98374d5c161ef96272e0a94a5f7584511e7f7f9..$(cat /tmp/b43-implementation-head.txt)
 ```
 
-Reviewer must read the canonical spec and audit all 24 Required TDD coverage items, no-auth gate evidence, credential/config isolation, shell network/exit proof, pricing/advisory isolation, existing-agent regressions, and protected scopes. Any Critical/Important finding starts a fresh scoped fixer + exact-head re-review before proceeding.
+Reviewer must read the canonical spec and audit all Required TDD coverage items, the Task 6A–6C correction reports, support-tree identity/TOCTOU enforcement, production `run_attempt` no-auth proof, credential/config isolation, shell network/exit proof, pricing/advisory isolation, existing-agent regressions, and protected scopes. Any Critical/Important finding starts a fresh scoped fixer + exact-head re-review before proceeding.
 
 - [ ] **Step 5: STOP before push/PR unless user explicitly authorizes shared effects**
 
@@ -728,24 +1021,36 @@ No tag, GitHub Release, PyPI publish, or hosted/commercial action belongs to Bat
 | 1 config/effort fail-before-resolution | Task 5 |
 | 2 agent spec/display routing | Task 5 |
 | 3 exact/latest/npm/cache behavior | Task 2 |
-| 4 executable digest/tamper/symlink/no-registry reuse | Task 2 |
+| 4 executable digest plus complete support-tree digest/tamper/symlink/no-registry reuse | Tasks 2 and 6A |
 | 5 bin entrypoint/version/help flags | Task 2 |
 | 6 PATH-resolved bash interception contract | Task 2 |
 | 7 digest-pinned runtime overlay | Task 1 |
 | 8 no-overlay legacy preparation equivalence | Task 1 |
 | 9 Gemini argv/private home/extensions | Task 4 |
-| 10 hostile user/project config isolation | Tasks 4 and 6 |
+| 10 hostile user/project config isolation | Tasks 4 and 6C |
 | 11 system settings hardening | Task 4 |
-| 12 API-key non-leakage | Tasks 4 and 6 |
+| 12 API-key non-leakage | Tasks 4 and 6C |
 | 13 Bubblewrap wrapper structure | Task 4 |
-| 14 no-auth Docker network/dev/exit proof | Task 6 |
+| 14 no-auth Docker network/dev/exit proof plus real production `run_attempt` probe | Tasks 6A and 6C |
 | 15 stream/model/tool/usage parser | Task 3 |
 | 16 exact shell marker semantics | Task 3 |
-| 17 baseline digest/mixed-agent routing | Task 5 |
+| 17 entrypoint digest + Gemini support identity + mixed-agent routing | Tasks 5 and 6B |
 | 18 offline actionable doctor | Task 5 |
 | 19 unchanged history output/dependency direction | Task 5 |
 | 20 Gemini-vs-Antigravity pricing identity | Task 5 |
 | 21 conservative Gemini usage trust | Task 5 |
 | 22 read-only/offline Gemini cost behavior | Task 5 |
-| 23 Batch #44 scopes remain unsupported | Task 5 |
-| 24 existing-agent/history/budget/pricing regression suite | Tasks 5 and 7 |
+| 23 Batch #44 scopes remain unsupported | Tasks 5 and 6B |
+| 24 existing-agent/history/budget/pricing regression suite | Tasks 5, 6A, 6B, and 7 |
+
+### Runtime-support correction coverage
+
+| Spec correction | Owning task |
+| --- | --- |
+| `AgentSupportTree` primitive and full package layout | Task 6A |
+| Canonical tree fingerprint and symlink rejection | Task 6A |
+| Optional `AgentPin.support_sha256` with Gemini-only requirement | Task 6B |
+| Immediate pre-create support revalidation | Task 6A |
+| One read-only package-root mount preserving nested runtime paths | Task 6A |
+| Real `DockerQualificationBackend.run_attempt` no-auth proof | Tasks 6A and 6C |
+| Batch #44/authenticated-provider boundaries unchanged | Tasks 6B, 6C, and 7 |
