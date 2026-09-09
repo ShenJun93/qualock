@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from qualock.baseline.io import BaselineStaleError, assert_suite_fresh, read_baseline_lock, write_baseline_lock
+from qualock.baseline.io import (
+    BaselineStaleError,
+    assert_suite_fresh,
+    read_baseline_lock,
+    write_baseline_lock,
+)
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
 
 
@@ -35,3 +40,12 @@ def test_stale_suite_is_rejected() -> None:
 def test_stale_config_is_rejected() -> None:
     with pytest.raises(BaselineStaleError, match="config"):
         assert_suite_fresh(make_lock(), "suite-a", "config-b")
+
+
+def test_legacy_lock_without_support_sha256_still_loads() -> None:
+    payload = make_lock().model_dump(mode="json")
+    payload["agent"].pop("support_sha256", None)
+
+    loaded = BaselineLock.model_validate(payload)
+
+    assert loaded.agent.support_sha256 is None

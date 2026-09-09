@@ -7,6 +7,7 @@ class AgentPin(BaseModel):
     name: str
     version: str
     binary_sha256: str
+    support_sha256: str | None = None
 
 
 class ModelPin(BaseModel):
