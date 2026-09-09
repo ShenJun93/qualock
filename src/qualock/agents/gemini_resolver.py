@@ -6,7 +6,8 @@ from pathlib import Path
 
 from qualock.run.process import run_process
 
-from .base import AgentBinary
+from .base import AgentBinary, AgentSupportTree
+from .support_integrity import AgentSupportIntegrityError, fingerprint_support_tree
 
 
 class GeminiResolveError(RuntimeError):
@@ -90,9 +91,7 @@ _EXECUTABLE_LITERAL_RE = re.compile(r"(?<![\w$.])executable\s*:\s*(['\"])([^'\"]
 _RETURN_OBJECT_RE = re.compile(r"\breturn\s*\(?\s*\{")
 _WINDOWS_CONDITION_RE = re.compile(r"isWindows[A-Za-z]*\s*\(|['\"]win32['\"]")
 _ABSOLUTE_CONDITION_RE = re.compile(r"(?<![\w$])isAbsolute\s*\(")
-_PATH_LOOKUP_RE = re.compile(
-    r"process\s*\.\s*env\s*(?:\.\s*PATH(?![\w$])|\[\s*(['\"])PATH\1\s*\])"
-)
+_PATH_LOOKUP_RE = re.compile(r"process\s*\.\s*env\s*(?:\.\s*PATH(?![\w$])|\[\s*(['\"])PATH\1\s*\])")
 _DESTRUCTURE_RE = re.compile(
     r"(?:const|let|var)\s*\{(?P<properties>[^{}]*)\}\s*=\s*"
     rf"(?:[\w$]+\s*\.\s*)?{_GET_SHELL_CONFIGURATION}\s*\(\s*\)\s*;"
@@ -114,18 +113,14 @@ _PUBLISHED_058_WINDOWS_RE = re.compile(
     r"const\s+(?P<windows>[\w$]+)\s*=\s*[\w$]+\s*\.\s*platform\s*\(\s*\)"
     r"\s*===\s*(['\"])win32\2\s*;"
 )
-_PUBLISHED_058_STRICT_RE = re.compile(
-    r"const\s+(?P<strict>[\w$]+)\s*=\s*(?P<expression>[^;]+);"
-)
+_PUBLISHED_058_STRICT_RE = re.compile(r"const\s+(?P<strict>[\w$]+)\s*=\s*(?P<expression>[^;]+);")
 _PUBLISHED_058_GUARD_RE_TEMPLATE = r"if\s*\(\s*{strict}\s*\)\s*\{{"
 _PUBLISHED_058_CMD_BRANCH_RE = re.compile(
     r"\{\s*shell\s*=\s*(['\"])cmd\1\s*;\s*"
     r"argsPrefix\s*=\s*\[\s*(['\"])/c\2\s*\]\s*;\s*"
     r"executable\s*=\s*(['\"])cmd\.exe\3\s*;\s*\}"
 )
-_CMD_EXECUTABLE_WRITE_RE = re.compile(
-    r"(?<![\w$])executable\s*=\s*(['\"])cmd\.exe\1\s*;"
-)
+_CMD_EXECUTABLE_WRITE_RE = re.compile(r"(?<![\w$])executable\s*=\s*(['\"])cmd\.exe\1\s*;")
 _PUBLISHED_058_PREPARE_COMMAND_ASSIGNMENT_RE = re.compile(
     r"(?:const|let)\s+[\w$]+\s*=\s*await\s+sandboxManager\s*\.\s*"
     r"prepareCommand\s*\("
@@ -297,9 +292,7 @@ def _top_level_matches(text: str, pattern: re.Pattern[str]) -> list[re.Match[str
     return matches
 
 
-def _top_level_member_call_openings(
-    text: str, receiver: str, member: str
-) -> list[int] | None:
+def _top_level_member_call_openings(text: str, receiver: str, member: str) -> list[int] | None:
     """Locate direct member calls, ignoring trivia and grouping parentheses."""
     openings: list[int] = []
     previous_tokens: list[str] = []
@@ -432,8 +425,7 @@ def _configuration_executables(scope: str) -> list[str]:
         if returned_object is None:
             continue
         values.extend(
-            literal.group(2)
-            for literal in _EXECUTABLE_LITERAL_RE.finditer(returned_object)
+            literal.group(2) for literal in _EXECUTABLE_LITERAL_RE.finditer(returned_object)
         )
     return values
 
@@ -653,9 +645,7 @@ def _return_object_forwards_binding(statement: str, binding: str) -> bool:
     return resolved_properties == 1
 
 
-def _object_forwards_unique_binding(
-    object_text: str, property_name: str, binding: str
-) -> bool:
+def _object_forwards_unique_binding(object_text: str, property_name: str, binding: str) -> bool:
     if not object_text.startswith("{"):
         return False
     properties = _top_level_object_properties(object_text, 0)
@@ -745,15 +735,18 @@ def _proves_published_058_prepare_execution(
     if strict_declaration is None:
         return False
     strict_expression = strict_declaration.group("expression").strip()
-    if re.fullmatch(
-        rf"{re.escape(windows_binding)}\s*&&\s*"
-        r"shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*enabled\s*"
-        r"&&\s*shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*"
-        r"command\s*===\s*(['\"])windows-native\1\s*&&\s*!\s*"
-        r"shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*"
-        r"networkAccess",
-        strict_expression,
-    ) is None:
+    if (
+        re.fullmatch(
+            rf"{re.escape(windows_binding)}\s*&&\s*"
+            r"shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*enabled\s*"
+            r"&&\s*shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*"
+            r"command\s*===\s*(['\"])windows-native\1\s*&&\s*!\s*"
+            r"shellExecutionConfig\s*\.\s*sandboxConfig\s*\?\s*\.\s*"
+            r"networkAccess",
+            strict_expression,
+        )
+        is None
+    ):
         return False
     strict_binding = strict_declaration.group("strict")
     following = _strip_leading_trivia(following[strict_declaration.end() :])
@@ -829,9 +822,7 @@ def _proves_published_058_prepare_execution(
         return False
     if _strip_leading_trivia(arguments[len(command_object) :]):
         return False
-    return _object_forwards_unique_binding(
-        command_object, "command", "resolvedExecutable"
-    )
+    return _object_forwards_unique_binding(command_object, "command", "resolvedExecutable")
 
 
 def _proves_published_058_interception_chain(text: str) -> bool:
@@ -949,8 +940,7 @@ class GeminiResolver:
             raise GeminiResolveError(f"unexpected host Node.js version output: {raw!r}")
         if int(match.group(1)) < _MIN_HOST_NODE_MAJOR:
             raise GeminiResolveError(
-                f"Gemini resolver requires Node.js >={_MIN_HOST_NODE_MAJOR}, "
-                f"host reported {raw!r}"
+                f"Gemini resolver requires Node.js >={_MIN_HOST_NODE_MAJOR}, host reported {raw!r}"
             )
 
     def _install_package(self, prefix: Path, version: str) -> None:
@@ -1017,15 +1007,27 @@ class GeminiResolver:
         if not isinstance(bin_gemini, str) or not bin_gemini:
             raise GeminiResolveError("Gemini package metadata missing bin.gemini entrypoint")
 
-        package_root = package_json_path.parent.resolve()
-        entrypoint = (package_root / bin_gemini).resolve()
-        if entrypoint != package_root and not entrypoint.is_relative_to(package_root):
+        package_root = package_json_path.parent.absolute()
+        relative_entrypoint = Path(bin_gemini)
+        if (
+            relative_entrypoint.is_absolute()
+            or ".." in relative_entrypoint.parts
+            or not relative_entrypoint.parts
+        ):
             raise GeminiResolveError(
                 f"Gemini bin.gemini entrypoint {bin_gemini!r} escapes package root"
             )
-        if not entrypoint.is_file():
+        entrypoint = package_root / relative_entrypoint
+        if entrypoint.is_symlink() or not entrypoint.is_file():
             raise GeminiResolveError(f"Gemini entrypoint not found: {entrypoint}")
         return entrypoint
+
+    @staticmethod
+    def _fingerprint_package_tree(package_root: Path) -> str:
+        try:
+            return fingerprint_support_tree(package_root)
+        except AgentSupportIntegrityError as exc:
+            raise GeminiResolveError(f"Gemini support tree is invalid: {exc}") from exc
 
     def _validate_shell_contract(self, package_root: Path) -> None:
         for js_path in sorted(package_root.rglob("*.js")):
@@ -1038,13 +1040,10 @@ class GeminiResolver:
             if _proves_shell_interception_chain(text):
                 return
         raise GeminiResolveError(
-            "Gemini package bundle does not prove PATH-resolved bash shell "
-            "interception contract"
+            "Gemini package bundle does not prove PATH-resolved bash shell interception contract"
         )
 
-    def _validate_binary_contract(
-        self, entrypoint: Path, package_root: Path, version: str
-    ) -> None:
+    def _validate_binary_contract(self, entrypoint: Path, package_root: Path, version: str) -> None:
         env = self._node_probe_environment()
 
         version_result = run_process(
@@ -1060,8 +1059,7 @@ class GeminiResolver:
         reported_version = reported[0] if reported else ""
         if reported_version != version:
             raise GeminiResolveError(
-                f"Gemini CLI binary reported version {reported_version!r} "
-                f"but requested {version!r}"
+                f"Gemini CLI binary reported version {reported_version!r} but requested {version!r}"
             )
 
         help_result = run_process(
@@ -1096,16 +1094,35 @@ class GeminiResolver:
         package_root = prefix / "node_modules" / "@google" / "gemini-cli"
         package_json_path = package_root / "package.json"
 
+        if package_root.is_symlink():
+            raise GeminiResolveError("Gemini support tree package root is a symlink")
         if not package_json_path.is_file():
             self._install_package(prefix, version)
 
+        package_root = package_root.absolute()
+        tree_before = self._fingerprint_package_tree(package_root)
         entrypoint = self._read_package_entrypoint(package_json_path, version)
         digest_before = hashlib.sha256(entrypoint.read_bytes()).hexdigest()
 
-        self._validate_binary_contract(entrypoint, package_root.resolve(), version)
+        self._validate_binary_contract(entrypoint, package_root, version)
 
         digest_after = hashlib.sha256(entrypoint.read_bytes()).hexdigest()
         if digest_after != digest_before:
             raise GeminiResolveError("Gemini executable changed during contract validation")
+        tree_after = self._fingerprint_package_tree(package_root)
+        if tree_after != tree_before:
+            raise GeminiResolveError("Gemini support tree changed during contract validation")
 
-        return AgentBinary(name="gemini", version=version, path=entrypoint, sha256=digest_after)
+        return AgentBinary(
+            name="gemini",
+            version=version,
+            path=entrypoint,
+            sha256=digest_after,
+            support_trees=(
+                AgentSupportTree(
+                    root=package_root,
+                    sha256=tree_after,
+                    container_root="/opt/qualock/gemini-package",
+                ),
+            ),
+        )

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from qualock.agents.base import AgentAdapter, AgentBinary
+from qualock.agents.support_integrity import materialize_verified_supports
 from qualock.canary.models import CanarySpec
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
 from qualock.qualification.models import AttemptResult, Usage
@@ -90,12 +91,9 @@ class DockerQualificationBackend:
     ) -> AttemptResult:
         safe_canary = "".join(ch if ch.isalnum() else "-" for ch in canary.id)[:32]
         container_name = (
-            f"ub-{safe_canary}-{side.value[:1]}-{repetition}-"
-            f"{binary.version.replace('.', '-')}"
+            f"ub-{safe_canary}-{side.value[:1]}-{repetition}-{binary.version.replace('.', '-')}"
         )
-        frozen_tag = (
-            f"qualock-frozen-{hashlib.sha256(container_name.encode()).hexdigest()[:16]}"
-        )
+        frozen_tag = f"qualock-frozen-{hashlib.sha256(container_name.encode()).hexdigest()[:16]}"
         with self.agent_adapter.invocation(
             binary,
             model=self.model,
@@ -103,27 +101,24 @@ class DockerQualificationBackend:
             prompt=canary.task,
         ) as invocation:
             mounts: list[tuple[Path, str, str]] = [
-                (mount.host_path, mount.container_path, mount.mode)
-                for mount in invocation.mounts
+                (mount.host_path, mount.container_path, mount.mode) for mount in invocation.mounts
             ]
-            mounts.extend(
-                (support.path, support.container_path, "ro")
-                for support in binary.support_binaries
-            )
-            state = self.docker_runner.run_agent(
-                prepared=prepared,
-                container_name=container_name,
-                agent_binary=binary.path,
-                agent_argv=invocation.argv,
-                environment=dict(invocation.environment),
-                extra_mounts=mounts,
-                tmpfs_mounts=invocation.tmpfs_mounts,
-                bootstrap_copy=invocation.bootstrap_copy,
-                stdin_secret_env=invocation.stdin_secret_env,
-                agent_container_path=invocation.container_binary_path,
-                frozen_tag=frozen_tag,
-                timeout_seconds=canary.agent.timeout_seconds,
-            )
+            with materialize_verified_supports(binary) as materialized:
+                mounts.extend(materialized.mounts)
+                state = self.docker_runner.run_agent(
+                    prepared=prepared,
+                    container_name=container_name,
+                    agent_binary=materialized.agent_binary,
+                    agent_argv=invocation.argv,
+                    environment=dict(invocation.environment),
+                    extra_mounts=mounts,
+                    tmpfs_mounts=invocation.tmpfs_mounts,
+                    bootstrap_copy=invocation.bootstrap_copy,
+                    stdin_secret_env=invocation.stdin_secret_env,
+                    agent_container_path=invocation.container_binary_path,
+                    frozen_tag=frozen_tag,
+                    timeout_seconds=canary.agent.timeout_seconds,
+                )
         try:
             try:
                 evidence = self.agent_adapter.parse_evidence(state.stdout, state.stderr)

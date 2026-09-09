@@ -23,6 +23,7 @@ _HOME_DIR = "/opt/qualock/gemini-home"
 _SETTINGS_CONTAINER_PATH = "/opt/qualock/gemini-settings.json"
 _PROJECT_GEMINI_CONTAINER_PATH = "/workspace/.gemini"
 _WRAPPER_CONTAINER_PATH = "/opt/qualock/bin/bash"
+_PACKAGE_ENTRYPOINT = "/opt/qualock/gemini-package/bundle/gemini.js"
 _PATH_ENV = (
     "/opt/qualock/bin:/opt/qualock/node-runtime/bin:"
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -168,10 +169,25 @@ class GeminiAdapter:
 
             wrapper_file = temp_root / "bash"
             wrapper_file.write_text(_WRAPPER_SCRIPT, encoding="utf-8")
-            wrapper_file.chmod(wrapper_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            wrapper_file.chmod(
+                wrapper_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            )
 
             project_gemini_dir = temp_root / "project-gemini"
             project_gemini_dir.mkdir()
+
+            container_binary_path = _PACKAGE_ENTRYPOINT
+            if binary.support_trees:
+                if len(binary.support_trees) != 1:
+                    raise ValueError("Gemini requires exactly one runtime support tree")
+                tree = binary.support_trees[0]
+                try:
+                    relative_entrypoint = binary.path.absolute().relative_to(tree.root.absolute())
+                except ValueError as exc:
+                    raise ValueError(
+                        "Gemini entrypoint must be contained by its runtime support tree"
+                    ) from exc
+                container_binary_path = f"{tree.container_root}/{relative_entrypoint.as_posix()}"
 
             yield AgentInvocation(
                 argv=argv,
@@ -189,7 +205,7 @@ class GeminiAdapter:
                 ),
                 tmpfs_mounts=(_HOME_DIR,),
                 stdin_secret_env=self.automation_credential,
-                container_binary_path="/opt/qualock/gemini",
+                container_binary_path=container_binary_path,
             )
 
     def parse_evidence(self, stdout: str, stderr: str) -> AgentEvidence:
