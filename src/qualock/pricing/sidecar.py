@@ -77,7 +77,7 @@ _TRUST_KEYS = frozenset(
 )
 
 
-class _SidecarError(Exception):
+class PricingSidecarPayloadError(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
@@ -294,34 +294,44 @@ def _parse_body(loaded: LoadedReport, payload: dict[str, object]) -> PricingSide
     )
 
 
+def parse_pricing_sidecar_payload(loaded: LoadedReport, payload: object) -> PricingSidecar:
+    """Validate a decoded pricing sidecar body against ``loaded``.
+
+    Pure and no-I/O: performs no file read, clock, network, or catalog
+    resolution. ``loaded.qualification_dir`` is not a trust input; only
+    ``loaded.qualification_id`` and ``loaded.executions`` are consulted.
+    """
+    if not isinstance(payload, dict):
+        raise PricingSidecarPayloadError(_NOT_OBJECT)
+
+    schema_version = payload.get("schema_version")
+    if isinstance(schema_version, bool) or schema_version != 1:
+        raise PricingSidecarPayloadError(_UNSUPPORTED_SCHEMA)
+
+    qualification_id = payload.get("qualification_id")
+    if not isinstance(qualification_id, str) or qualification_id != loaded.qualification_id:
+        raise PricingSidecarPayloadError(_ID_MISMATCH)
+
+    try:
+        return _parse_body(loaded, payload)
+    except PricingSidecarPayloadError:
+        raise
+    except Exception:  # noqa: BLE001 - any unexpected defect collapses to one fixed reason
+        raise PricingSidecarPayloadError(_MALFORMED) from None
+
+
 def _load_sidecar(loaded: LoadedReport, pricing_path: Path) -> PricingSidecar:
     try:
         text = pricing_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        raise _SidecarError(_UNREADABLE) from None
+        raise PricingSidecarPayloadError(_UNREADABLE) from None
 
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        raise _SidecarError(_INVALID_JSON) from None
+        raise PricingSidecarPayloadError(_INVALID_JSON) from None
 
-    if not isinstance(payload, dict):
-        raise _SidecarError(_NOT_OBJECT)
-
-    schema_version = payload.get("schema_version")
-    if isinstance(schema_version, bool) or schema_version != 1:
-        raise _SidecarError(_UNSUPPORTED_SCHEMA)
-
-    qualification_id = payload.get("qualification_id")
-    if not isinstance(qualification_id, str) or qualification_id != loaded.qualification_id:
-        raise _SidecarError(_ID_MISMATCH)
-
-    try:
-        return _parse_body(loaded, payload)
-    except _SidecarError:
-        raise
-    except Exception:  # noqa: BLE001 - any unexpected defect collapses to one fixed reason
-        raise _SidecarError(_MALFORMED) from None
+    return parse_pricing_sidecar_payload(loaded, payload)
 
 
 def _snapshot(sidecar: PricingSidecar) -> tuple[object, ...]:
@@ -381,7 +391,7 @@ def scan_pricing(summary: HistorySummary) -> PricingHistory:
 
         try:
             records.append(_load_sidecar(loaded, pricing_path))
-        except _SidecarError as exc:
+        except PricingSidecarPayloadError as exc:
             failures.append(
                 PricingLoadFailure(loaded.qualification_id, loaded.qualification_dir, exc.reason)
             )
