@@ -72,7 +72,7 @@ jobs:
           agent = context.get("agent") or ""
           ready = (
               classification == "upgrade"
-              and agent in {{"codex", "claude"}}
+              and agent in {{"codex", "claude", "gemini"}}
               and Path(os.environ["QUALOCK_PROPOSED_LOCK"]).is_file()
               and not Path(os.environ["QUALOCK_REPORT"]).is_file()
           )
@@ -127,6 +127,23 @@ jobs:
             credential_available=true
           else
             unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+            credential_available=false
+          fi
+          qualock github qualify-pr \\
+            --context "$RUNNER_TEMP/pr-context.json" \\
+            --proposed-lock "$RUNNER_TEMP/proposed-baseline.lock" \\
+            --report-out "$RUNNER_TEMP/pr-report.json" \\
+            --credential-available "$credential_available"
+
+      - name: Qualify upgrade (gemini)
+        if: steps.plan.outputs.ready == 'true' && steps.plan.outputs.agent == 'gemini'
+        env:
+          GEMINI_API_KEY: ${{{{ secrets.QUALOCK_GEMINI_API_KEY }}}}
+        run: |
+          set +x
+          if [ -n "$GEMINI_API_KEY" ]; then
+            credential_available=true
+          else
             credential_available=false
           fi
           qualock github qualify-pr \\

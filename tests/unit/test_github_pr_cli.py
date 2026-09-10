@@ -115,6 +115,18 @@ def test_github_setup_prints_claude_secret_guidance_without_values(
     ) in result.stdout
 
 
+def test_github_setup_prints_gemini_secret_guidance_for_trusted_gemini_baselines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(cli.app, ["github", "setup"])
+    assert result.exit_code == 0
+    assert "QUALOCK_GEMINI_API_KEY" in result.stdout
+    assert "Gemini" in result.stdout
+    assert "trusted Gemini baseline" in result.stdout
+    assert "GOOGLE_API_KEY" not in result.stdout
+
+
 def test_github_setup_never_reads_or_leaks_claude_credential_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
