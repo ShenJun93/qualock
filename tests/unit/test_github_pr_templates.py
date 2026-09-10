@@ -644,6 +644,15 @@ def test_producer_gemini_secret_name_is_exact() -> None:
     assert "QUALOCK_GEMINI_API_KEY" in PRODUCER_WORKFLOW
 
 
+def test_producer_workflow_never_references_google_api_key() -> None:
+    """GOOGLE_API_KEY is a fallback name gemini_resolver.py also recognizes;
+
+    the workflow must only ever set GEMINI_API_KEY so a leaked/ambient
+    GOOGLE_API_KEY can't be mistaken for the intended runtime variable.
+    """
+    assert "GOOGLE_API_KEY" not in PRODUCER_WORKFLOW
+
+
 def test_producer_gemini_runtime_variable_absent_from_codex_and_claude_steps() -> None:
     """Prove the runtime var, not just the secret name, is isolated to Gemini.
 
@@ -727,4 +736,3 @@ def test_producer_credential_step_never_prints_sentinel_runtime_secret(
     assert sentinel not in result.stdout
     assert sentinel not in result.stderr
     assert sentinel not in REPORTER_WORKFLOW
-    assert "GOOGLE_API_KEY" not in PRODUCER_WORKFLOW
