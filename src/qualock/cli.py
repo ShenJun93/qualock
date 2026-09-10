@@ -874,6 +874,14 @@ def github_setup_command() -> None:
         soft_wrap=True,
     )
     console.print(
+        "\nIf your trusted baseline agent is Gemini CLI instead, configure a "
+        "repository secret named QUALOCK_GEMINI_API_KEY containing a Gemini API "
+        "key. This secret is used only to qualify a trusted Gemini baseline "
+        "upgrade PR.",
+        markup=False,
+        soft_wrap=True,
+    )
+    console.print(
         "\nQualification results are published to the `qualock/pr` status check. "
         "You may optionally configure branch protection to require it before merging.",
         markup=False,

@@ -17,6 +17,7 @@ MODEL_SECRET_NAMES = (
     "QUALOCK_ANTHROPIC_AUTH_TOKEN",
     "QUALOCK_ANTHROPIC_API_KEY",
     "QUALOCK_CLAUDE_CODE_OAUTH_TOKEN",
+    "QUALOCK_GEMINI_API_KEY",
 )
 
 FORBIDDEN_SUBSTRINGS = (
@@ -330,6 +331,7 @@ def test_producer_plan_step_emits_exactly_bounded_output_keys() -> None:
     [
         ("upgrade", "codex", True, False, True),
         ("upgrade", "claude", True, False, True),
+        ("upgrade", "gemini", True, False, True),
         ("not_applicable", "codex", True, False, False),
         ("invalid_scope", "codex", True, False, False),
         ("upgrade", "unsupported-agent", True, False, False),
@@ -387,6 +389,15 @@ def test_producer_claude_qualify_condition_requires_plan_ready_and_claude() -> N
     )
 
 
+def test_producer_gemini_qualify_condition_requires_plan_ready_and_gemini() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    step = _named_step(doc, "Qualify upgrade (gemini)")
+    assert (
+        step["if"] == "steps.plan.outputs.ready == 'true' && steps.plan.outputs.agent == 'gemini'"
+    )
+
+
 def test_producer_codex_and_claude_qualification_conditions_are_mutually_exclusive() -> None:
     doc = parsed(PRODUCER_WORKFLOW)
     assert isinstance(doc, dict)
@@ -399,13 +410,28 @@ def test_producer_codex_and_claude_qualification_conditions_are_mutually_exclusi
     assert "agent == 'codex'" not in claude_if
 
 
+def test_producer_codex_claude_and_gemini_qualification_conditions_are_mutually_exclusive() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    codex_if = _named_step(doc, "Qualify upgrade (codex)")["if"]
+    claude_if = _named_step(doc, "Qualify upgrade (claude)")["if"]
+    gemini_if = _named_step(doc, "Qualify upgrade (gemini)")["if"]
+    assert len({codex_if, claude_if, gemini_if}) == 3
+    assert "agent == 'gemini'" in gemini_if
+    assert "agent == 'gemini'" not in codex_if
+    assert "agent == 'gemini'" not in claude_if
+    assert "agent == 'codex'" not in gemini_if
+    assert "agent == 'claude'" not in gemini_if
+
+
 def test_producer_unsupported_or_null_agent_enters_neither_secret_bearing_path() -> None:
     doc = parsed(PRODUCER_WORKFLOW)
     assert isinstance(doc, dict)
     credential_if = next(step for step in _steps(doc) if step.get("id") == "credential")["if"]
     codex_if = _named_step(doc, "Qualify upgrade (codex)")["if"]
     claude_if = _named_step(doc, "Qualify upgrade (claude)")["if"]
-    for condition in (credential_if, codex_if, claude_if):
+    gemini_if = _named_step(doc, "Qualify upgrade (gemini)")["if"]
+    for condition in (credential_if, codex_if, claude_if, gemini_if):
         assert "steps.plan.outputs.ready == 'true'" in condition
         assert "steps.plan.outputs.agent ==" in condition
 
@@ -428,6 +454,7 @@ def _step_secret_bearing_text(step: dict[str, object]) -> str:
         ("QUALOCK_ANTHROPIC_AUTH_TOKEN", "Qualify upgrade (claude)"),
         ("QUALOCK_ANTHROPIC_API_KEY", "Qualify upgrade (claude)"),
         ("QUALOCK_CLAUDE_CODE_OAUTH_TOKEN", "Qualify upgrade (claude)"),
+        ("QUALOCK_GEMINI_API_KEY", "Qualify upgrade (gemini)"),
     ],
 )
 def test_producer_model_secret_is_isolated_to_a_single_step(
@@ -552,3 +579,65 @@ def test_producer_claude_step_never_writes_secret_to_github_output() -> None:
     assert isinstance(run_script, str)
     assert "GITHUB_OUTPUT" not in run_script
     assert "set +x" in run_script
+
+
+def _gemini_step(doc: dict[str, object]) -> dict[str, object]:
+    return _named_step(doc, "Qualify upgrade (gemini)")
+
+
+def test_producer_gemini_step_env_maps_secret_only_to_runtime_variable() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    step = _gemini_step(doc)
+    env = step["env"]
+    assert env == {"GEMINI_API_KEY": "${{ secrets.QUALOCK_GEMINI_API_KEY }}"}
+
+
+def test_producer_gemini_step_never_writes_secret_to_github_output_or_file() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    run_script = _gemini_step(doc)["run"]
+    assert isinstance(run_script, str)
+    assert "GITHUB_OUTPUT" not in run_script
+    assert "set +x" in run_script
+    for forbidden in (">", "install -d", "base64", "chmod", "cat "):
+        assert forbidden not in run_script
+
+
+def test_producer_gemini_step_invokes_qualify_pr_with_credential_available_flag() -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    run_script = _gemini_step(doc)["run"]
+    assert isinstance(run_script, str)
+    assert "qualock github qualify-pr" in run_script
+    assert "--credential-available" in run_script
+
+
+@pytest.mark.parametrize(
+    ("gemini_api_key", "expected_available"),
+    [
+        ("a-gemini-key", "true"),
+        ("", "false"),
+    ],
+)
+def test_producer_gemini_credential_available_derives_from_nonempty_runtime_key(
+    usable_bash: str, gemini_api_key: str, expected_available: str
+) -> None:
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    run_script = _gemini_step(doc)["run"]
+    assert isinstance(run_script, str)
+    script = run_script[: run_script.index("qualock github qualify-pr")]
+    probe = script + 'printf \'AVAILABLE=%s\\n\' "$credential_available"\n'
+    env = dict(os.environ)
+    env["GEMINI_API_KEY"] = gemini_api_key
+    result = subprocess.run(
+        [usable_bash, "-c", probe], env=env, capture_output=True, text=True, check=True
+    )
+    outputs = dict(line.split("=", 1) for line in result.stdout.splitlines())
+    assert outputs["AVAILABLE"] == expected_available
+
+
+def test_producer_gemini_secret_name_is_exact() -> None:
+    assert "QUALOCK_GEMINI_API_KEY" in PRODUCER_WORKFLOW
+    assert "GOOGLE_API_KEY" not in PRODUCER_WORKFLOW

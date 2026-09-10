@@ -130,6 +130,16 @@ def test_setup_creates_exactly_two_workflows(tmp_path: Path) -> None:
     assert (tmp_path / ".github/workflows/qualock-pr-report.yml").read_text() == REPORTER_WORKFLOW
 
 
+def test_setup_installed_producer_contains_gemini_secret_reference_and_reporter_does_not(
+    tmp_path: Path,
+) -> None:
+    install_github_workflows(tmp_path)
+    producer_text = (tmp_path / ".github/workflows/qualock-pr.yml").read_text()
+    reporter_text = (tmp_path / ".github/workflows/qualock-pr-report.yml").read_text()
+    assert "QUALOCK_GEMINI_API_KEY" in producer_text
+    assert "QUALOCK_GEMINI_API_KEY" not in reporter_text
+
+
 def test_setup_returns_outcome_paths(tmp_path: Path) -> None:
     outcome = install_github_workflows(tmp_path)
     assert isinstance(outcome, GitHubSetupOutcome)
