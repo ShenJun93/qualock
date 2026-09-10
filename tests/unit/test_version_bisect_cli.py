@@ -341,3 +341,29 @@ def test_bisect_cli_gemini_upper_not_in_catalog_rejected_end_to_end(
 
     assert result.exit_code == 3
     assert "gemini@0.61.0 is not a published stable release" in result.stdout
+
+
+def test_bisect_gemini_no_bad_found_prints_summary_and_exits_zero(
+    tmp_path: Path, monkeypatch
+) -> None:
+    steps = (
+        BisectStep(version="0.59.0", qualification_id="q1", verdict=Verdict.PASS),
+        BisectStep(version="0.60.0", qualification_id="q2", verdict=Verdict.PASS),
+    )
+    outcome = make_outcome(
+        BisectStop.NO_BAD_FOUND,
+        steps=steps,
+        last_known_good="0.60.0",
+        baseline_version="0.58.0",
+        upper_version="0.60.0",
+        agent_name="gemini",
+    )
+    result = invoke_outcome(tmp_path, monkeypatch, outcome, "gemini@0.60.0")
+
+    assert "Baseline: Gemini CLI 0.58.0" in result.stdout
+    assert "Searching through: 0.60.0" in result.stdout
+    assert "0.59.0  PASS" in result.stdout
+    assert "0.60.0  PASS" in result.stdout
+    assert "No confirmed bad release found through Gemini CLI 0.60.0." in result.stdout
+    assert "Last known good: Gemini CLI 0.60.0" in result.stdout
+    assert result.exit_code == 0
