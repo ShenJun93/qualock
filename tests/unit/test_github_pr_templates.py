@@ -334,6 +334,8 @@ def test_producer_plan_step_emits_exactly_bounded_output_keys() -> None:
         ("upgrade", "gemini", True, False, True),
         ("not_applicable", "codex", True, False, False),
         ("invalid_scope", "codex", True, False, False),
+        ("not_applicable", "gemini", True, False, False),
+        ("invalid_scope", "gemini", True, False, False),
         ("upgrade", "unsupported-agent", True, False, False),
         ("upgrade", None, True, False, False),
         ("upgrade", "codex", False, False, False),
@@ -640,4 +642,64 @@ def test_producer_gemini_credential_available_derives_from_nonempty_runtime_key(
 
 def test_producer_gemini_secret_name_is_exact() -> None:
     assert "QUALOCK_GEMINI_API_KEY" in PRODUCER_WORKFLOW
+
+
+def test_reporter_workflow_contains_no_runtime_credential_variable_names() -> None:
+    for runtime_name in (
+        "GEMINI_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    ):
+        assert runtime_name not in REPORTER_WORKFLOW
+
+
+def _run_script_capture(
+    run_script: str, *, bash: str, env_overrides: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    env.update(env_overrides)
+    return subprocess.run(
+        [bash, "-c", run_script], env=env, capture_output=True, text=True, check=False
+    )
+
+
+@pytest.mark.parametrize(
+    ("step_name", "sentinel_env_name"),
+    [
+        ("Qualify upgrade (gemini)", "GEMINI_API_KEY"),
+        ("Qualify upgrade (claude)", "ANTHROPIC_AUTH_TOKEN"),
+        ("Materialize codex credential", "QUALOCK_CODEX_AUTH_B64"),
+    ],
+)
+def test_producer_credential_step_never_prints_sentinel_runtime_secret(
+    usable_bash: str, tmp_path, step_name: str, sentinel_env_name: str
+) -> None:
+    """Guard against a printf/echo leak of the raw secret value in step output.
+
+    Runs each step's real `run:` script with a unique sentinel value bound to
+    the secret's runtime environment variable, capturing combined stdout and
+    stderr the way a workflow log would. A future accidental `echo`/`printf`
+    of the secret (in this step, or any other producer step, since the
+    sentinel is also checked against the full template) would show up here.
+    """
+    sentinel = "SENTINEL-LEAK-PROBE-3f9a7c1e"
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    run_script = _named_step(doc, step_name)["run"]
+    assert isinstance(run_script, str)
+
+    github_output = tmp_path / "github-output"
+    github_output.write_text("", encoding="utf-8")
+    env_overrides = {
+        sentinel_env_name: sentinel,
+        "HOME": str(tmp_path),
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_OUTPUT": str(github_output),
+    }
+    result = _run_script_capture(run_script, bash=usable_bash, env_overrides=env_overrides)
+
+    assert sentinel not in result.stdout
+    assert sentinel not in result.stderr
+    assert sentinel not in REPORTER_WORKFLOW
     assert "GOOGLE_API_KEY" not in PRODUCER_WORKFLOW
