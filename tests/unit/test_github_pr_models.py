@@ -145,7 +145,7 @@ def test_reason_code_includes_unsupported_agent() -> None:
     assert PrReasonCode.UNSUPPORTED_AGENT.value == "unsupported_agent"
 
 
-@pytest.mark.parametrize("agent", ["codex", "claude", None])
+@pytest.mark.parametrize("agent", ["codex", "claude", "gemini", None])
 def test_context_schema_v2_accepts_bounded_agent_values(agent: str | None) -> None:
     context = valid_context(agent=agent)
     assert context.schema_version == 2
@@ -155,7 +155,7 @@ def test_context_schema_v2_accepts_bounded_agent_values(agent: str | None) -> No
     assert reloaded.schema_version == 2
 
 
-@pytest.mark.parametrize("agent", ["codex", "claude", None])
+@pytest.mark.parametrize("agent", ["codex", "claude", "gemini", None])
 def test_report_schema_v2_accepts_bounded_agent_values(agent: str | None) -> None:
     report = valid_report(agent=agent)
     assert report.schema_version == 2
