@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from qualock.agents.orchestration import orchestration_capabilities
 from qualock.agents.releases import StableReleaseCatalog, default_stable_release_catalog
 from qualock.baseline.io import assert_suite_fresh, read_baseline_lock
 from qualock.commands import CommandError, execute_check, parse_agent_spec
@@ -48,17 +49,15 @@ def bisect_preflight(root: Path) -> BisectPreflight:
     config, canaries = load_project(root)
     lock = read_baseline_lock(project_dir(root) / "baseline.lock")
     assert_suite_fresh(lock, suite_fingerprint(canaries), config_fingerprint(config))
-    if lock.agent.name != config.agent.name:
+    agent_name = lock.agent.name
+    if config.agent.name != agent_name:
         raise CommandError(
             f"config agent {config.agent.name} does not match baseline agent {lock.agent.name}"
         )
-    agent_name: BisectAgent
-    if lock.agent.name == "codex":
-        agent_name = "codex"
-    elif lock.agent.name == "claude":
-        agent_name = "claude"
-    else:
-        raise CommandError(f"version bisect does not support agent {lock.agent.name!r}")
+    if agent_name == "antigravity":
+        raise CommandError(f"version bisect does not support agent {agent_name!r}")
+    if not orchestration_capabilities(agent_name).version_bisect:
+        raise CommandError(f"version bisect does not support agent {agent_name!r}")
     _version_key(lock.agent.version)
     return BisectPreflight(agent_name=agent_name, baseline_version=lock.agent.version)
 

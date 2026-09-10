@@ -4,7 +4,7 @@ from typing import Literal
 
 from qualock.qualification.models import Verdict
 
-BisectAgent = Literal["codex", "claude"]
+BisectAgent = Literal["codex", "claude", "gemini"]
 
 
 class BisectStop(str, Enum):
