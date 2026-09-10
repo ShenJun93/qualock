@@ -4,7 +4,7 @@
 
 **Lock in known-good coding-agent behavior before you upgrade.**
 
-Qualock is a local-first release-qualification CLI for coding-agent upgrades. It pins a known-good Codex version, reruns repository-specific behavioral canaries against both the baseline and a candidate release in the same qualification window, then emits a CI-friendly `PASS`, `WARN`, `BLOCK`, or `INCOMPLETE` verdict.
+Qualock is a local-first release-qualification CLI for coding-agent upgrades. It pins a known-good coding-agent CLI version, reruns repository-specific behavioral canaries against both the baseline and a candidate version in the same qualification window, then emits a CI-friendly `PASS`, `WARN`, `BLOCK`, or `INCOMPLETE` verdict.
 
 > Your unit tests test your code. Qualock tests whether your AI developer still behaves like the version you trust.
 
@@ -15,9 +15,9 @@ Normal CI validates the code currently in your repository. It does not tell you 
 Qualock treats the coding agent as a behavioral dependency:
 
 ```text
-known-good Codex
+known-good agent CLI
         vs
-candidate Codex release
+candidate agent release
         ↓
 same historical repo SHA
 same prepared container image
@@ -44,7 +44,7 @@ Candidate total runtime was -16.9% and total input tokens -27.2% versus baseline
 
 ## v0.1 scope
 
-Qualock v0.1 intentionally supports one qualification axis: **Codex CLI version A vs version B**. It does not attempt to be a general agent leaderboard, prompt optimizer, hosted benchmark service, or multi-agent arena.
+Qualock v0.1 intentionally focuses on one qualification axis: **coding-agent CLI version A vs version B**. Local `baseline`/`check` supports Codex, Claude Code, Gemini CLI, and the separately sandboxed Antigravity Linux host path; release-monitor, scheduler, bisect, and GitHub-PR parity still vary by agent as documented below. Qualock does not attempt to be a general agent leaderboard, prompt optimizer, hosted benchmark service, or multi-agent arena.
 
 Core guarantees:
 
@@ -250,6 +250,31 @@ qualock cost
 
 `qualock cost` is read-only and offline. It reports an API-equivalent public standard list-rate reference in USD from the exact provider/model/rate snapshots preserved with qualification artifacts. It is not your actual bill, an invoice, a subscription or seat allocation, or a qualification budget, and it never affects PASS/WARN/BLOCK/INCOMPLETE behavior. Older runs without `pricing.json` remain visible as unpinned history and are never retroactively priced.
 
+## Gemini CLI local qualification
+
+Gemini CLI is supported for local `baseline`, `check`, and `doctor` through the same Docker qualification backend used by the other containerized agents. Batch #43 validates stable Gemini CLI `0.58.0`; later stable versions are accepted only when the exact installed package passes QuaLock's resolver/runtime contract. Configure Gemini explicitly in `.qualock/config.yaml`:
+
+```yaml
+agent:
+  name: gemini
+model:
+  id: gemini-3.5-flash
+  reasoning_effort: provider-default
+```
+
+Use an explicit Gemini-supported model identifier. Gemini requires `reasoning_effort: provider-default`; QuaLock does not translate its `low|medium|high|xhigh` values into undocumented Gemini thinking controls. For non-interactive automation, Gemini uses only `GEMINI_API_KEY`; browser login state, `GOOGLE_API_KEY`, ADC/service-account credentials, user `~/.gemini`, and project `.gemini/.env` are not automation inputs. `qualock doctor` checks that the key is present without making a provider request.
+
+```bash
+export GEMINI_API_KEY=...
+qualock doctor
+qualock baseline gemini@0.58.0
+qualock check gemini@<candidate-version>
+```
+
+QuaLock resolves the exact npm package, fingerprints both the `bin.gemini` entrypoint and the complete published runtime support tree, and runs it with a digest-pinned Node 22 Bookworm overlay. User Gemini state is redirected to an ephemeral private home, project `.gemini` is masked during the agent phase, repository `GEMINI.md` context loading is disabled, and the API key is transported through stdin rather than Docker create metadata. The Gemini parent process may use network access for the provider API, but model-invoked shell children run through QuaLock's Bubblewrap wrapper with a fresh user/network namespace and no unsandboxed fallback.
+
+`qualock cost` remains an offline, API-equivalent reference estimate only. Gemini pricing can be unavailable when runtime model evidence is missing, conflicting, or has no pinned rate card; pricing never changes `PASS`/`WARN`/`BLOCK`/`INCOMPLETE`. Gemini parity for `qualock monitor`, native scheduling, version bisect, and GitHub pull-request qualification is intentionally deferred to Batch #44.
+
 ## Antigravity on Linux (local binary pin)
 
 Codex, Claude Code, and Gemini CLI qualify inside Docker. Antigravity CLI cannot: its
@@ -285,9 +310,10 @@ unavailable for Antigravity; the GitHub PR workflow supports Codex and Claude
 Code trusted baselines but remains unsupported for Antigravity.
 
 `qualock doctor` reads the project's `.qualock/config.yaml` and checks prerequisites for
-whichever agent the project is configured for. For a project configured for `codex` or
-`claude` it checks Docker, unchanged. For a project configured for `antigravity` it checks
-native Linux, `bwrap` on `PATH`, and that an Antigravity binary resolves under the same
+whichever agent the project is configured for. For `codex` or `claude` it checks Docker,
+unchanged. For `gemini` it checks Git, npm, Docker, canaries, and presence of a non-empty
+`GEMINI_API_KEY` without making a provider request. For `antigravity` it checks native
+Linux, `bwrap` on `PATH`, and that an Antigravity binary resolves under the same
 `QUALOCK_ANTIGRAVITY_BIN`/`PATH` precedence used by `baseline`/`check` instead of Docker —
 it never runs `agy`, so it does not probe `--version`/`--help` or touch any authentication
 state.
@@ -373,8 +399,9 @@ qualock github setup
 setup instructions. It does not push, create a repository secret, or change
 any repository setting. The workflow selects Codex or Claude based on the
 agent already pinned in your project's trusted `.qualock/baseline.lock`;
-Antigravity remains unsupported for GitHub PR qualification, so a repository
-whose trusted baseline is Antigravity cannot use this feature. Adoption is
+Gemini CLI and Antigravity remain unsupported for GitHub PR qualification in this
+batch, so a repository whose trusted baseline is either agent cannot use this feature.
+Adoption is
 five steps, in order:
 
 1. run `qualock github setup` locally;
@@ -618,7 +645,7 @@ The grader patch is resolved relative to the canary YAML. During the agent phase
 
 ## Behavior lock
 
-`qualock baseline` writes `.qualock/baseline.lock`. The lock stores the known-good exact Codex version and binary SHA-256, model/config fingerprint, suite fingerprint, and historical stability counts.
+`qualock baseline` writes `.qualock/baseline.lock`. The lock stores the known-good exact agent version and binary SHA-256, model/config fingerprint, suite fingerprint, and historical stability counts. Gemini locks additionally pin the validated runtime-support fingerprint for the published package tree; existing non-Gemini locks remain backward-compatible without that field.
 
 The stored historical counts are **not** used as the control for future candidates. Every `check` reruns the pinned baseline and candidate in the same qualification window.
 
