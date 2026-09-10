@@ -27,14 +27,23 @@ def config_fingerprint(config: QualockConfig) -> str:
     return sha256_canonical(payload)
 
 
+def _canary_fingerprint_payload(canary: CanarySpec) -> dict[str, object]:
+    item = canary.model_dump(mode="json")
+    grader = dict(item["grader"])
+    patch = canary.grader.patch
+    grader.pop("patch", None)
+    grader["patch_sha256"] = hashlib.sha256(patch.read_bytes()).hexdigest()
+    item["grader"] = grader
+    return item
+
+
+def canary_fingerprint(canary: CanarySpec) -> str:
+    return sha256_canonical(_canary_fingerprint_payload(canary))
+
+
 def suite_fingerprint(canaries: Sequence[CanarySpec]) -> str:
-    payload: list[dict[str, object]] = []
-    for canary in sorted(canaries, key=lambda item: item.id):
-        item = canary.model_dump(mode="json")
-        grader = dict(item["grader"])
-        patch = canary.grader.patch
-        grader.pop("patch", None)
-        grader["patch_sha256"] = hashlib.sha256(patch.read_bytes()).hexdigest()
-        item["grader"] = grader
-        payload.append(item)
+    payload = [
+        _canary_fingerprint_payload(canary)
+        for canary in sorted(canaries, key=lambda item: item.id)
+    ]
     return sha256_canonical(payload)

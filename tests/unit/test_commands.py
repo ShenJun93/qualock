@@ -1,3 +1,4 @@
+import hashlib
 import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -28,6 +29,7 @@ from qualock.commands import (
     parse_agent_spec,
 )
 from qualock.config.io import ConfigError, write_default_config
+from qualock.evidence.provenance import EvidenceProvenanceError, read_evidence_provenance
 from qualock.history.models import HistoryAnalysis, HistorySummary, SuiteEstimate
 from qualock.pricing.models import CostAnalysis, PricingHistory, SuiteCostEstimate
 from qualock.project import load_project
@@ -59,7 +61,7 @@ class FakeResolver:
             self.agent_name,
             exact,
             Path(f"/fake/{self.agent_name}/{exact}/agent"),
-            f"sha-{exact}",
+            hashlib.sha256(f"{self.agent_name}-{exact}".encode()).hexdigest(),
             support_trees=support_trees,
         )
 
@@ -72,7 +74,8 @@ class FakeBackend:
 
     def prepare(self, canary, qualification_id: str) -> PreparedTarget:
         self.prepared.append(canary.id)
-        return PreparedTarget(reference="prepared", digest=f"sha256:{canary.id}")
+        digest = hashlib.sha256(f"{qualification_id}-{canary.id}".encode()).hexdigest()
+        return PreparedTarget(reference="prepared", digest=f"sha256:{digest}")
 
     def run_attempt(self, *, canary, prepared, binary, side: Side, repetition: int) -> AttemptResult:
         self.calls.append((canary.id, side.value, repetition))
@@ -807,7 +810,92 @@ def test_check_pricing_writer_failure_is_advisory(
         "report.md",
         "report.json",
         "qualification.json",
+        "evidence-provenance.json",
     }
+
+
+def test_check_writes_evidence_provenance_from_already_resolved_binaries(
+    tmp_path: Path,
+) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-provenance",
+        created_at="2026-09-09T00:00:00Z",
+    )
+
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-provenance",
+    )
+
+    assert resolver.calls == ["0.150.0", "0.150.0", "0.151.0"]
+    provenance_path = (
+        tmp_path / ".qualock/results/check-provenance/evidence-provenance.json"
+    )
+    assert provenance_path.is_file()
+    provenance = read_evidence_provenance(provenance_path)
+    assert provenance.qualification_id == result.qualification_id
+    assert provenance.baseline_identity.version == "0.150.0"
+    assert provenance.candidate_identity.version == "0.151.0"
+    assert provenance.baseline_identity.binary_sha256 == hashlib.sha256(
+        b"codex-0.150.0"
+    ).hexdigest()
+    assert provenance.candidate_identity.binary_sha256 == hashlib.sha256(
+        b"codex-0.151.0"
+    ).hexdigest()
+
+
+def test_check_provenance_failure_preserves_report_and_skips_pricing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-provenance-failure",
+        created_at="2026-09-09T00:00:00Z",
+    )
+
+    def fail_build(**_kwargs: object) -> None:
+        raise EvidenceProvenanceError("evidence provenance artifact already exists")
+
+    pricing_calls: list[object] = []
+    monkeypatch.setattr(commands_module, "build_evidence_provenance", fail_build)
+    monkeypatch.setattr(
+        commands_module,
+        "write_pricing_sidecar",
+        lambda *args, **kwargs: pricing_calls.append(args),
+    )
+
+    with pytest.raises(CommandError):
+        execute_check(
+            tmp_path,
+            "codex@0.151.0",
+            resolver=resolver,
+            backend=backend,
+            qualification_id="check-provenance-failure",
+        )
+
+    artifact_root = tmp_path / ".qualock/results/check-provenance-failure"
+    assert {path.name for path in artifact_root.iterdir()} == {
+        "report.md",
+        "report.json",
+        "qualification.json",
+    }
+    assert pricing_calls == []
 
 
 def test_unknown_model_check_writes_unavailable_sidecar(tmp_path: Path) -> None:
