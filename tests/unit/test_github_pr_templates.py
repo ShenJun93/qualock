@@ -650,11 +650,12 @@ def test_producer_gemini_runtime_variable_absent_from_codex_and_claude_steps() -
     ``test_producer_model_secret_is_isolated_to_a_single_step`` already proves
     the secret name ``QUALOCK_GEMINI_API_KEY`` appears nowhere outside the
     Gemini step. That leaves the runtime variable name ``GEMINI_API_KEY``
-    unchecked against the Codex and Claude step bodies: a future edit could
-    reference (or echo, even while unset) ``$GEMINI_API_KEY`` inside those
-    steps without tripping the secret-name check. This is a static substring
-    check, so it catches any textual reference regardless of whether the
-    variable would be set at runtime.
+    unchecked against the Codex and Claude step bodies (including the Codex
+    cleanup step, which also runs unconditionally on every producer run): a
+    future edit could reference (or echo, even while unset)
+    ``$GEMINI_API_KEY`` inside those steps without tripping the secret-name
+    check. This is a static substring check, so it catches any textual
+    reference regardless of whether the variable would be set at runtime.
     """
     doc = parsed(PRODUCER_WORKFLOW)
     assert isinstance(doc, dict)
@@ -662,6 +663,7 @@ def test_producer_gemini_runtime_variable_absent_from_codex_and_claude_steps() -
         "Materialize codex credential",
         "Qualify upgrade (codex)",
         "Qualify upgrade (claude)",
+        "Clean up codex credential",
     ):
         step = _named_step(doc, step_name)
         assert "GEMINI_API_KEY" not in _step_secret_bearing_text(step)
