@@ -800,6 +800,102 @@ def test_latest_version_rejects_bad_registry_result(
         GeminiResolver(tmp_path / "cache").latest_version()
 
 
+@pytest.mark.parametrize(
+    "version",
+    [
+        "0.59.0-preview.1",
+        "0.59.0+build",
+        "0.59.0-nightly.20260101",
+        "0.59",
+        "0.59.0.1",
+        "not-a-version",
+    ],
+)
+def test_explicit_non_stable_or_malformed_version_is_rejected_before_host_probes(
+    tmp_path: Path, version: str
+) -> None:
+    # npm/node executables intentionally do not exist: any invocation of them
+    # would raise before GeminiResolveError could be raised by version
+    # validation, so this proves rejection happens before host probes.
+    with pytest.raises(GeminiResolveError, match="stable"):
+        GeminiResolver(
+            tmp_path / "cache",
+            npm_executable=str(tmp_path / "does-not-exist-npm"),
+            node_executable=str(tmp_path / "does-not-exist-node"),
+        ).resolve(version)
+
+
+def test_stable_versions_filters_dedupes_and_sorts_numerically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed_command: list[str] = []
+    observed_timeout: list[float] = []
+
+    def fake_run(argv: list[str], *, env: dict[str, str] | None = None, timeout_seconds: float) -> ProcessResult:
+        observed_command.extend(argv)
+        observed_timeout.append(timeout_seconds)
+        return ProcessResult(
+            0,
+            '["0.58.0","0.58.0-preview.1","0.59.0","0.58.0","0.59.0+build",'
+            '"0.60.0-nightly.1","0.6.0"]',
+            "",
+            0.01,
+            False,
+        )
+
+    monkeypatch.setattr(gemini_resolver_module, "run_process", fake_run)
+    resolver = GeminiResolver(tmp_path / "cache", npm_executable="npm-test")
+
+    versions = resolver.stable_versions()
+
+    assert versions == ("0.6.0", "0.58.0", "0.59.0")
+    assert observed_command == ["npm-test", "view", "@google/gemini-cli", "versions", "--json"]
+    assert observed_timeout == [30]
+
+
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        (ProcessResult(None, "", "registry timeout", 30.0, True), "registry timeout"),
+        (ProcessResult(1, "", "registry failed", 0.02, False), "registry failed"),
+        (ProcessResult(0, "not-json", "", 0.01, False), "unexpected Gemini versions"),
+        (ProcessResult(0, '{"0":"0.58.0"}', "", 0.01, False), "unexpected Gemini versions"),
+        (ProcessResult(0, '["0.58.0",58]', "", 0.01, False), "unexpected Gemini versions"),
+    ],
+)
+def test_stable_versions_rejects_bad_registry_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: ProcessResult, message: str
+) -> None:
+    monkeypatch.setattr(gemini_resolver_module, "run_process", lambda *args, **kwargs: result)
+
+    with pytest.raises(GeminiResolveError, match=message):
+        GeminiResolver(tmp_path / "cache").stable_versions()
+
+
+def test_stable_versions_scrubs_gemini_and_google_credential_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_scrubbed_and_proxy_env(monkeypatch)
+    observed_env: list[dict[str, str]] = []
+
+    def fake_run(
+        argv: list[str], *, env: dict[str, str] | None = None, timeout_seconds: float
+    ) -> ProcessResult:
+        assert env is not None
+        observed_env.append(dict(env))
+        return ProcessResult(0, '["0.58.0"]', "", 0.01, False)
+
+    monkeypatch.setattr(gemini_resolver_module, "run_process", fake_run)
+    resolver = GeminiResolver(tmp_path / "cache", npm_executable="npm-test")
+
+    resolver.stable_versions()
+
+    assert observed_env
+    for env in observed_env:
+        for name in _SCRUBBED_VARS:
+            assert name not in env
+
+
 def test_minimum_version_is_rejected_before_install(tmp_path: Path) -> None:
     with pytest.raises(GeminiResolveError, match="requires Gemini CLI >= 0.58.0"):
         GeminiResolver(
