@@ -99,6 +99,27 @@ def test_check_incomplete_exits_4(tmp_path: Path, monkeypatch) -> None:
     assert "CHECK COULD NOT FINISH" in result.stdout
 
 
+def test_check_provenance_command_error_exits_3_without_safety_or_technical_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def fail(root: Path, candidate: str) -> None:
+        raise CommandError("qualification evidence provenance could not be written")
+
+    monkeypatch.setattr("qualock.cli.execute_check", fail)
+
+    result = runner.invoke(app, ["check", "codex@0.151.0"])
+
+    assert result.exit_code == 3
+    assert "SAFE TO UPDATE" not in result.stdout
+    assert "DON'T UPDATE YET" not in result.stdout
+    assert "REVIEW BEFORE UPDATING" not in result.stdout
+    assert "CHECK COULD NOT FINISH" not in result.stdout
+    assert "Quality  BLOCK" not in result.stdout
+    assert "Recommendation:" not in result.stdout
+
+
 def test_check_technical_preserves_existing_report(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("qualock.cli.execute_check", lambda root, candidate: sample_result())

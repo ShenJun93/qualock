@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from platformdirs import user_cache_dir
+from pydantic import ValidationError
 
 from qualock import __version__
 from qualock.agents.antigravity import AntigravityAdapter
@@ -28,6 +29,11 @@ from qualock.baseline.io import (
 )
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
 from qualock.config.models import QualockConfig
+from qualock.evidence.provenance import (
+    EvidenceProvenanceError,
+    build_evidence_provenance,
+    write_evidence_provenance,
+)
 from qualock.evidence.storage import write_baseline_artifacts, write_qualification_artifacts
 from qualock.history.analysis import analyze_history
 from qualock.history.loader import scan_results
@@ -325,6 +331,18 @@ def execute_check(
         result,
         agent_display_name=agent_display_name(agent_name),
     )
+    try:
+        provenance = build_evidence_provenance(
+            lock=lock,
+            baseline_binary=baseline_binary,
+            candidate_binary=candidate_binary,
+            config=config,
+            canaries=canaries,
+            result=result,
+        )
+        write_evidence_provenance(qualification_dir / "evidence-provenance.json", provenance)
+    except (EvidenceProvenanceError, ValidationError) as exc:
+        raise CommandError("qualification evidence provenance could not be written") from exc
     run_finished_at = datetime.now(UTC)
     _write_pricing_sidecar_best_effort(
         qualification_dir, config, result, run_started_at, run_finished_at
