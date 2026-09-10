@@ -4,6 +4,7 @@ import pytest
 
 from qualock.agents import releases
 from qualock.agents.claude_resolver import ClaudeResolveError
+from qualock.agents.gemini_resolver import GeminiResolveError
 from qualock.agents.resolver import CodexResolveError
 
 
@@ -45,6 +46,25 @@ def test_default_source_maps_claude_and_preserves_cache_root(
     assert observed == [tmp_path]
 
 
+def test_default_source_maps_gemini_and_preserves_cache_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: list[Path] = []
+
+    class FakeGemini:
+        def __init__(self, cache_root: Path) -> None:
+            observed.append(cache_root)
+
+        def latest_version(self) -> str:
+            return "0.59.0"
+
+    monkeypatch.setattr(releases, "GeminiResolver", FakeGemini)
+    source = releases.default_latest_release_source("gemini", cache_root=tmp_path)
+
+    assert source.latest_version() == "0.59.0"
+    assert observed == [tmp_path]
+
+
 def test_default_source_uses_shared_cache_root_helper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -78,6 +98,7 @@ def test_antigravity_release_discovery_fails_closed() -> None:
     [
         ("codex", "CodexResolver", CodexResolveError),
         ("claude", "ClaudeResolver", ClaudeResolveError),
+        ("gemini", "GeminiResolver", GeminiResolveError),
     ],
 )
 def test_resolver_errors_are_normalized(
@@ -147,11 +168,31 @@ def test_default_stable_catalog_maps_claude_and_preserves_cache_root(
     assert observed == [tmp_path]
 
 
+def test_default_stable_catalog_maps_gemini_and_preserves_cache_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: list[Path] = []
+
+    class FakeGemini:
+        def __init__(self, cache_root: Path) -> None:
+            observed.append(cache_root)
+
+        def stable_versions(self) -> tuple[str, ...]:
+            return ("0.58.0", "0.59.0")
+
+    monkeypatch.setattr(releases, "GeminiResolver", FakeGemini)
+    catalog = releases.default_stable_release_catalog("gemini", cache_root=tmp_path)
+
+    assert catalog.stable_versions() == ("0.58.0", "0.59.0")
+    assert observed == [tmp_path]
+
+
 @pytest.mark.parametrize(
     ("agent_name", "resolver_attr", "error_type"),
     [
         ("codex", "CodexResolver", CodexResolveError),
         ("claude", "ClaudeResolver", ClaudeResolveError),
+        ("gemini", "GeminiResolver", GeminiResolveError),
     ],
 )
 def test_stable_catalog_resolver_errors_are_normalized(

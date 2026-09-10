@@ -16,7 +16,6 @@ class GeminiResolveError(RuntimeError):
 
 _PACKAGE_NAME = "@google/gemini-cli"
 
-_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _STABLE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 _MIN_VALIDATED_VERSION = (0, 58, 0)
 _MIN_HOST_NODE_MAJOR = 20
@@ -924,6 +923,26 @@ class GeminiResolver:
             raise GeminiResolveError(f"unexpected Gemini version from npm: {version!r}")
         return version
 
+    def stable_versions(self) -> tuple[str, ...]:
+        result = run_process(
+            [self.npm_executable, "view", _PACKAGE_NAME, "versions", "--json"],
+            env=self._npm_probe_environment(),
+            timeout_seconds=30,
+        )
+        if result.timed_out:
+            raise GeminiResolveError(result.stderr.strip() or "registry timeout")
+        if result.exit_code != 0:
+            raise GeminiResolveError(result.stderr.strip() or "failed to resolve Gemini versions")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise GeminiResolveError("unexpected Gemini versions from npm") from exc
+        if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+            raise GeminiResolveError("unexpected Gemini versions from npm")
+
+        stable = {item for item in payload if _STABLE_VERSION_RE.fullmatch(item)}
+        return tuple(sorted(stable, key=_core_version))
+
     def _check_host_node_version(self) -> None:
         result = run_process(
             [self.node_executable, "--version"],
@@ -1081,8 +1100,8 @@ class GeminiResolver:
 
     def resolve(self, requested_version: str) -> AgentBinary:
         version = self.latest_version() if requested_version == "latest" else requested_version
-        if not _VERSION_RE.fullmatch(version):
-            raise GeminiResolveError(f"invalid Gemini version: {version!r}")
+        if not _STABLE_VERSION_RE.fullmatch(version):
+            raise GeminiResolveError(f"Gemini version must be exact stable X.Y.Z: {version!r}")
         if _core_version(version) < _MIN_VALIDATED_VERSION:
             raise GeminiResolveError(
                 "QuaLock requires Gemini CLI >= 0.58.0 for the validated agent contract"
