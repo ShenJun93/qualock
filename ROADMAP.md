@@ -17,6 +17,7 @@
 ## Delivered
 
 - Additional coding-agent adapters: Claude Code and Antigravity local qualification, plus Gemini CLI local `baseline`/`check` with provider-default reasoning, pinned runtime-support identity, API-key automation, and shell-child network isolation (Batch #43).
+- Gemini CLI orchestration parity for release monitoring, native per-user scheduled monitoring, forward version bisect, and trusted GitHub baseline-upgrade PR qualification, reusing the existing Codex/Claude engines, credential-non-persistence rules, and runtime identity checks (Batch #44).
 - Historical canary effectiveness ranking and runtime/token-usage estimates (#41).
 - Provider-specific API-equivalent reference cost estimates (#42), advisory only and outside qualification pass/fail policy.
 

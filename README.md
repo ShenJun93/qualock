@@ -44,7 +44,7 @@ Candidate total runtime was -16.9% and total input tokens -27.2% versus baseline
 
 ## v0.1 scope
 
-Qualock v0.1 intentionally focuses on one qualification axis: **coding-agent CLI version A vs version B**. Local `baseline`/`check` supports Codex, Claude Code, Gemini CLI, and the separately sandboxed Antigravity Linux host path; release-monitor, scheduler, bisect, and GitHub-PR parity still vary by agent as documented below. Qualock does not attempt to be a general agent leaderboard, prompt optimizer, hosted benchmark service, or multi-agent arena.
+Qualock v0.1 intentionally focuses on one qualification axis: **coding-agent CLI version A vs version B**. Local `baseline`/`check` supports Codex, Claude Code, Gemini CLI, and the separately sandboxed Antigravity Linux host path. Release-monitor, native scheduling, forward version bisect, and GitHub-PR baseline-upgrade qualification support Codex, Claude Code, and Gemini CLI; Antigravity remains unsupported for those four orchestration surfaces, as documented below. Qualock does not attempt to be a general agent leaderboard, prompt optimizer, hosted benchmark service, or multi-agent arena.
 
 Core guarantees:
 
@@ -145,10 +145,11 @@ Or resolve the current npm release to an exact version before qualification:
 qualock check codex@latest
 ```
 
-Release monitoring supports Codex and Claude Code. QuaLock discovers the
+Release monitoring supports Codex, Claude Code, and Gemini CLI. QuaLock discovers the
 latest published npm release for the configured agent and qualifies it
 against the trusted baseline. It never updates the agent or changes the
-baseline automatically.
+baseline automatically. For Gemini, discovery is stable-only: preview, nightly,
+prerelease, and build-suffixed releases are never scanned or qualified.
 
 Run the release monitor once, or force a matching newer candidate to run again:
 
@@ -167,6 +168,10 @@ The monitor:
 - `--force` reruns only a matching newer candidate and never bypasses stale baseline checks;
 - treats user-state corruption or deletion conservatively by checking again, never by falsely trusting state.
 
+For a Gemini project, `qualock monitor` requires `GEMINI_API_KEY` in the process
+environment through the same automation credential path as `qualock check`; it is
+never persisted by the monitor itself.
+
 Enable native per-user daily release monitoring, optionally at a different local
 wall-clock time, inspect its native trigger health, or disable it:
 
@@ -182,11 +187,16 @@ Scheduler, Linux uses `systemd --user`, and macOS uses a LaunchAgent. This needs
 no admin/root access and uses no QuaLock daemon, cron fallback, shell wrapper,
 LaunchDaemon, or arbitrary scheduled command. The OS trigger starts only the
 fixed QuaLock runner, and that runner only executes the same agent-aware
-`qualock monitor`, so scheduled monitoring supports Codex and Claude Code
-only. It never updates the agent or changes or rebuilds the baseline.
+`qualock monitor`, so scheduled monitoring supports Codex, Claude Code, and
+Gemini CLI. It never updates the agent or changes or rebuilds the baseline.
 
 Only `PATH` is captured for sparse scheduler environments; credentials and other
-environment variables are not persisted. Logs live under the per-user
+environment variables are not persisted. For a Gemini project this means
+`GEMINI_API_KEY` is never captured at `schedule enable` time; at trigger time the
+native scheduler runner inherits the ambient per-user process environment, so a
+scheduled Gemini monitor run only succeeds if that environment already provides
+the key, and otherwise fails closed through the same missing-credential error
+`qualock monitor` reports when run directly. Logs live under the per-user
 release-scheduler state path and are retained after disable. Windows and macOS
 depend on an available user session. Linux depends on the per-user systemd
 manager, and QuaLock does not enable lingering. Native DST and catch-up behavior
@@ -199,12 +209,14 @@ path-derived, and V1 does not migrate orphan schedules.
 
 ### Find the first bad release
 
-If a later stable Codex or Claude Code release regressed your protected behavior but you
-do not know exactly which version, scan forward from the current baseline:
+If a later stable Codex, Claude Code, or Gemini CLI release regressed your protected
+behavior but you do not know exactly which version, scan forward from the current
+baseline:
 
 ```bash
 qualock bisect codex@0.160.0
 qualock bisect claude@2.1.263
+qualock bisect gemini@0.60.0
 ```
 
 The upper bound must be an exact published stable `X.Y.Z` version for the same agent as
@@ -273,7 +285,9 @@ qualock check gemini@<candidate-version>
 
 QuaLock resolves the exact npm package, fingerprints both the `bin.gemini` entrypoint and the complete published runtime support tree, and runs it with a digest-pinned Node 22 Bookworm overlay. User Gemini state is redirected to an ephemeral private home, project `.gemini` is masked during the agent phase, repository `GEMINI.md` context loading is disabled, and the API key is transported through stdin rather than Docker create metadata. The Gemini parent process may use network access for the provider API, but model-invoked shell children run through QuaLock's Bubblewrap wrapper with a fresh user/network namespace and no unsandboxed fallback.
 
-`qualock cost` remains an offline, API-equivalent reference estimate only. Gemini pricing can be unavailable when runtime model evidence is missing, conflicting, or has no pinned rate card; pricing never changes `PASS`/`WARN`/`BLOCK`/`INCOMPLETE`. Gemini parity for `qualock monitor`, native scheduling, version bisect, and GitHub pull-request qualification is intentionally deferred to Batch #44.
+`qualock cost` remains an offline, API-equivalent reference estimate only. Gemini pricing can be unavailable when runtime model evidence is missing, conflicting, or has no pinned rate card; pricing never changes `PASS`/`WARN`/`BLOCK`/`INCOMPLETE`.
+
+Gemini also has orchestration parity with Codex and Claude Code for `qualock monitor`, native per-user scheduling, forward `qualock bisect`, and trusted GitHub baseline-upgrade PR qualification (Batch #44). Gemini release discovery, monitoring, and bisect are stable-only: preview, nightly, prerelease, and build-suffixed releases are never scanned, scheduled, or qualified. None of these surfaces persist `GEMINI_API_KEY`; scheduler and monitor state never capture it, and the GitHub producer workflow maps a repository secret named `QUALOCK_GEMINI_API_KEY` only to the runtime environment variable `GEMINI_API_KEY` for the single Gemini qualification step. This batch does not add authenticated-provider acceptance as a normal implementation or review gate.
 
 ## Antigravity on Linux (local binary pin)
 
@@ -305,9 +319,10 @@ qualock check antigravity@1.1.28
 both sides of a check must be binaries that already exist locally. Antigravity is
 supported for `baseline`, `check`, and `doctor`. `qualock monitor` and scheduled
 monitoring are unavailable for Antigravity because QuaLock does not discover
-Antigravity releases. `qualock bisect` is available for Codex and Claude Code but
-unavailable for Antigravity; the GitHub PR workflow supports Codex and Claude
-Code trusted baselines but remains unsupported for Antigravity.
+Antigravity releases. `qualock bisect` is available for Codex, Claude Code, and
+Gemini CLI but unavailable for Antigravity; the GitHub PR workflow supports
+Codex, Claude Code, and Gemini CLI trusted baselines but remains unsupported
+for Antigravity.
 
 `qualock doctor` reads the project's `.qualock/config.yaml` and checks prerequisites for
 whichever agent the project is configured for. For `codex` or `claude` it checks Docker,
@@ -397,11 +412,10 @@ qualock github setup
 `qualock github setup` only writes `.github/workflows/qualock-pr.yml` and
 `.github/workflows/qualock-pr-report.yml` into the current project and prints
 setup instructions. It does not push, create a repository secret, or change
-any repository setting. The workflow selects Codex or Claude based on the
-agent already pinned in your project's trusted `.qualock/baseline.lock`;
-Gemini CLI and Antigravity remain unsupported for GitHub PR qualification in this
-batch, so a repository whose trusted baseline is either agent cannot use this feature.
-Adoption is
+any repository setting. The workflow selects Codex, Claude, or Gemini based on
+the agent already pinned in your project's trusted `.qualock/baseline.lock`;
+Antigravity remains unsupported for GitHub PR qualification, so a repository
+whose trusted baseline is Antigravity cannot use this feature. Adoption is
 five steps, in order:
 
 1. run `qualock github setup` locally;
@@ -412,7 +426,10 @@ five steps, in order:
    your local `~/.codex/auth.json`; for Claude Code, one of
    `QUALOCK_ANTHROPIC_AUTH_TOKEN`, `QUALOCK_ANTHROPIC_API_KEY`, or
    `QUALOCK_CLAUDE_CODE_OAUTH_TOKEN` (subscription automation can obtain the
-   OAuth token by running `claude setup-token`);
+   OAuth token by running `claude setup-token`); for Gemini CLI,
+   `QUALOCK_GEMINI_API_KEY` containing a Gemini API key, which the generated
+   workflow exposes to the Gemini qualification step only as the runtime
+   environment variable `GEMINI_API_KEY`;
 4. optionally require the `qualock/pr` status check in branch protection or a
    repository ruleset;
 5. propose future upgrades of that same trusted agent as a pull request whose
@@ -424,9 +441,9 @@ Once adopted, every pull request gets a `qualock/pr` status check:
   `qualock/pr` success status, no comment, and costs no agent qualification
   run;
 - a PR that changes only `.qualock/baseline.lock` runs the normal
-  baseline-vs-candidate qualification with the trusted Codex or Claude agent
-  and gets a sticky PR comment with the verdict, per-canary results, and a
-  link to the run;
+  baseline-vs-candidate qualification with the trusted Codex, Claude, or
+  Gemini agent and gets a sticky PR comment with the verdict, per-canary
+  results, and a link to the run;
 - a PR that changes `.qualock/baseline.lock` plus any other file is rejected
   with an `INCOMPLETE`/`error` status asking for a dedicated upgrade PR,
   because QuaLock only trusts a proposed baseline lock when it is the sole
@@ -444,12 +461,19 @@ or approve anything automatically, and does not mutate `.qualock/baseline.lock`
 itself; a human must open the upgrade PR from a locally produced lock. It
 targets GitHub-hosted runners triggered from this repository's own workflows,
 not a GitHub App or third-party hosting. It qualifies exact stable releases of
-the trusted Codex or Claude agent only, not prereleases. Raw agent transcripts
+the trusted Codex, Claude, or Gemini agent only, not prereleases. Raw agent transcripts
 are never uploaded; only the structured PR context and qualification report
 artifacts are produced, and the sticky comment/status check are the only
 externally visible output. Running the qualification agent on GitHub-hosted
 runners still costs compute and, if applicable, agent usage, same as running
 `qualock check` locally.
+
+For a trusted Gemini baseline, the producer additionally requires the trusted
+baseline lock and the proposed candidate lock to carry a valid
+`support_sha256` runtime-support fingerprint alongside the entrypoint
+`binary_sha256`, and re-resolves the proposed Gemini version to confirm both
+digests match before qualification runs. A missing repository secret never
+triggers a provider call; it reports `CREDENTIAL_UNAVAILABLE` instead.
 
 ## Protect a project from AI edits
 
