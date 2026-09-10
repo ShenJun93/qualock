@@ -80,6 +80,69 @@ def test_runner_invokes_only_monitor_and_propagates_block(
     assert "EXIT code=2" in log
 
 
+def test_runner_preserves_gemini_api_key_while_replacing_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    python = tmp_path / "python"
+    python.write_text("", encoding="utf-8")
+    project = tmp_path / "project"
+    project.mkdir()
+    store, registration = saved_registration(
+        tmp_path / "state",
+        project_root=project.resolve(),
+        python_executable=python.resolve(),
+        path_env="/registered/bin",
+    )
+    monkeypatch.setattr("qualock.scheduler.runner.sys.executable", str(python.resolve()))
+    calls: list[dict[str, str]] = []
+
+    def fake_run(argv, *, cwd, env, timeout_seconds):
+        calls.append(dict(env))
+        return ProcessResult(0, "", "", 0.1, False)
+
+    result = run_registered_monitor(
+        registration.project_key,
+        store=store,
+        process_runner=fake_run,
+        environ={"PATH": "/runtime/bin", "GEMINI_API_KEY": "sentinel-key"},
+    )
+
+    assert result == 0
+    assert calls == [{"PATH": "/registered/bin", "GEMINI_API_KEY": "sentinel-key"}]
+
+
+def test_runner_does_not_fabricate_absent_gemini_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    python = tmp_path / "python"
+    python.write_text("", encoding="utf-8")
+    project = tmp_path / "project"
+    project.mkdir()
+    store, registration = saved_registration(
+        tmp_path / "state",
+        project_root=project.resolve(),
+        python_executable=python.resolve(),
+        path_env="/registered/bin",
+    )
+    monkeypatch.setattr("qualock.scheduler.runner.sys.executable", str(python.resolve()))
+    calls: list[dict[str, str]] = []
+
+    def fake_run(argv, *, cwd, env, timeout_seconds):
+        calls.append(dict(env))
+        return ProcessResult(0, "", "", 0.1, False)
+
+    result = run_registered_monitor(
+        registration.project_key,
+        store=store,
+        process_runner=fake_run,
+        environ={"PATH": "/runtime/bin"},
+    )
+
+    assert result == 0
+    assert calls == [{"PATH": "/registered/bin"}]
+    assert "GEMINI_API_KEY" not in calls[0]
+
+
 @pytest.mark.parametrize("key", ["", "A" * 64, "x" * 64, "0" * 63])
 def test_invalid_key_never_runs(tmp_path: Path, key: str) -> None:
     def fail(*args, **kwargs):
