@@ -1,4 +1,5 @@
 import hashlib
+import multiprocessing
 import os
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from qualock.evidence.bundle_io import (
 from qualock.evidence.bundle_models import FILE_MAX_BYTES, EvidenceBundleError, EvidenceBundleReason
 
 _POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only filesystem shape")
+_FIFO_HANG_TIMEOUT_SECONDS = 5
 
 
 def _make_file_of_size(path: Path, size: int) -> None:
@@ -229,6 +231,88 @@ def test_sha256_regular_file_rejects_symlink_payload(tmp_path: Path) -> None:
     with pytest.raises(EvidenceBundleError) as exc_info:
         sha256_regular_file(tmp_path, "report.json", max_bytes=1024)
     assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+
+
+# --- FIFO payloads must be rejected promptly, never block open() indefinitely --
+
+
+def _run_read_bounded_regular_file(root: str, name: str, max_bytes: int, queue: "multiprocessing.Queue") -> None:
+    try:
+        read_bounded_regular_file(Path(root), name, max_bytes=max_bytes)
+    except EvidenceBundleError as exc:
+        queue.put(("raised", exc.reason))
+    except Exception as exc:  # noqa: BLE001 - diagnostic passthrough across the subprocess boundary
+        queue.put(("unexpected", repr(exc)))
+    else:
+        queue.put(("returned", None))
+
+
+def _run_sha256_regular_file(root: str, name: str, max_bytes: int, queue: "multiprocessing.Queue") -> None:
+    try:
+        sha256_regular_file(Path(root), name, max_bytes=max_bytes)
+    except EvidenceBundleError as exc:
+        queue.put(("raised", exc.reason))
+    except Exception as exc:  # noqa: BLE001 - diagnostic passthrough across the subprocess boundary
+        queue.put(("unexpected", repr(exc)))
+    else:
+        queue.put(("returned", None))
+
+
+def _assert_rejects_fifo_promptly(target, tmp_path: Path, name: str) -> None:
+    fifo_path = tmp_path / name
+    os.mkfifo(fifo_path)
+    ctx = multiprocessing.get_context("fork")
+    queue: multiprocessing.Queue = ctx.Queue()
+    proc = ctx.Process(target=target, args=(str(tmp_path), name, 1024, queue))
+    proc.start()
+    proc.join(timeout=_FIFO_HANG_TIMEOUT_SECONDS)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join()
+        pytest.fail(
+            f"{target.__name__} hung opening a FIFO payload instead of rejecting it promptly"
+        )
+    assert proc.exitcode == 0
+    outcome, payload = queue.get(timeout=1)
+    assert outcome == "raised", f"expected EvidenceBundleError, got {outcome}: {payload!r}"
+    assert payload is EvidenceBundleReason.UNSAFE_PATH
+
+
+@_POSIX_ONLY
+def test_read_bounded_regular_file_rejects_fifo_payload_promptly(tmp_path: Path) -> None:
+    _assert_rejects_fifo_promptly(_run_read_bounded_regular_file, tmp_path, "report.json")
+
+
+@_POSIX_ONLY
+def test_sha256_regular_file_rejects_fifo_payload_promptly(tmp_path: Path) -> None:
+    _assert_rejects_fifo_promptly(_run_sha256_regular_file, tmp_path, "report.json")
+
+
+# --- Windows payload containment must require exact path equality --------------
+
+
+def test_windows_payload_containment_rejects_sibling_directory_prefix_match() -> None:
+    from qualock.evidence.bundle_io import _win_payload_path_is_contained
+
+    root_final_path = "\\\\?\\C:\\bundles\\evidence"
+    file_final_path = "\\\\?\\C:\\bundles\\evidence2\\report.json"
+    assert not _win_payload_path_is_contained(root_final_path, "report.json", file_final_path)
+
+
+def test_windows_payload_containment_accepts_exact_match_case_insensitively() -> None:
+    from qualock.evidence.bundle_io import _win_payload_path_is_contained
+
+    root_final_path = "\\\\?\\C:\\bundles\\Evidence"
+    file_final_path = "\\\\?\\c:\\BUNDLES\\evidence\\REPORT.JSON"
+    assert _win_payload_path_is_contained(root_final_path, "report.json", file_final_path)
+
+
+def test_windows_payload_containment_tolerates_trailing_root_backslash() -> None:
+    from qualock.evidence.bundle_io import _win_payload_path_is_contained
+
+    root_final_path = "\\\\?\\C:\\bundles\\evidence\\"
+    file_final_path = "\\\\?\\C:\\bundles\\evidence\\report.json"
+    assert _win_payload_path_is_contained(root_final_path, "report.json", file_final_path)
 
 
 # --- no fallback to link-following open when no-follow primitive missing -------
