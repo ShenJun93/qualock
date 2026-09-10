@@ -199,12 +199,31 @@ def test_monitor_input_errors_exit_three(
     assert result.exit_code == 3
 
 
-def test_monitor_outcome_with_unsupported_agent_exits_three(
+def test_monitor_gemini_no_new_release_uses_gemini_display_name(
     tmp_path: Path, monkeypatch
 ) -> None:
     outcome = MonitorOutcome(
         action=MonitorAction.NO_NEW_RELEASE,
         agent_name="gemini",
+        baseline_version="0.59.0",
+        latest_version="0.59.0",
+    )
+
+    result = invoke_outcome(tmp_path, monkeypatch, outcome)
+
+    assert result.exit_code == 0
+    assert "Baseline: Gemini CLI 0.59.0" in result.stdout
+    assert "Latest:   Gemini CLI 0.59.0" in result.stdout
+    assert "No newer Gemini CLI release needs qualification." in result.stdout
+    assert "Codex" not in result.stdout
+
+
+def test_monitor_outcome_with_unsupported_agent_exits_three(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outcome = MonitorOutcome(
+        action=MonitorAction.NO_NEW_RELEASE,
+        agent_name="cursor",
         baseline_version="0.151.0",
         latest_version="0.151.0",
     )

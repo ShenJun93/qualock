@@ -321,7 +321,7 @@ def monitor_command(
             force=force,
             check_executor=_monitor_check_executor,
         )
-        if outcome.agent_name not in {"codex", "claude"}:
+        if outcome.agent_name not in {"codex", "claude", "gemini"}:
             raise CommandError(f"unsupported release monitor agent: {outcome.agent_name}")
         display_name = agent_display_name(outcome.agent_name)
     except (ConfigError, CanaryLoadError, CommandError, FileNotFoundError) as exc:

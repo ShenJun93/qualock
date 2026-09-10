@@ -6,6 +6,7 @@ from typing import Literal
 
 from packaging.version import Version
 
+from qualock.agents.orchestration import orchestration_capabilities
 from qualock.agents.releases import (
     LatestReleaseSource,
     default_latest_release_source,
@@ -19,7 +20,7 @@ from .models import MonitorAction, MonitorOutcome, MonitorState, TerminalVerdict
 from .state import FileMonitorStateStore, MonitorStateStore, baseline_sha256
 
 CheckExecutor = Callable[[Path, str], QualificationResult]
-MonitorAgent = Literal["codex", "claude"]
+MonitorAgent = Literal["codex", "claude", "gemini"]
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ def monitor_preflight(root: Path) -> MonitorPreflight:
             "release monitor is unavailable for Antigravity because "
             "QuaLock does not discover Antigravity releases"
         )
-    if agent_name not in {"codex", "claude"}:
+    if not orchestration_capabilities(agent_name).release_discovery:
         raise CommandError(f"release monitor does not support agent {agent_name!r}")
     return MonitorPreflight(
         agent_name=agent_name,

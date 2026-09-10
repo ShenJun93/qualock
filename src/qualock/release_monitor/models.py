@@ -26,7 +26,7 @@ class MonitorState(BaseModel):
 
     schema_version: Literal[1] = 1
     baseline_sha256: str
-    agent: Literal["codex", "claude"] = "codex"
+    agent: Literal["codex", "claude", "gemini"] = "codex"
     candidate_version: str
     verdict: TerminalVerdict
     qualification_id: str

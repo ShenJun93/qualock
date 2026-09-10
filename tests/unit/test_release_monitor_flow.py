@@ -175,20 +175,35 @@ def test_antigravity_fails_before_release_or_state_lookup(
         )
 
 
-def test_unsupported_agent_fails_before_release_or_state_lookup(
+def test_gemini_fresh_baseline_preflight_returns_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     patch_project_loading(monkeypatch, "gemini")
+    lock = baseline_lock("gemini")
+    monkeypatch.setattr(monitor_commands, "read_baseline_lock", lambda path: lock)
+    monkeypatch.setattr(monitor_commands, "assert_suite_fresh", lambda *args: None)
+
+    context = monitor_commands.monitor_preflight(tmp_path)
+
+    assert context.agent_name == "gemini"
+    assert context.baseline_version == lock.agent.version
+    assert context.baseline_sha256 == baseline_sha256(lock)
+
+
+def test_unsupported_agent_fails_before_release_or_state_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_project_loading(monkeypatch, "cursor")
     monkeypatch.setattr(
         monitor_commands,
         "read_baseline_lock",
-        lambda path: baseline_lock("gemini"),
+        lambda path: baseline_lock("cursor"),
     )
     monkeypatch.setattr(monitor_commands, "assert_suite_fresh", lambda *args: None)
 
     with pytest.raises(
         CommandError,
-        match="release monitor does not support agent 'gemini'",
+        match="release monitor does not support agent 'cursor'",
     ):
         execute_monitor(
             tmp_path,
@@ -386,6 +401,44 @@ def test_claude_no_new_release_skips_qualification(
 
     assert outcome.action is MonitorAction.NO_NEW_RELEASE
     assert outcome.agent_name == "claude"
+
+
+def test_gemini_new_release_qualifies_exact_gemini_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="0.59.0", agent_name="gemini")
+    seen: list[str] = []
+
+    def check(root: Path, candidate_spec: str) -> QualificationResult:
+        seen.append(candidate_spec)
+        return qualification(Verdict.PASS, candidate="0.60.0")
+
+    outcome = execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("0.60.0"),
+        state_store=MemoryStateStore(),
+        check_executor=check,
+    )
+
+    assert seen == ["gemini@0.60.0"]
+    assert outcome.agent_name == "gemini"
+    assert outcome.action is MonitorAction.CHECKED
+
+
+def test_gemini_no_new_release_skips_qualification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="0.59.0", agent_name="gemini")
+
+    outcome = execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("0.59.0"),
+        state_store=FailIfCalledStateStore(),
+        check_executor=fail_check,
+    )
+
+    assert outcome.action is MonitorAction.NO_NEW_RELEASE
+    assert outcome.agent_name == "gemini"
 
 
 def test_default_release_source_uses_trusted_agent(
@@ -626,6 +679,94 @@ def test_claude_terminal_result_persists_claude_agent(
 
     assert len(store.saved) == 1
     assert store.saved[0].agent == "claude"
+
+
+def test_gemini_already_qualified_dedupes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="0.59.0", agent_name="gemini")
+    outcome = execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("0.60.0"),
+        state_store=MemoryStateStore(
+            terminal_state(candidate="0.60.0", agent="gemini")
+        ),
+        check_executor=fail_check,
+    )
+    assert outcome.action is MonitorAction.ALREADY_QUALIFIED
+    assert outcome.recorded_verdict is Verdict.PASS
+
+
+def test_gemini_no_downgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="0.59.0", agent_name="gemini")
+    outcome = execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("0.60.0"),
+        state_store=MemoryStateStore(
+            terminal_state(candidate="0.61.0", agent="gemini")
+        ),
+        check_executor=fail_check,
+    )
+    assert outcome.action is MonitorAction.NO_DOWNGRADE
+
+
+def test_gemini_force_reruns_matching_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="0.59.0", agent_name="gemini")
+    calls: list[str] = []
+    outcome = execute_monitor(
+        tmp_path,
+        force=True,
+        release_source=FakeReleaseSource("0.60.0"),
+        state_store=MemoryStateStore(
+            terminal_state(candidate="0.60.0", agent="gemini")
+        ),
+        check_executor=lambda root, spec: calls.append(spec)
+        or qualification(Verdict.PASS, candidate="0.60.0"),
+    )
+    assert calls == ["gemini@0.60.0"]
+    assert outcome.action is MonitorAction.CHECKED
+
+
+def test_gemini_terminal_result_persists_gemini_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="0.59.0", agent_name="gemini")
+    store = MemoryStateStore()
+
+    execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("0.60.0"),
+        state_store=store,
+        check_executor=lambda root, candidate: qualification(
+            Verdict.PASS, candidate="0.60.0"
+        ),
+    )
+
+    assert len(store.saved) == 1
+    assert store.saved[0].agent == "gemini"
+
+
+def test_gemini_incomplete_is_not_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_fresh_context(monkeypatch, baseline_version="0.59.0", agent_name="gemini")
+    store = MemoryStateStore()
+    result = qualification(Verdict.INCOMPLETE, candidate="0.60.0")
+
+    outcome = execute_monitor(
+        tmp_path,
+        release_source=FakeReleaseSource("0.60.0"),
+        state_store=store,
+        check_executor=lambda root, spec: result,
+    )
+
+    assert outcome.qualification_result is result
+    assert outcome.state_persisted is None
+    assert store.saved == []
 
 
 def test_incomplete_is_not_persisted(
