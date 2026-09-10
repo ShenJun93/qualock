@@ -3,7 +3,7 @@
 **Date:** 2026-09-08
 **Base:** `a98374d5c161ef96272e0a94a5f7584511e7f7f9` (`origin/main` after PR #40)
 **Branch:** `feat/gemini-cli-mainline-adapter`
-**Status:** Approved design; implementation planning in progress
+**Status:** Delivered
 
 ## Goal
 
@@ -296,9 +296,9 @@ Each production task requires TDD and an independent scoped review before the ne
 
 ## Documentation delivery rule
 
-README/ROADMAP/spec status must not claim Gemini delivery before implementation-head CI is green. After exact implementation CI passes, docs may describe local Gemini `baseline`/`check` support, API-key-only automation, provider-default reasoning, isolation boundaries, and deferred Batch #44 parity work.
+README/ROADMAP/spec status must not claim Gemini delivery before implementation-head CI is green. After exact implementation-head CI passes, the delivery docs commit may describe local Gemini `baseline`/`check` support, API-key-only automation, provider-default reasoning, isolation boundaries, deferred Batch #44 parity work, and set this spec status to `Delivered`. The branch is not merge-ready until that docs-inclusive head passes its required local gates, CI, and final whole-branch review.
 
-The roadmap line `Additional coding-agent adapters` moves to Delivered only after final docs-inclusive CI and review. No tag, release, package publish, or hosted/commercial action is part of Batch #43.
+The roadmap line `Additional coding-agent adapters` moves to Delivered in that post-implementation-CI docs commit. No tag, release, package publish, or hosted/commercial action is part of Batch #43.
 
 ## Final verification gates
 
