@@ -644,6 +644,29 @@ def test_producer_gemini_secret_name_is_exact() -> None:
     assert "QUALOCK_GEMINI_API_KEY" in PRODUCER_WORKFLOW
 
 
+def test_producer_gemini_runtime_variable_absent_from_codex_and_claude_steps() -> None:
+    """Prove the runtime var, not just the secret name, is isolated to Gemini.
+
+    ``test_producer_model_secret_is_isolated_to_a_single_step`` already proves
+    the secret name ``QUALOCK_GEMINI_API_KEY`` appears nowhere outside the
+    Gemini step. That leaves the runtime variable name ``GEMINI_API_KEY``
+    unchecked against the Codex and Claude step bodies: a future edit could
+    reference (or echo, even while unset) ``$GEMINI_API_KEY`` inside those
+    steps without tripping the secret-name check. This is a static substring
+    check, so it catches any textual reference regardless of whether the
+    variable would be set at runtime.
+    """
+    doc = parsed(PRODUCER_WORKFLOW)
+    assert isinstance(doc, dict)
+    for step_name in (
+        "Materialize codex credential",
+        "Qualify upgrade (codex)",
+        "Qualify upgrade (claude)",
+    ):
+        step = _named_step(doc, step_name)
+        assert "GEMINI_API_KEY" not in _step_secret_bearing_text(step)
+
+
 def test_reporter_workflow_contains_no_runtime_credential_variable_names() -> None:
     for runtime_name in (
         "GEMINI_API_KEY",
