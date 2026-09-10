@@ -74,7 +74,7 @@ def _posix_open_regular_nofollow(root: Path, name: str) -> int:
         if not stat.S_ISDIR(root_info.st_mode):
             raise EvidenceBundleError(EvidenceBundleReason.UNSAFE_PATH, "bundle root")
         try:
-            file_fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=root_fd)
+            file_fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK | nofollow, dir_fd=root_fd)
         except (OSError, NotImplementedError) as exc:
             raise EvidenceBundleError(EvidenceBundleReason.UNSAFE_PATH, name) from exc
     finally:
@@ -151,6 +151,11 @@ def _win_final_path(handle: int) -> str:
     return str(buffer.value)
 
 
+def _win_payload_path_is_contained(root_final_path: str, name: str, file_final_path: str) -> bool:
+    expected_final_path = root_final_path.rstrip("\\") + "\\" + name
+    return file_final_path.lower() == expected_final_path.lower()
+
+
 def _windows_open_regular_nofollow(root: Path, name: str) -> int:
     try:
         root_handle = _win_create_file(str(root), is_dir=True)
@@ -176,10 +181,7 @@ def _windows_open_regular_nofollow(root: Path, name: str) -> int:
         if _win_file_attributes(file_handle) & _FILE_ATTRIBUTE_REPARSE_POINT:
             raise EvidenceBundleError(EvidenceBundleReason.UNSAFE_PATH, name)
         file_final_path = _win_final_path(file_handle)
-        expected_suffix = "\\" + name
-        if not file_final_path.lower().startswith(
-            root_final_path.lower()
-        ) or not file_final_path.lower().endswith(expected_suffix.lower()):
+        if not _win_payload_path_is_contained(root_final_path, name, file_final_path):
             raise EvidenceBundleError(EvidenceBundleReason.UNSAFE_PATH, name)
         opened = True
     except OSError as exc:
