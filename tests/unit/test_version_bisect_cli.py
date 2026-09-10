@@ -1,8 +1,10 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
+import qualock.version_bisect.commands as bisect_commands
 from qualock import cli
 from qualock.agents.releases import ReleaseDiscoveryError
 from qualock.agents.resolver import CodexResolveError
@@ -14,6 +16,24 @@ from qualock.qualification.models import Verdict
 from qualock.version_bisect.models import BisectAgent, BisectOutcome, BisectStep, BisectStop
 
 runner = CliRunner()
+
+
+def patch_gemini_bisect_project(monkeypatch: pytest.MonkeyPatch, *, baseline_version: str) -> None:
+    monkeypatch.setattr(
+        bisect_commands,
+        "load_project",
+        lambda root: (SimpleNamespace(agent=SimpleNamespace(name="gemini")), []),
+    )
+    monkeypatch.setattr(
+        bisect_commands,
+        "read_baseline_lock",
+        lambda path: SimpleNamespace(
+            agent=SimpleNamespace(name="gemini", version=baseline_version)
+        ),
+    )
+    monkeypatch.setattr(bisect_commands, "suite_fingerprint", lambda canaries: "suite-now")
+    monkeypatch.setattr(bisect_commands, "config_fingerprint", lambda config: "config-now")
+    monkeypatch.setattr(bisect_commands, "assert_suite_fresh", lambda *args: None)
 
 
 def make_outcome(
@@ -280,3 +300,44 @@ def test_bisect_unexpected_os_error_exits_one_with_literal_text(
     result = runner.invoke(cli.app, ["bisect", "0.153.0"])
     assert result.exit_code == 1
     assert "disk full [literal]" in result.stdout
+
+
+# --- Step 4: Gemini forward-scan parity (end-to-end through real preflight) --
+
+
+def test_bisect_cli_gemini_cross_agent_mismatch_rejected_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    patch_gemini_bisect_project(monkeypatch, baseline_version="0.58.0")
+    monkeypatch.setattr(
+        bisect_commands,
+        "default_stable_release_catalog",
+        lambda agent_name, **kwargs: SimpleNamespace(
+            stable_versions=lambda: ("0.59.0", "0.60.0")
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["bisect", "codex@0.60.0"])
+
+    assert result.exit_code == 3
+    assert "upper bound agent codex does not match baseline agent gemini" in result.stdout
+
+
+def test_bisect_cli_gemini_upper_not_in_catalog_rejected_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    patch_gemini_bisect_project(monkeypatch, baseline_version="0.58.0")
+    monkeypatch.setattr(
+        bisect_commands,
+        "default_stable_release_catalog",
+        lambda agent_name, **kwargs: SimpleNamespace(
+            stable_versions=lambda: ("0.59.0", "0.60.0")
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["bisect", "gemini@0.61.0"])
+
+    assert result.exit_code == 3
+    assert "gemini@0.61.0 is not a published stable release" in result.stdout

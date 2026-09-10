@@ -100,6 +100,16 @@ def patch_project_loading(monkeypatch: pytest.MonkeyPatch, *, agent_name: str = 
     monkeypatch.setattr(bisect_commands, "config_fingerprint", lambda config: "config-now")
 
 
+def patch_gemini_project(monkeypatch: pytest.MonkeyPatch, *, baseline_version: str) -> None:
+    patch_project_loading(monkeypatch, agent_name="gemini")
+    monkeypatch.setattr(
+        bisect_commands,
+        "read_baseline_lock",
+        lambda path: baseline_lock(agent="gemini", version=baseline_version),
+    )
+    monkeypatch.setattr(bisect_commands, "assert_suite_fresh", lambda *args: None)
+
+
 # --- Step 1: preflight / range validation ---------------------------------
 
 
@@ -483,3 +493,153 @@ def test_crashing_check_propagates_and_preserves_truthful_prefix(
     last_saved = store.saved[-1]
     assert last_saved["stop"] is None
     assert last_saved["first_bad"] is None
+
+
+# --- Step 4: Gemini forward-scan parity -------------------------------------
+
+
+def test_bisect_preflight_accepts_gemini(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_gemini_project(monkeypatch, baseline_version="0.58.0")
+
+    result = bisect_commands.bisect_preflight(tmp_path)
+
+    assert result == BisectPreflight(agent_name="gemini", baseline_version="0.58.0")
+
+
+def test_gemini_upper_must_be_newer_and_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_gemini_project(monkeypatch, baseline_version="0.58.0")
+
+    with pytest.raises(CommandError):
+        execute_bisect(
+            tmp_path,
+            "gemini@0.58.0",
+            catalog=FakeCatalog(("0.58.0", "0.59.0", "0.60.0", "0.61.0")),
+            summary_store=MemoryStore(),
+            check_executor=fail_check,
+        )
+
+
+def test_gemini_upper_not_in_frozen_catalog_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_gemini_project(monkeypatch, baseline_version="0.58.0")
+    catalog = FakeCatalog(("0.58.0", "0.59.0", "0.60.0"))
+
+    with pytest.raises(CommandError):
+        execute_bisect(
+            tmp_path,
+            "gemini@0.61.0",
+            catalog=catalog,
+            summary_store=FailStore(),
+            check_executor=fail_check,
+        )
+
+
+def test_gemini_cross_agent_upper_rejected_before_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_gemini_project(monkeypatch, baseline_version="0.58.0")
+    catalog = FakeCatalog(("0.59.0", "0.60.0"))
+
+    with pytest.raises(CommandError):
+        execute_bisect(
+            tmp_path,
+            "codex@0.60.0",
+            catalog=catalog,
+            summary_store=FailStore(),
+            check_executor=fail_check,
+        )
+    assert catalog.calls == 0
+
+
+def test_gemini_pass_prefix_then_block_is_first_bad(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_gemini_project(monkeypatch, baseline_version="0.58.0")
+    calls: list[str] = []
+    results = {
+        "gemini@0.59.0": qualification("0.59.0", Verdict.PASS, "check-59"),
+        "gemini@0.60.0": qualification("0.60.0", Verdict.BLOCK, "check-60"),
+        "gemini@0.61.0": qualification("0.61.0", Verdict.PASS, "check-61"),
+    }
+    store = MemoryStore()
+
+    outcome = execute_bisect(
+        tmp_path,
+        "gemini@0.61.0",
+        catalog=FakeCatalog(("0.58.0", "0.59.0", "0.60.0", "0.61.0")),
+        summary_store=store,
+        check_executor=lambda root, spec: calls.append(spec) or results[spec],
+        bisect_id="bisect-test",
+    )
+
+    assert calls == ["gemini@0.59.0", "gemini@0.60.0"]
+    assert outcome.agent_name == "gemini"
+    assert outcome.stop_reason is BisectStop.FIRST_BAD_FOUND
+    assert outcome.last_known_good == "0.59.0"
+    assert outcome.first_bad == "0.60.0"
+    assert store.created[0]["agent"] == "gemini"
+    assert [call["agent"] for call in store.saved] == ["gemini"] * len(store.saved)
+
+
+@pytest.mark.parametrize(
+    ("verdict", "stop"),
+    [
+        (Verdict.WARN, BisectStop.WARN_UNRESOLVED),
+        (Verdict.INCOMPLETE, BisectStop.INCOMPLETE),
+    ],
+)
+def test_gemini_warn_or_incomplete_stops_after_first_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verdict: Verdict, stop: BisectStop
+) -> None:
+    patch_gemini_project(monkeypatch, baseline_version="0.58.0")
+    calls: list[str] = []
+
+    def check(root: Path, spec: str) -> QualificationResult:
+        calls.append(spec)
+        return qualification(spec.split("@", 1)[1], verdict, "check-1")
+
+    outcome = execute_bisect(
+        tmp_path,
+        "gemini@0.61.0",
+        catalog=FakeCatalog(("0.58.0", "0.59.0", "0.60.0", "0.61.0")),
+        summary_store=MemoryStore(),
+        check_executor=check,
+        bisect_id="bisect-test",
+    )
+
+    assert calls == ["gemini@0.59.0"]
+    assert outcome.agent_name == "gemini"
+    assert outcome.first_bad is None
+    assert outcome.stop_reason is stop
+
+
+def test_gemini_all_pass_scans_full_range_and_saves_each_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_gemini_project(monkeypatch, baseline_version="0.58.0")
+    calls: list[str] = []
+    store = MemoryStore()
+
+    def check(root: Path, spec: str) -> QualificationResult:
+        calls.append(spec)
+        return qualification(spec.split("@", 1)[1], Verdict.PASS, "check-1")
+
+    outcome = execute_bisect(
+        tmp_path,
+        "gemini@0.61.0",
+        catalog=FakeCatalog(("0.58.0", "0.60.0", "0.59.0", "0.61.0")),
+        summary_store=store,
+        check_executor=check,
+        bisect_id="bisect-test",
+    )
+
+    assert calls == ["gemini@0.59.0", "gemini@0.60.0", "gemini@0.61.0"]
+    assert outcome.agent_name == "gemini"
+    assert outcome.stop_reason is BisectStop.NO_BAD_FOUND
+    assert outcome.first_bad is None
+    assert outcome.last_known_good == "0.61.0"
+    assert len(store.saved) == 4
+    assert [call["agent"] for call in store.saved] == ["gemini"] * 4

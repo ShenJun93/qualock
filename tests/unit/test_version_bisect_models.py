@@ -1,9 +1,14 @@
 from dataclasses import FrozenInstanceError
+from typing import get_args
 
 import pytest
 
 from qualock.qualification.models import Verdict
-from qualock.version_bisect.models import BisectOutcome, BisectStep, BisectStop
+from qualock.version_bisect.models import BisectAgent, BisectOutcome, BisectStep, BisectStop
+
+
+def test_bisect_agent_supports_gemini() -> None:
+    assert get_args(BisectAgent) == ("codex", "claude", "gemini")
 
 
 def test_models_are_frozen_and_reuse_verdict() -> None:
