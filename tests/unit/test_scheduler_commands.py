@@ -216,6 +216,66 @@ def test_enable_accepts_claude_monitor_preflight(
     assert events == ["preflight", "probe", "load", "save", "install", "inspect"]
 
 
+def test_enable_accepts_gemini_monitor_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    backend = FakeBackend(events, final_state=NativeScheduleState.MATCHING)
+    store = MemoryRegistrationStore(events)
+    monkeypatch.setattr(
+        "qualock.scheduler.commands.monitor_preflight",
+        lambda root: (
+            events.append("preflight")
+            or MonitorPreflight("gemini", "0.59.0", "f" * 64)
+        ),
+    )
+
+    outcome = enable_schedule(
+        tmp_path,
+        backend=backend,
+        store=store,
+        executable=existing_python(tmp_path),
+        home=tmp_path,
+        environ={},
+        now=lambda: datetime(2026, 9, 10, tzinfo=UTC),
+    )
+
+    assert outcome.status is ScheduleStatus.ENABLED
+    assert events == ["preflight", "probe", "load", "save", "install", "inspect"]
+
+
+def test_enable_does_not_persist_gemini_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = FakeBackend([])
+    store = MemoryRegistrationStore([])
+    monkeypatch.setattr(
+        "qualock.scheduler.commands.monitor_preflight",
+        lambda root: MonitorPreflight("gemini", "0.59.0", "f" * 64),
+    )
+
+    outcome = enable_schedule(
+        tmp_path,
+        backend=backend,
+        store=store,
+        executable=existing_python(tmp_path),
+        home=tmp_path,
+        environ={
+            "PATH": "/bin",
+            "GEMINI_API_KEY": "sentinel-key",
+            "QUALOCK_GEMINI_API_KEY": "sentinel-key-2",
+        },
+    )
+
+    assert outcome.registration is not None
+    dumped = outcome.registration.model_dump()
+    assert "GEMINI_API_KEY" not in dumped
+    assert "QUALOCK_GEMINI_API_KEY" not in dumped
+    dumped_json = outcome.registration.model_dump_json()
+    assert "GEMINI_API_KEY" not in dumped_json
+    assert "sentinel-key" not in dumped_json
+    assert "sentinel-key-2" not in dumped_json
+    assert outcome.registration.path_env == "/bin"
+
+
 def test_enable_antigravity_preflight_failure_prevents_native_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
