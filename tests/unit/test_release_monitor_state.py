@@ -80,6 +80,27 @@ def test_terminal_state_round_trips_atomically(tmp_path: Path, verdict: Terminal
     assert list(path.parent.glob(f".{path.name}.*.tmp")) == []
 
 
+def test_monitor_state_round_trips_gemini() -> None:
+    state = sample_state(agent="gemini")
+    assert MonitorState.model_validate_json(state.model_dump_json()).agent == "gemini"
+
+
+def test_gemini_state_round_trips_without_schema_change(tmp_path: Path) -> None:
+    store = FileMonitorStateStore(base_dir=tmp_path / "state")
+    state = sample_state(agent="gemini")
+
+    store.save(tmp_path / "project", state)
+    loaded, warning = store.load(tmp_path / "project")
+    payload = json.loads(
+        store.path_for(tmp_path / "project").read_text(encoding="utf-8")
+    )
+
+    assert warning is None
+    assert loaded == state
+    assert payload["schema_version"] == 1
+    assert payload["agent"] == "gemini"
+
+
 def test_claude_state_round_trips_without_schema_change(tmp_path: Path) -> None:
     store = FileMonitorStateStore(base_dir=tmp_path / "state")
     state = sample_state(agent="claude")
