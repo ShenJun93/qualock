@@ -49,6 +49,7 @@ _MISSING_REPORT_DESCRIPTION = "reporter could not obtain a qualification report"
 _AGENT_DISPLAY_NAMES: dict[PrAgent, str] = {
     "codex": "Codex",
     "claude": "Claude Code",
+    "gemini": "Gemini CLI",
 }
 
 

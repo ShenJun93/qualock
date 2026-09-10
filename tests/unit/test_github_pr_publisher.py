@@ -731,6 +731,13 @@ def test_render_pr_comment_shows_claude_display_name() -> None:
     assert "- Agent: Claude Code" in body
 
 
+def test_render_pr_comment_shows_gemini_display_name() -> None:
+    context = context_fixture(agent="gemini")
+    report = report_fixture(context, agent="gemini")
+    body = render_pr_comment(context, report, {})
+    assert "- Agent: Gemini CLI" in body
+
+
 def test_render_pr_comment_omits_agent_line_when_agent_is_none() -> None:
     context = context_fixture(agent=None)
     report = report_fixture(context, agent=None)

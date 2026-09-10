@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from qualock.qualification.models import Verdict
 
-PrAgent = Literal["codex", "claude"]
+PrAgent = Literal["codex", "claude", "gemini"]
 
 
 class PrClassification(str, Enum):

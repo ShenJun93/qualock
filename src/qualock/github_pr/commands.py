@@ -9,8 +9,11 @@ from pydantic import ValidationError
 
 import qualock
 from qualock.agents.claude_resolver import ClaudeResolver
+from qualock.agents.gemini_resolver import GeminiResolver
+from qualock.agents.orchestration import orchestration_capabilities
 from qualock.agents.releases import default_agent_cache_root
 from qualock.agents.resolver import CodexResolver
+from qualock.agents.support_integrity import agent_support_fingerprint
 from qualock.baseline.io import BaselineStaleError, assert_suite_fresh, read_baseline_lock
 from qualock.baseline.models import BaselineLock
 from qualock.canary.loader import CanaryLoadError
@@ -58,6 +61,7 @@ class CandidateRequest:
     agent_name: PrAgent
     version: str
     binary_sha256: str
+    support_sha256: str | None = None
 
 
 def _trusted_pr_agent(root: Path) -> PrAgent:
@@ -76,11 +80,23 @@ def _trusted_pr_agent(root: Path) -> PrAgent:
         raise BaselineStaleError("trusted config and baseline agent identity do not match")
 
     agent = trusted.agent.name
+    if not orchestration_capabilities(agent).github_pr:
+        raise UnsupportedPrAgentError(f"unsupported trusted agent: {agent}")
+
+    pr_agent: PrAgent
     if agent == "codex":
-        return "codex"
-    if agent == "claude":
-        return "claude"
-    raise UnsupportedPrAgentError(f"unsupported trusted agent: {agent}")
+        pr_agent = "codex"
+    elif agent == "claude":
+        pr_agent = "claude"
+    else:
+        pr_agent = "gemini"
+    if pr_agent == "gemini":
+        support = trusted.agent.support_sha256
+        if support is None or not _SHA256_RE.fullmatch(support):
+            raise BaselineStaleError(
+                "trusted Gemini baseline is missing a valid runtime support fingerprint"
+            )
+    return pr_agent
 
 
 def validate_proposed_lock(root: Path, raw: bytes) -> CandidateRequest:
@@ -141,10 +157,21 @@ def validate_proposed_lock(root: Path, raw: bytes) -> CandidateRequest:
     if not _SHA256_RE.fullmatch(proposed.agent.binary_sha256):
         raise PrValidationError("candidate binary sha256 must be exactly lowercase 64-hex")
 
+    support_sha256: str | None = None
+    if trusted_agent == "gemini":
+        if proposed.agent.support_sha256 is None or not _SHA256_RE.fullmatch(
+            proposed.agent.support_sha256
+        ):
+            raise PrValidationError(
+                "candidate support sha256 must be exactly lowercase 64-hex"
+            )
+        support_sha256 = proposed.agent.support_sha256
+
     return CandidateRequest(
         agent_name=trusted_agent,
         version=proposed.agent.version,
         binary_sha256=proposed.agent.binary_sha256,
+        support_sha256=support_sha256,
     )
 
 
@@ -154,6 +181,8 @@ def _default_pr_resolver(agent_name: PrAgent) -> Resolver:
         return CodexResolver(cache)
     if agent_name == "claude":
         return ClaudeResolver(cache)
+    if agent_name == "gemini":
+        return GeminiResolver(cache)
     raise UnsupportedPrAgentError(f"unsupported PR qualification agent: {agent_name}")
 
 
@@ -275,6 +304,12 @@ def qualify_prepared_pr(
         resolved = active_resolver.resolve(candidate.version)
         if resolved.name != candidate.agent_name or resolved.sha256 != candidate.binary_sha256:
             raise PrValidationError("resolved agent binary does not match trusted candidate")
+        if candidate.agent_name == "gemini":
+            observed_support = agent_support_fingerprint(resolved)
+            if observed_support is None or observed_support != candidate.support_sha256:
+                raise PrValidationError(
+                    "resolved Gemini runtime support does not match trusted candidate"
+                )
         result = check_executor(
             root,
             f"{candidate.agent_name}@{candidate.version}",

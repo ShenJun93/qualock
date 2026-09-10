@@ -9,12 +9,14 @@ import pytest
 import yaml
 
 import qualock
-from qualock.agents.base import AgentBinary
+from qualock.agents.base import AgentBinary, AgentSupportBinary
 from qualock.agents.claude_resolver import ClaudeResolver
+from qualock.agents.gemini_resolver import GeminiResolver
 from qualock.agents.resolver import CodexResolver
+from qualock.agents.support_integrity import agent_support_fingerprint
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
-from qualock.config.models import AgentConfig, QualockConfig
+from qualock.config.models import AgentConfig, ModelConfig, QualockConfig
 from qualock.github_pr import commands
 from qualock.github_pr.commands import (
     CandidateRequest,
@@ -81,7 +83,12 @@ def _write_trusted_project(root: Path, *, agent: str = "codex") -> None:
     project = root / ".qualock"
     (project / "canaries").mkdir(parents=True)
     (project / "results").mkdir()
-    config = QualockConfig(agent=AgentConfig(name=agent))
+    model = (
+        ModelConfig(id="gemini-2.5-pro", reasoning_effort="provider-default")
+        if agent == "gemini"
+        else ModelConfig()
+    )
+    config = QualockConfig(agent=AgentConfig(name=agent), model=model)
     (project / "config.yaml").write_text(
         yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False),
         encoding="utf-8",
@@ -114,12 +121,21 @@ critical: true
     )
 
 
-def _build_trusted_lock(root: Path, *, agent: str, version: str, sha: str = "b" * 64) -> BaselineLock:
+def _build_trusted_lock(
+    root: Path,
+    *,
+    agent: str,
+    version: str,
+    sha: str = "b" * 64,
+    support_sha256: str | None = None,
+) -> BaselineLock:
     config, canaries = load_project(root)
     return BaselineLock(
         schema_version=1,
         created_at="2026-09-01T00:00:00+00:00",
-        agent=AgentPin(name=agent, version=version, binary_sha256=sha),
+        agent=AgentPin(
+            name=agent, version=version, binary_sha256=sha, support_sha256=support_sha256
+        ),
         model=ModelPin(
             id=config.model.id,
             snapshot=config.model.snapshot,
@@ -138,9 +154,12 @@ def _setup_trusted_project(
     config_agent: str,
     baseline_agent: str,
     trusted_version: str = _TRUSTED_VERSION,
+    support_sha256: str | None = None,
 ) -> None:
     _write_trusted_project(root, agent=config_agent)
-    lock = _build_trusted_lock(root, agent=baseline_agent, version=trusted_version)
+    lock = _build_trusted_lock(
+        root, agent=baseline_agent, version=trusted_version, support_sha256=support_sha256
+    )
     write_baseline_lock(project_dir(root) / "baseline.lock", lock)
 
 
@@ -150,6 +169,7 @@ class ProjectFixture:
     agent: str = "codex"
     trusted_version: str = _TRUSTED_VERSION
     candidate_version: str = _DEFAULT_CANDIDATE_VERSION
+    trusted_support_sha256: str | None = None
     resolver: RecordingResolver = field(init=False)
 
     def __post_init__(self) -> None:
@@ -159,6 +179,7 @@ class ProjectFixture:
             config_agent=self.agent,
             baseline_agent=self.agent,
             trusted_version=self.trusted_version,
+            support_sha256=self.trusted_support_sha256,
         )
 
     def proposed_lock_json(self, **overrides: Any) -> bytes:
@@ -172,6 +193,7 @@ class ProjectFixture:
                 name=overrides.get("agent_name", self.agent),
                 version=candidate_version,
                 binary_sha256=overrides.get("binary_sha256", "a" * 64),
+                support_sha256=overrides.get("support_sha256"),
             ),
             model=ModelPin(
                 id=overrides.get("model_id", config.model.id),
@@ -197,6 +219,52 @@ def project_fixture(tmp_path: Path) -> ProjectFixture:
 def claude_project_fixture(tmp_path: Path) -> ProjectFixture:
     return ProjectFixture(
         root=tmp_path, agent="claude", trusted_version="2.1.200", candidate_version="2.1.263"
+    )
+
+
+_GEMINI_TRUSTED_VERSION = "0.58.0"
+_GEMINI_CANDIDATE_VERSION = "0.59.0"
+_GEMINI_TRUSTED_SUPPORT_SHA = "c" * 64
+
+
+@pytest.fixture
+def gemini_project_fixture(tmp_path: Path) -> ProjectFixture:
+    return ProjectFixture(
+        root=tmp_path,
+        agent="gemini",
+        trusted_version=_GEMINI_TRUSTED_VERSION,
+        candidate_version=_GEMINI_CANDIDATE_VERSION,
+        trusted_support_sha256=_GEMINI_TRUSTED_SUPPORT_SHA,
+    )
+
+
+def _gemini_binary(
+    version: str, *, binary_sha256: str = "a" * 64, support_item_sha256: str = "e" * 64
+) -> AgentBinary:
+    return AgentBinary(
+        name="gemini",
+        version=version,
+        path=Path(f"/fake/{version}/gemini"),
+        sha256=binary_sha256,
+        support_binaries=(
+            AgentSupportBinary(
+                name="node",
+                path=Path("/fake/gemini-support/node"),
+                sha256=support_item_sha256,
+                container_path="/opt/qualock/support/node",
+            ),
+        ),
+    )
+
+
+def _gemini_binary_without_support(
+    version: str, *, binary_sha256: str = "a" * 64
+) -> AgentBinary:
+    return AgentBinary(
+        name="gemini",
+        version=version,
+        path=Path(f"/fake/{version}/gemini"),
+        sha256=binary_sha256,
     )
 
 
@@ -265,6 +333,68 @@ def test_trusted_pr_agent_rejects_invalid_trusted_version(tmp_path: Path) -> Non
     write_baseline_lock(project_dir(tmp_path) / "baseline.lock", lock)
     with pytest.raises(BaselineStaleError):
         _trusted_pr_agent(tmp_path)
+
+
+# --- trusted Gemini runtime support identity ---------------------------------
+
+
+def test_trusted_pr_agent_returns_gemini_with_valid_support(tmp_path: Path) -> None:
+    _setup_trusted_project(
+        tmp_path,
+        config_agent="gemini",
+        baseline_agent="gemini",
+        trusted_version=_GEMINI_TRUSTED_VERSION,
+        support_sha256=_GEMINI_TRUSTED_SUPPORT_SHA,
+    )
+    assert _trusted_pr_agent(tmp_path) == "gemini"
+
+
+def test_trusted_pr_agent_rejects_gemini_missing_support(tmp_path: Path) -> None:
+    _setup_trusted_project(
+        tmp_path,
+        config_agent="gemini",
+        baseline_agent="gemini",
+        trusted_version=_GEMINI_TRUSTED_VERSION,
+        support_sha256=None,
+    )
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "support_sha256",
+    ["C" * 64, "g" * 64, "c" * 63, "c" * 65, "not-a-sha-at-all"],
+)
+def test_trusted_pr_agent_rejects_gemini_malformed_support(
+    tmp_path: Path, support_sha256: str
+) -> None:
+    _setup_trusted_project(
+        tmp_path,
+        config_agent="gemini",
+        baseline_agent="gemini",
+        trusted_version=_GEMINI_TRUSTED_VERSION,
+        support_sha256=support_sha256,
+    )
+    with pytest.raises(BaselineStaleError):
+        _trusted_pr_agent(tmp_path)
+
+
+def test_trusted_pr_agent_codex_null_support_remains_valid(tmp_path: Path) -> None:
+    _setup_trusted_project(
+        tmp_path, config_agent="codex", baseline_agent="codex", support_sha256=None
+    )
+    assert _trusted_pr_agent(tmp_path) == "codex"
+
+
+def test_trusted_pr_agent_claude_null_support_remains_valid(tmp_path: Path) -> None:
+    _setup_trusted_project(
+        tmp_path,
+        config_agent="claude",
+        baseline_agent="claude",
+        trusted_version="2.1.200",
+        support_sha256=None,
+    )
+    assert _trusted_pr_agent(tmp_path) == "claude"
 
 
 # --- proposed-lock validation -----------------------------------------------
@@ -411,6 +541,44 @@ def test_valid_claude_proposed_lock_is_accepted(tmp_path: Path) -> None:
         agent_name="claude",
         version="2.1.263",
         binary_sha256="a" * 64,
+    )
+
+
+# --- proposed Gemini runtime support identity --------------------------------
+
+
+def test_proposed_gemini_lock_missing_support_is_rejected(
+    gemini_project_fixture: ProjectFixture,
+) -> None:
+    raw = gemini_project_fixture.proposed_lock_json(support_sha256=None)
+    with pytest.raises(PrValidationError):
+        validate_proposed_lock(gemini_project_fixture.root, raw)
+
+
+@pytest.mark.parametrize(
+    "support_sha256",
+    ["E" * 64, "g" * 64, "e" * 63, "e" * 65, "not-a-sha-at-all"],
+)
+def test_proposed_gemini_lock_malformed_support_is_rejected(
+    gemini_project_fixture: ProjectFixture, support_sha256: str
+) -> None:
+    raw = gemini_project_fixture.proposed_lock_json(support_sha256=support_sha256)
+    with pytest.raises(PrValidationError):
+        validate_proposed_lock(gemini_project_fixture.root, raw)
+
+
+def test_valid_gemini_proposed_lock_is_accepted(
+    gemini_project_fixture: ProjectFixture,
+) -> None:
+    raw = gemini_project_fixture.proposed_lock_json(
+        binary_sha256="a" * 64, support_sha256="e" * 64
+    )
+    candidate = validate_proposed_lock(gemini_project_fixture.root, raw)
+    assert candidate == CandidateRequest(
+        agent_name="gemini",
+        version=_GEMINI_CANDIDATE_VERSION,
+        binary_sha256="a" * 64,
+        support_sha256="e" * 64,
     )
 
 
@@ -1064,6 +1232,17 @@ def test_default_pr_resolver_builds_claude_resolver_with_shared_cache(
     assert resolver.cache_root == tmp_path
 
 
+def test_default_pr_resolver_builds_gemini_resolver_with_shared_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(commands, "default_agent_cache_root", lambda: tmp_path)
+
+    resolver = commands._default_pr_resolver("gemini")
+
+    assert isinstance(resolver, GeminiResolver)
+    assert resolver.cache_root == tmp_path
+
+
 def test_commands_module_never_imports_or_references_antigravity_or_agy() -> None:
     source = Path(commands.__file__).read_text(encoding="utf-8")
     for forbidden in ("AntigravityResolver", "AntigravityAdapter", "agy"):
@@ -1325,6 +1504,136 @@ def test_malformed_proposed_lock_with_missing_credential_is_invalid_proposed_loc
     assert report.verdict is PrReportVerdict.INCOMPLETE
     assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
     assert project_fixture.resolver.resolve_calls == []
+
+
+# --- Gemini candidate resolution identity ------------------------------------
+
+_GEMINI_RESOLVED_SUPPORT_FINGERPRINT = agent_support_fingerprint(
+    _gemini_binary(_GEMINI_CANDIDATE_VERSION)
+)
+
+
+def _gemini_proposed_raw(fixture: ProjectFixture, **overrides: Any) -> bytes:
+    overrides.setdefault("binary_sha256", "a" * 64)
+    overrides.setdefault("support_sha256", _GEMINI_RESOLVED_SUPPORT_FINGERPRINT)
+    return fixture.proposed_lock_json(**overrides)
+
+
+def test_gemini_missing_credential_is_credential_unavailable_without_resolver_or_check_calls(
+    gemini_project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="gemini")
+    raw = _gemini_proposed_raw(gemini_project_fixture)
+    resolver = FakeResolver(error=AssertionError("resolver must not run"))
+
+    report = qualify_prepared_pr(
+        gemini_project_fixture.root,
+        context,
+        raw,
+        credential_available=False,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.CREDENTIAL_UNAVAILABLE in report.reason_codes
+    assert report.credential_unavailable is True
+    assert resolver.resolve_calls == []
+
+
+def test_gemini_candidate_binary_sha_mismatch_fails_before_check_executor(
+    gemini_project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="gemini")
+    raw = _gemini_proposed_raw(gemini_project_fixture)
+    resolver = FakeResolver(_gemini_binary(_GEMINI_CANDIDATE_VERSION, binary_sha256="f" * 64))
+
+    report = qualify_prepared_pr(
+        gemini_project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert resolver.resolve_calls == [_GEMINI_CANDIDATE_VERSION]
+
+
+def test_gemini_candidate_missing_support_fingerprint_fails_before_check_executor(
+    gemini_project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="gemini")
+    raw = _gemini_proposed_raw(gemini_project_fixture)
+    resolver = FakeResolver(_gemini_binary_without_support(_GEMINI_CANDIDATE_VERSION))
+
+    report = qualify_prepared_pr(
+        gemini_project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert resolver.resolve_calls == [_GEMINI_CANDIDATE_VERSION]
+
+
+def test_gemini_candidate_support_mismatch_fails_before_check_executor(
+    gemini_project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="gemini")
+    raw = _gemini_proposed_raw(gemini_project_fixture)
+    resolver = FakeResolver(
+        _gemini_binary(_GEMINI_CANDIDATE_VERSION, support_item_sha256="f" * 64)
+    )
+
+    report = qualify_prepared_pr(
+        gemini_project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert resolver.resolve_calls == [_GEMINI_CANDIDATE_VERSION]
+
+
+def test_gemini_candidate_exact_binary_and_support_match_calls_check_executor_once(
+    gemini_project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="gemini")
+    raw = _gemini_proposed_raw(gemini_project_fixture)
+    resolver = FakeResolver(_gemini_binary(_GEMINI_CANDIDATE_VERSION))
+    calls: list[tuple[Path, str, Any]] = []
+
+    def check_executor(
+        root: Path, candidate_spec: str, *, resolver: Any = None
+    ) -> QualificationResult:
+        calls.append((root, candidate_spec, resolver))
+        return _qualification_result(Verdict.PASS)
+
+    report = qualify_prepared_pr(
+        gemini_project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=check_executor,
+    )
+
+    assert resolver.resolve_calls == [_GEMINI_CANDIDATE_VERSION]
+    assert calls == [
+        (gemini_project_fixture.root, f"gemini@{_GEMINI_CANDIDATE_VERSION}", resolver)
+    ]
+    assert report.verdict is PrReportVerdict.PASS
 
 
 # --- artifact write failure propagation --------------------------------------
