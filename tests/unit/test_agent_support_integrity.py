@@ -48,7 +48,7 @@ def test_support_tree_rejects_nested_symlink(tmp_path: Path) -> None:
         fingerprint_support_tree(root)
 
 
-def test_support_tree_rejects_symlink_root_and_non_regular_node(tmp_path: Path) -> None:
+def test_support_tree_rejects_symlink_root(tmp_path: Path) -> None:
     real_root = tmp_path / "real-package"
     real_root.mkdir()
     linked_root = tmp_path / "linked-package"
@@ -57,10 +57,15 @@ def test_support_tree_rejects_symlink_root_and_non_regular_node(tmp_path: Path) 
     with pytest.raises(AgentSupportIntegrityError, match="symlink"):
         fingerprint_support_tree(linked_root)
 
-    fifo = real_root / "runtime.fifo"
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_support_tree_rejects_non_regular_node(tmp_path: Path) -> None:
+    root = tmp_path / "package"
+    root.mkdir()
+    fifo = root / "runtime.fifo"
     os.mkfifo(fifo)
     with pytest.raises(AgentSupportIntegrityError, match="non-regular"):
-        fingerprint_support_tree(real_root)
+        fingerprint_support_tree(root)
 
 
 def test_agent_support_fingerprint_is_sorted_and_none_only_when_empty(
@@ -198,6 +203,10 @@ def test_verify_agent_supports_rejects_overlapping_container_destinations(
         verify_agent_supports(binary)
 
 
+@pytest.mark.skipif(
+    not support_integrity_module._HAS_POSIX_DIR_FD,
+    reason="requires POSIX dir_fd/O_NOFOLLOW traversal",
+)
 def test_support_tree_directory_swap_to_symlink_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -236,6 +245,7 @@ def test_support_tree_directory_swap_to_symlink_fails_closed(
     assert swapped is True
 
 
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX byte-path semantics")
 def test_support_tree_handles_undecodable_posix_filename(tmp_path: Path) -> None:
     root = tmp_path / "package"
     root.mkdir()
