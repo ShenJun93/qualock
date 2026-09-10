@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-10
 **Base:** `main@1d586cda71144d11df88885cdafb86300c616e93`
-**Status:** Approved design; implementation planning pending
+**Status:** Approved design; implementation plan ready
 
 ## Purpose
 
@@ -69,12 +69,14 @@ Exit semantics:
 - `3`: invalid input, malformed bundle, integrity/provenance mismatch, or unsupported evidence schema;
 - existing CLI framework errors remain unchanged for parser/internal failures.
 
-A verified `BLOCK`, `WARN`, or `INCOMPLETE` evidence bundle still exits `0`: verification success means the bundle is authentic-by-hash and internally consistent, not that the candidate passed.
+A verified `BLOCK`, `WARN`, or `INCOMPLETE` evidence bundle still exits `0`: verification success means the bundle's contents match its manifest hashes, its declared provenance is internally consistent, and its stored quality result matches recomputation; it does not authenticate the publisher/origin and does not mean the candidate passed.
 ## Prospective local provenance sidecar
 
 Current `report.json` does not persist the resolved candidate executable SHA-256 or Gemini candidate support-tree fingerprint. Batch #45 therefore adds a new evidence-only local sidecar, `.qualock/results/<qualification-id>/evidence-provenance.json`, schema version `1`, written for new `qualock check` results after successful resolution/execution and before the result is considered exportable. Existing artifact schemas are unchanged.
 
-The sidecar records only publication-safe structured provenance: qualification ID; exact QuaLock version; canonical baseline-lock SHA-256; baseline and candidate resolved agent identities `{name, version, binary_sha256, support_sha256}`; model pin; suite/config fingerprints; canary ID/critical/repository URL/base SHA/full-definition fingerprint; prepared-image digest; expected repetitions; and the canonical run-order digest. It contains no raw events, prompts, commands, grader paths/content, environment, or credentials.
+The sidecar records only publication-safe structured provenance: qualification ID; `run_qualock_version` (the exact `qualock.__version__` executing the check); canonical baseline-lock SHA-256; baseline and candidate resolved agent identities `{name, version, binary_sha256, support_sha256}`; model pin; suite/config fingerprints; canary ID/critical/repository URL SHA-256/base SHA/full-definition fingerprint; prepared-image digest; expected repetitions; and the canonical run-order digest. It contains no raw repository locator, raw events, prompts, commands, grader paths/content, environment, or credentials.
+
+For each canary, `repository_url_sha256 = sha256_canonical(canary.repository.url)` binds the exact configured repository locator without copying that locator into the prospective sidecar. This prevents a credential-bearing or otherwise private repository string from being persisted as publication metadata before export.
 
 The sidecar must be derived from the exact resolved binaries and loaded canaries used by that check, not reconstructed later. Gemini requires support fingerprints on both baseline and candidate identities. For non-Gemini agents the existing nullable support field remains valid. Sidecar write failure must not mutate the already-computed quality verdict or delete its local report artifacts, but the `qualock check` command fails with the existing command/precondition exit path (`3`) and must not render a successful safety recommendation. This prevents an apparently successful check from being mistaken for portable evidence when provenance persistence failed.
 
@@ -97,11 +99,13 @@ V1 is a deterministic directory, not tar/zip:
 
 No README or arbitrary prose is part of the verified payload in V1. Case-study prose lives beside the bundle in `docs/evidence/...`, not inside it. This keeps the inventory exact: every regular file in the bundle except `manifest.json` must appear exactly once in the manifest inventory, and no additional file is allowed.
 
-`report.json` is a normalized public evidence projection, not a byte copy of the local report. It preserves the fields needed to recompute quality results but replaces every raw attempt `events_jsonl` value with a lowercase SHA-256 digest plus derived non-sensitive integrity counters already represented by the attempt result. Raw transcripts are never exported.
+`report.json` is a normalized public evidence projection, not a byte copy of the local report. Each public attempt contains exactly `side`, `repetition`, `success`, `valid`, `duration_ms`, normalized `usage` (`input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens`, `observed`), and `events_sha256 = sha256(raw_events_jsonl.encode("utf-8")).hexdigest()`. Raw `events_jsonl`, free-form `invalid_reason`, and `protected_path_violations` are never exported because the latter two can contain exception/path text and are not qualification-policy inputs. Execution-level aggregate counts and policy verdict/reason fields may be present only in their normalized policy-derived form and are independently recomputed by the verifier.
 
 `qualification.json` is normalized from the existing local metadata and must agree with the report on qualification ID, versions, run order, verdict, budget/completeness values, attempt count, and observed-token summary.
 
-`baseline.lock` is a normalized copy of the trusted baseline lock used by the check. `provenance.json` is the normalized public copy of the run-time evidence sidecar and binds both baseline and candidate resolved executable/runtime identities. `canaries.json` is a public metadata projection containing canary ID, critical flag, declared repository URL, declared base SHA, prepared image digest, and a fingerprint binding the original canary definition. It must not contain setup commands, task text, grader paths/content, protected source, or hidden grader material.
+`baseline.lock` is a normalized copy of the trusted baseline lock used by the check. `provenance.json` is the normalized public copy of the run-time evidence sidecar and binds both baseline and candidate resolved executable/runtime identities. `canaries.json` is a public metadata projection containing canary ID, critical flag, a publication-safe declared repository URL, `repository_url_sha256`, declared base SHA, prepared image digest, and a fingerprint binding the original canary definition. It must not contain setup commands, task text, grader paths/content, protected source, or hidden grader material.
+
+A V1 public repository URL is intentionally narrow: it is at most 2048 UTF-8 bytes; has scheme `https` or `http`; has a non-empty host; has no username/password userinfo, query, fragment, or ASCII control character. Local paths, `file:` URLs, SSH/SCP locators, and any URL with userinfo/query/fragment are rejected for export with the fixed `unsafe_repository_url` reason. Export never sanitizes or rewrites a repository locator. The public exact URL must hash to the persisted `repository_url_sha256`, so privacy filtering cannot silently change provenance.
 
 `pricing.json` is optional advisory provenance. If present it is hash-bound and structurally validated, but pricing can never change or invalidate a correctly recomputed quality verdict except when the pricing file itself is malformed or contradicts the qualification identity.
 ## Manifest schema v1
@@ -112,7 +116,8 @@ Required top-level fields:
 
 - `schema_version: 1`;
 - `created_at`: export timestamp in UTC ISO-8601;
-- `qualock_version`: exact exporting QuaLock version;
+- `run_qualock_version`: exact QuaLock version recorded prospectively by the check provenance;
+- `exporter_qualock_version`: exact `qualock.__version__` performing this export; it may differ from both `run_qualock_version` and the baseline lock's historical `qualock_version`;
 - `qualification_id`;
 - `baseline_version`, `candidate_version`, and stored `verdict`;
 - `agents`: `{baseline, candidate}`, each `{name, version, binary_sha256, support_sha256}` matching `provenance.json`; baseline also matches the baseline lock, and Gemini requires lowercase 64-hex support digests on both identities while legacy non-Gemini null is allowed;
@@ -123,9 +128,9 @@ Required top-level fields:
 - `canaries`: sorted public provenance records keyed by canary ID;
 - `files`: sorted relative POSIX paths mapped to `{sha256, size_bytes}`.
 
-Each canary manifest record includes: `critical`, repository URL, exact 40-hex `base_sha`, canary-definition fingerprint, prepared-image digest, expected repetitions, baseline valid/success counts, candidate valid/success counts, and stored canary verdict.
+Each canary manifest record includes: `critical`, publication-safe repository URL, `repository_url_sha256`, exact 40-hex `base_sha`, canary-definition fingerprint, prepared-image digest, expected repetitions, baseline valid/success counts, candidate valid/success counts, and stored canary verdict.
 
-Every SHA-256 field is lowercase 64-hex. Prepared image digests retain their `sha256:<64hex>` form. Unknown fields are rejected in V1 so an old verifier cannot silently ignore new security semantics.
+Every SHA-256 field is lowercase 64-hex. Prepared image digests retain their `sha256:<64hex>` form. Unknown fields are rejected in V1 so an old verifier cannot silently ignore new security semantics. Exact V1 input bounds are: `manifest.json` 2 MiB; `report.json` 32 MiB; `qualification.json` 4 MiB; `baseline.lock` 4 MiB; `provenance.json` 8 MiB; `canaries.json` 8 MiB; `pricing.json` 32 MiB; at most 4096 canaries; at most 8192 attempts in one execution; repository URLs at most 2048 UTF-8 bytes; and other qualification/canary/model/version/reason-like text fields at most 4096 UTF-8 bytes.
 ## Export algorithm
 
 Export is intentionally narrower than general project backup.
@@ -134,9 +139,9 @@ Export is intentionally narrower than general project backup.
 2. Parse all three files with strict structural validation and require their IDs, versions, verdict, run order, budgets, and attempt accounting to agree.
 3. Load the current `.qualock/baseline.lock` and current configured canary definitions only to establish trusted identity/provenance. Require suite/config fingerprints to match the lock exactly before export.
 4. Require the report baseline version to equal the lock agent version; require sidecar baseline identity to match the lock exactly and sidecar candidate name/version to match the requested candidate. Validate both executable digests; for Gemini require valid support digests for both sides.
-5. Build public `canaries.json` from loaded canary metadata. Hash the full canonical canary definition for binding, but copy only the publication-safe fields defined above.
+5. Build public `canaries.json` from loaded canary metadata. Hash the full canonical canary definition for binding; require each exact current repository URL to hash to the sidecar's `repository_url_sha256`; then require that exact URL to satisfy the V1 publication-safe URL rule before copying it. Never sanitize or rewrite an unsafe locator; fail export instead.
 6. Match every report execution to exactly one current canary; require critical flags and prepared-image digests to be internally consistent and require paired attempt counts to agree with configured repetitions or explicit incomplete-budget semantics.
-7. Normalize `report.json`, removing raw event streams while replacing each with `events_sha256`; preserve all quality-policy inputs.
+7. Normalize `report.json` using the exact public-attempt whitelist above: hash then discard raw event streams; omit `invalid_reason` and `protected_path_violations`; preserve only policy inputs, non-negative duration/usage accounting, and normalized policy-derived aggregate/verdict fields.
 8. Normalize the sidecar as `provenance.json` plus the other payload files, optionally copy a valid existing pricing sidecar, compute the exact file inventory, then write canonical `manifest.json` last.
 9. Verify the temporary bundle with the same verifier implementation before atomically renaming it to the requested output directory.
 
@@ -159,18 +164,19 @@ Verification is a pure local validation pipeline:
 The verifier returns a structured internal result so terminal rendering and tests do not need to parse prose. It must stop on the first deterministic validation failure category and must never echo raw file contents.
 ## Error model
 
-Evidence-domain failures use a dedicated `EvidenceBundleError` carrying a stable reason category plus a human-readable message. CLI converts it to the existing command/precondition exit path (`3`). Initial V1 categories include malformed manifest, unsafe path, inventory mismatch, digest mismatch, malformed payload, identity mismatch, invalid Gemini support identity, canary provenance mismatch, attempt-layout mismatch, completeness mismatch, and verdict mismatch.
+Evidence-domain failures use a dedicated `EvidenceBundleError` carrying a stable reason category plus a human-readable message. CLI converts it to the existing command/precondition exit path (`3`). Initial V1 categories include malformed manifest, unsafe path, unsafe repository URL, inventory mismatch, digest mismatch, malformed payload, identity mismatch, invalid Gemini support identity, canary provenance mismatch, attempt-layout mismatch, completeness mismatch, and verdict mismatch.
 
 Error messages identify a logical file/field but never interpolate raw event text, credential-like values, or arbitrary JSON payloads.
 
 ## Security and privacy invariants
 
 - Export reads only known QuaLock artifacts and parsed canary/config/baseline metadata through existing loaders; it never recursively copies the project or result directory.
-- Raw `events_jsonl` is hashed then discarded from the public projection.
+- Raw `events_jsonl` is hashed then discarded from the public projection; free-form `invalid_reason` and `protected_path_violations` are discarded rather than redacted or copied.
 - No prompt, task text, setup command, grader command/path/source, protected source snapshot, environment, auth file, token, browser state, or model credential is exported.
+- Prospective provenance stores only `repository_url_sha256`, never the raw repository locator. Export includes the exact locator only after the fixed V1 publication-safe URL check succeeds and its hash matches the sidecar; unsafe locators fail rather than being sanitized.
 - The output path cannot be inside the source qualification directory.
-- Verification never follows links and never opens paths outside the already-validated flat bundle directory.
-- JSON parsing is bounded by explicit file-size limits before decode to avoid trivial memory abuse.
+- Verification never accepts a symlink/reparse entry and never consumes bytes from an opened object that was not obtained through a no-follow handle path. On POSIX, payloads are opened relative to an already-opened directory descriptor with `O_NOFOLLOW` and accepted only after `fstat()` confirms a regular file. On Windows, payloads use `CreateFileW` with `FILE_FLAG_OPEN_REPARSE_POINT`, reject `FILE_ATTRIBUTE_REPARSE_POINT`, and validate the opened final path against the separately opened root handle plus exact filename. If the required primitive is unavailable, verification fails closed with `unsafe_path`; there is no link-following fallback.
+- JSON parsing is bounded by the exact V1 file/collection/string limits above before or during decode/model validation to avoid trivial memory abuse.
 - Canonical JSON and hashing use the existing evidence fingerprint utilities where compatible; one canonicalization implementation is authoritative.
 - Verification is independent of current wall-clock time and network state.
 - Existing local evidence files are never rewritten in place.
@@ -206,8 +212,8 @@ Publication must state the exact scope: it is evidence about the selected versio
 2. Export rejects unknown, baseline-only, malformed, sidecar-less, or stale-project qualifications without creating the destination.
 3. Export creates the exact flat V1 file set and refuses an existing destination.
 4. Export performs no resolver, network, Docker, provider, or project-command work under fakes that fail if called.
-5. Public report contains no raw `events_jsonl`; event digests are stable and correct.
-6. Public canary metadata contains base SHA/repository/critical/prepared-image/fingerprint data but no task/setup/grader/protected-source content.
+5. Public report contains only the fixed public-attempt whitelist; raw `events_jsonl`, free-form `invalid_reason`, and `protected_path_violations` are absent, while event digests are stable and correct.
+6. Public canary metadata contains base SHA/publication-safe repository URL plus its provenance hash/critical/prepared-image/fingerprint data but no task/setup/grader/protected-source content; credential-bearing, local-path, SSH/SCP, query, fragment, and other non-V1 repository locators fail export without destination creation.
 7. Manifest JSON is deterministic/canonical and file inventory ordering is stable.
 8. Manifest binds exact agent/model/baseline/suite/config/run-order identities and exact payload hashes/sizes.
 9. Gemini bundles require valid `support_sha256`; legacy Codex/Claude/Antigravity baseline compatibility remains unchanged where export is otherwise valid.
@@ -227,17 +233,17 @@ Publication must state the exact scope: it is evidence about the selected versio
 Case-study acceptance adds a separate evidence/review checklist after implementation and never weakens these verifier requirements.
 ## Implementation sequence
 
-Implementation should be split into independently reviewable tasks:
+Implementation should be split into independently reviewable tasks in this order:
 
-1. strict evidence-bundle models, canonical serialization, path/inventory validation, and pure verifier primitives;
-2. normalized public report/canary projection and deterministic exporter;
-3. verdict/completeness recomputation using existing pure qualification policy;
-4. `qualock evidence export` / `qualock evidence verify` CLI wiring and terminal rendering;
-5. adversarial security/integrity tests plus full regression gates;
-6. public case-study discovery plan, performed only after verifier delivery;
-7. authorized real execution, bundle export/verification, publication docs, and final case-study review if the selected pair produces qualifying evidence.
+1. prospective `evidence-provenance.json` persistence and stable per-canary fingerprint extraction;
+2. strict evidence-bundle/public-payload models, canonical serialization, and bounded no-follow path/inventory validation;
+3. standalone offline verifier with cross-file binding, completeness checks, and verdict recomputation through the existing pure qualification policy;
+4. normalized public report/canary projection plus deterministic exporter that self-verifies before atomic publication;
+5. `qualock evidence export` / `qualock evidence verify` CLI wiring and standalone export-copy-delete-project-verify E2E;
+6. whole-verifier local/security/CI/delivery gates;
+7. public case-study candidate discovery and an exact no-run execution runbook, performed only after verifier delivery.
 
-Tasks 1–5 are normal local implementation work and must follow strict RED-before-production TDD with a fresh independent reviewer per task. Task 6 is research/planning only. Task 7 has its own explicit authenticated-provider authorization boundary.
+Tasks 1–5 are normal local implementation work and must follow strict RED-before-production TDD with a fresh independent reviewer per task. Task 6 is verification/delivery gating only. Task 7 is research/planning only; authenticated provider execution remains a later candidate-specific plan with its own explicit operator authorization boundary.
 
 ## Review and CI gates
 
