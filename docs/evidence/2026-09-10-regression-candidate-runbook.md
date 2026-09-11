@@ -1,7 +1,7 @@
 # Batch #45 case-study candidate runbook
 
 **Prepared:** 2026-09-11
-**Status:** research and no-run execution contract only; no authenticated provider execution has been authorized or performed
+**Status:** reviewed runbook; first authorized execution stopped during baseline because the provider usage limit was exhausted; candidate was not run; a fresh authorization is required for any later retry
 **Verifier prerequisite:** merged `main@bdf1d5c1a0a4daafa372c6a988bec798a6deb8a2`
 
 ## Decision
@@ -339,9 +339,19 @@ A result is publication-eligible for this selected hypothesis only when the stab
 
 `PASS 3/3 -> 3/3` is explicit no-difference evidence and does **not** close Batch #45. `INCOMPLETE`, invalid attempts, unknown usage, a failed source-isolation audit, or failed bundle verification also do not close it. None of those outcomes authorizes trying rank 2 or rank 3 automatically.
 
+## First authorized execution attempt — quota stop
+
+On 2026-09-11 the operator explicitly authorized the frozen experiment. The candidate-specific execution plan was written before spend, the detached execution worktree was created at `bdf1d5c1a0a4daafa372c6a988bec798a6deb8a2`, and the baseline phase materialized Codex `0.149.1`.
+
+QuaLock started exactly three baseline attempts. All three were invalid (`0/0` valid successes) because Codex returned the same provider usage-limit error before model work began. The CLI reported a retry time of `Sep 15th, 2026 5:10 AM`. Usage was therefore unobserved and the baseline stability/accounting gate failed. This is an infrastructure/quota stop, not behavioral evidence about `0.149.1` or `0.150.1`.
+
+The frozen no-retry contract was honored: Codex `0.150.1` was not materialized, zero candidate attempts were started, no `check-*` artifact exists, and no fallback candidate was tried. The baseline source checkout passed the post-stop isolation audit. Local execution bookkeeping is retained outside the repository under `/home/pacmap/qualock-regression-run-logs/`; raw provider event text is not added to this publication-oriented runbook.
+
+This attempt does **not** satisfy the Batch #45 case-study milestone. Any fresh execution after provider quota becomes available starts again from the three-attempt baseline phase and requires new explicit operator authorization.
+
 ## Authorization boundary
 
-This runbook itself performs no provider execution. A later authorization must explicitly cover all of the following as one bounded experiment:
+The 2026-09-11 authorization was consumed by the stopped baseline attempt. A future authorization must explicitly cover the next bounded experiment:
 
 - scoped first-use materialization of `@openai/codex@0.149.1` and `@openai/codex@0.150.1` under QuaLock's user cache if they are still absent;
 - three authenticated baseline attempts, followed only after the baseline stability/accounting gate by six authenticated paired attempts;
