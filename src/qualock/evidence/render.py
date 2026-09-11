@@ -27,6 +27,11 @@ def render_evidence_verify(bundle: VerifiedEvidenceBundle) -> str:
         "",
         f"Qualification:    {manifest.qualification_id}",
         f"Schema version:   {manifest.schema_version}",
+        (
+            "Transition:       "
+            f"{manifest.baseline_identity.name}@{manifest.baseline_version} -> "
+            f"{manifest.candidate_identity.name}@{manifest.candidate_version}"
+        ),
         f"Baseline version: {manifest.baseline_version}",
         f"Candidate version: {manifest.candidate_version}",
         f"Verdict:          {verdict_str}",

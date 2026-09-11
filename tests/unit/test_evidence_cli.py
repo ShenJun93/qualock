@@ -626,6 +626,7 @@ def test_evidence_verify_success_output_fields(
     assert result.exit_code == 0
     stdout = _strip_ansi(result.stdout)
     assert "q-contract-check" in stdout
+    assert "codex" in stdout
     assert "0.150.0" in stdout
     assert "0.151.0" in stdout
     assert "PASS" in stdout
