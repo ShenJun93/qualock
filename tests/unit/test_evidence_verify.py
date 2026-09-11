@@ -9,6 +9,7 @@ from qualock.evidence.bundle_models import (
     BASELINE_LOCK_FILENAME,
     CANARIES_FILENAME,
     MANIFEST_FILENAME,
+    PRICING_FILENAME,
     PROVENANCE_FILENAME,
     QUALIFICATION_FILENAME,
     REPORT_FILENAME,
@@ -23,9 +24,11 @@ from tests.unit.evidence_bundle_fixtures import (
     BuiltBundle,
     CanaryScenario,
     all_success,
+    attempt_budget_skipped_reason,
     build_bundle,
     load_json,
     replace_payload,
+    token_budget_skipped_reason,
     write_manifest,
 )
 
@@ -785,3 +788,288 @@ def test_parse_pricing_sidecar_payload_rejects_qualification_id_mismatch() -> No
     with pytest.raises(PricingSidecarPayloadError) as exc_info:
         parse_pricing_sidecar_payload(loaded, payload)
     assert exc_info.value.reason == "pricing qualification_id mismatch"
+
+
+# --- Fix round 1: I1 TOCTOU single-read tests -------------------------------------
+
+
+def test_verify_evidence_bundle_opens_each_payload_file_at_most_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qualock.evidence import bundle_io
+
+    built = _build(tmp_path)
+    open_counts: dict[str, int] = {}
+    original_open = bundle_io._open_validated_regular_file
+
+    def spy_open(root: Path, name: str):
+        open_counts[name] = open_counts.get(name, 0) + 1
+        return original_open(root, name)
+
+    monkeypatch.setattr(bundle_io, "_open_validated_regular_file", spy_open)
+    verify_evidence_bundle(built.root)
+
+    for name in _REQUIRED_PAYLOAD_FILENAMES:
+        assert open_counts.get(name, 0) == 1, f"payload {name} was opened {open_counts.get(name, 0)} times"
+    assert open_counts.get(MANIFEST_FILENAME, 0) == 1
+
+
+def test_verify_evidence_bundle_pricing_opened_at_most_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qualock.evidence import bundle_io
+
+    built = _build(tmp_path, include_pricing=True)
+    open_counts: dict[str, int] = {}
+    original_open = bundle_io._open_validated_regular_file
+
+    def spy_open(root: Path, name: str):
+        open_counts[name] = open_counts.get(name, 0) + 1
+        return original_open(root, name)
+
+    monkeypatch.setattr(bundle_io, "_open_validated_regular_file", spy_open)
+    verify_evidence_bundle(built.root)
+
+    assert open_counts.get(PRICING_FILENAME, 0) == 1, f"pricing opened {open_counts.get(PRICING_FILENAME, 0)} times"
+
+
+def test_verify_evidence_bundle_prevents_toctou_double_read_divergence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qualock.evidence import bundle_io
+
+    built = _build(tmp_path)
+    open_counts: dict[str, int] = {}
+    original_open = bundle_io._open_validated_regular_file
+
+    def fail_on_second_open(root: Path, name: str):
+        open_counts[name] = open_counts.get(name, 0) + 1
+        if open_counts[name] > 1:
+            raise AssertionError(f"payload {name} was opened or read a second time!")
+        return original_open(root, name)
+
+    monkeypatch.setattr(bundle_io, "_open_validated_regular_file", fail_on_second_open)
+    bundle = verify_evidence_bundle(built.root)
+    assert bundle.report.verdict is Verdict.PASS
+
+
+# --- Fix round 1: I2 Genuine executor budget-skip reason compatibility tests ------
+
+
+def test_verify_evidence_bundle_accepts_literal_attempt_budget_skipped_reason(tmp_path: Path) -> None:
+    scenarios = (
+        CanaryScenario(canary_id="alpha", critical=True, baseline=all_success(3), candidate=all_success(3)),
+        CanaryScenario(
+            canary_id="beta",
+            critical=False,
+            baseline=("missing", "missing", "missing"),
+            candidate=("missing", "missing", "missing"),
+            reason=attempt_budget_skipped_reason(max_attempts=6, complete_canary_attempts=6),
+        ),
+    )
+    built = _build(tmp_path, scenarios=scenarios, max_attempts=6)
+
+    bundle = verify_evidence_bundle(built.root)
+
+    assert bundle.report.verdict is Verdict.INCOMPLETE
+    assert bundle.report.completeness.all_canaries_complete is False
+    assert bundle.report.executions[1].reason == attempt_budget_skipped_reason(
+        max_attempts=6, complete_canary_attempts=6
+    )
+    assert bundle.report.reasons == (
+        attempt_budget_skipped_reason(max_attempts=6, complete_canary_attempts=6),
+    )
+
+
+def test_verify_evidence_bundle_accepts_literal_token_budget_skipped_reason(tmp_path: Path) -> None:
+    scenarios = (
+        CanaryScenario(canary_id="alpha", critical=True, baseline=all_success(3), candidate=all_success(3)),
+        CanaryScenario(
+            canary_id="beta",
+            critical=False,
+            baseline=("missing", "missing", "missing"),
+            candidate=("missing", "missing", "missing"),
+            reason=token_budget_skipped_reason(max_tokens=100, observed_tokens=204),
+        ),
+    )
+    built = _build(tmp_path, scenarios=scenarios, max_tokens=100)
+
+    bundle = verify_evidence_bundle(built.root)
+
+    assert bundle.report.verdict is Verdict.INCOMPLETE
+    assert bundle.report.executions[1].reason == token_budget_skipped_reason(
+        max_tokens=100, observed_tokens=204
+    )
+    assert bundle.report.reasons == (
+        token_budget_skipped_reason(max_tokens=100, observed_tokens=204),
+    )
+
+
+def test_verify_evidence_bundle_accepts_literal_token_usage_unavailable_skipped_reason(
+    tmp_path: Path,
+) -> None:
+    scenarios = (
+        CanaryScenario(
+            canary_id="alpha",
+            critical=True,
+            baseline=all_success(3),
+            candidate=all_success(3),
+            usage_observed=False,
+        ),
+        CanaryScenario(
+            canary_id="beta",
+            critical=False,
+            baseline=("missing", "missing", "missing"),
+            candidate=("missing", "missing", "missing"),
+            reason=token_budget_skipped_reason(max_tokens=100, observed_tokens=None),
+        ),
+    )
+    built = _build(tmp_path, scenarios=scenarios, max_tokens=100)
+
+    bundle = verify_evidence_bundle(built.root)
+
+    assert bundle.report.verdict is Verdict.INCOMPLETE
+    assert bundle.report.completeness.observed_tokens is None
+    assert bundle.report.executions[1].reason == token_budget_skipped_reason(
+        max_tokens=100, observed_tokens=None
+    )
+
+
+def test_verify_evidence_bundle_rejects_unauthorized_skipped_reason(tmp_path: Path) -> None:
+    scenarios = (
+        CanaryScenario(canary_id="alpha", critical=True, baseline=all_success(3), candidate=all_success(3)),
+        CanaryScenario(
+            canary_id="beta",
+            critical=False,
+            baseline=("missing", "missing", "missing"),
+            candidate=("missing", "missing", "missing"),
+            reason="INCOMPLETE: skipped by arbitrary reason",
+        ),
+    )
+    built = _build(tmp_path, scenarios=scenarios, max_attempts=6)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.VERDICT_MISMATCH
+
+
+# --- Fix round 1: I3 Budget/completeness compatibility tests -----------------------
+
+
+def test_verify_evidence_bundle_rejects_tampered_observed_tokens(tmp_path: Path) -> None:
+    built = _build(tmp_path)
+    for filename in (REPORT_FILENAME, QUALIFICATION_FILENAME):
+        payload = load_json(built.root, filename)
+        payload["completeness"]["observed_tokens"] = 99999
+        replace_payload(built, filename, payload)
+    built.manifest["completeness"]["observed_tokens"] = 99999
+    write_manifest(built.root, built.manifest)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.COMPLETENESS_MISMATCH
+
+
+def test_verify_evidence_bundle_rejects_observed_tokens_non_none_when_usage_unobserved(
+    tmp_path: Path,
+) -> None:
+    scenarios = (
+        CanaryScenario(
+            canary_id="sample",
+            critical=True,
+            baseline=all_success(3),
+            candidate=all_success(3),
+            usage_observed=False,
+        ),
+    )
+    built = _build(tmp_path, scenarios=scenarios, observed_tokens=1234)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.COMPLETENESS_MISMATCH
+
+
+def test_verify_evidence_bundle_rejects_attempts_used_exceeding_max_attempts(tmp_path: Path) -> None:
+    built = _build(tmp_path, max_attempts=2)
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.COMPLETENESS_MISMATCH
+
+
+def test_verify_evidence_bundle_rejects_impossible_huge_max_attempts_on_incomplete_evidence(
+    tmp_path: Path,
+) -> None:
+    scenarios = (
+        CanaryScenario(canary_id="alpha", critical=True, baseline=all_success(3), candidate=all_success(3)),
+        CanaryScenario(
+            canary_id="beta",
+            critical=False,
+            baseline=("missing", "missing", "missing"),
+            candidate=("missing", "missing", "missing"),
+        ),
+    )
+    built = _build(tmp_path, scenarios=scenarios, max_attempts=1_000_000_000)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.COMPLETENESS_MISMATCH
+
+
+def test_verify_evidence_bundle_accepts_incomplete_evidence_when_token_budget_stopping_with_huge_max_attempts(
+    tmp_path: Path,
+) -> None:
+    scenarios = (
+        CanaryScenario(canary_id="alpha", critical=True, baseline=all_success(3), candidate=all_success(3)),
+        CanaryScenario(
+            canary_id="beta",
+            critical=False,
+            baseline=("missing", "missing", "missing"),
+            candidate=("missing", "missing", "missing"),
+            reason=token_budget_skipped_reason(max_tokens=100, observed_tokens=204),
+        ),
+    )
+    built = _build(tmp_path, scenarios=scenarios, max_attempts=1_000_000_000, max_tokens=100)
+
+    bundle = verify_evidence_bundle(built.root)
+    assert bundle.report.verdict is Verdict.INCOMPLETE
+
+
+# --- Fix round 1: I4 Version binding to RuntimeAgentIdentity.version tests ---------
+
+
+def test_verify_evidence_bundle_rejects_baseline_version_mismatch_with_identity(tmp_path: Path) -> None:
+    from qualock.evidence.fingerprint import sha256_canonical
+
+    built = _build(tmp_path)
+    built.manifest["baseline_identity"]["version"] = "9.9.9"
+    baseline_lock = load_json(built.root, BASELINE_LOCK_FILENAME)
+    baseline_lock["agent"]["version"] = "9.9.9"
+    replace_payload(built, BASELINE_LOCK_FILENAME, baseline_lock)
+
+    new_lock_sha = sha256_canonical(baseline_lock)
+    built.manifest["baseline_lock_sha256"] = new_lock_sha
+
+    provenance = load_json(built.root, PROVENANCE_FILENAME)
+    provenance["baseline_identity"]["version"] = "9.9.9"
+    provenance["baseline_lock_sha256"] = new_lock_sha
+    replace_payload(built, PROVENANCE_FILENAME, provenance)
+    write_manifest(built.root, built.manifest)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.IDENTITY_MISMATCH
+    assert exc_info.value.label == "baseline_version"
+
+
+def test_verify_evidence_bundle_rejects_candidate_version_mismatch_with_identity(tmp_path: Path) -> None:
+    built = _build(tmp_path)
+    built.manifest["candidate_identity"]["version"] = "9.9.9"
+    provenance = load_json(built.root, PROVENANCE_FILENAME)
+    provenance["candidate_identity"]["version"] = "9.9.9"
+    replace_payload(built, PROVENANCE_FILENAME, provenance)
+    write_manifest(built.root, built.manifest)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.IDENTITY_MISMATCH
+    assert exc_info.value.label == "candidate_version"

@@ -16,7 +16,9 @@ from typing import Literal
 from qualock.evidence.bundle_io import canonical_json_file_bytes
 from qualock.evidence.bundle_models import MANIFEST_FILENAME
 from qualock.evidence.fingerprint import sha256_canonical
-from qualock.qualification.models import CanaryAggregate
+from qualock.qualification.models import CanaryAggregate, CanaryComparison
+
+_UNSET = object()
 from qualock.qualification.policy import qualify_canary, qualify_suite
 
 AttemptState = Literal["success", "fail", "invalid", "missing"]
@@ -46,24 +48,33 @@ class CanaryScenario:
     repetitions: int = 3
     baseline: tuple[AttemptState, ...] = field(default_factory=lambda: all_success(3))
     candidate: tuple[AttemptState, ...] = field(default_factory=lambda: all_success(3))
+    reason: str | None = None
+    usage_observed: bool = True
 
     def __post_init__(self) -> None:
         if len(self.baseline) != self.repetitions or len(self.candidate) != self.repetitions:
             raise ValueError("scenario attempt states must match repetitions exactly")
 
 
-def _usage_payload(seed: int) -> dict[str, object]:
+def _usage_payload(seed: int, *, observed: bool = True) -> dict[str, object]:
     return {
         "input_tokens": 10 + seed,
         "cached_input_tokens": 1,
         "cache_write_input_tokens": 0,
         "output_tokens": 20 + seed,
         "reasoning_output_tokens": 0,
-        "observed": True,
+        "observed": observed,
     }
 
 
-def _attempt_payload(canary_id: str, side: str, repetition: int, state: AttemptState) -> dict[str, object]:
+def _attempt_payload(
+    canary_id: str,
+    side: str,
+    repetition: int,
+    state: AttemptState,
+    *,
+    usage_observed: bool = True,
+) -> dict[str, object]:
     valid = state in ("success", "fail")
     success = state == "success"
     events_seed = f"{canary_id}:{side}:{repetition}"
@@ -73,18 +84,45 @@ def _attempt_payload(canary_id: str, side: str, repetition: int, state: AttemptS
         "success": success,
         "valid": valid,
         "duration_ms": 1000 + repetition,
-        "usage": _usage_payload(repetition),
+        "usage": _usage_payload(repetition, observed=usage_observed),
         "events_sha256": _sha256_hex(f"events:{events_seed}"),
     }
 
 
-def _side_attempts(canary_id: str, side: str, states: tuple[AttemptState, ...]) -> list[dict[str, object]]:
+def _side_attempts(
+    canary_id: str,
+    side: str,
+    states: tuple[AttemptState, ...],
+    *,
+    usage_observed: bool = True,
+) -> list[dict[str, object]]:
     attempts = []
     for repetition, state in enumerate(states, start=1):
         if state == "missing":
             continue
-        attempts.append(_attempt_payload(canary_id, side, repetition, state))
+        attempts.append(
+            _attempt_payload(canary_id, side, repetition, state, usage_observed=usage_observed)
+        )
     return attempts
+
+
+def attempt_budget_skipped_reason(max_attempts: int, complete_canary_attempts: int) -> str:
+    return (
+        f"INCOMPLETE: skipped by attempt budget (max_attempts={max_attempts}, "
+        f"complete_canary_attempts={complete_canary_attempts})"
+    )
+
+
+def token_budget_skipped_reason(max_tokens: int, observed_tokens: int | None) -> str:
+    if observed_tokens is None:
+        return (
+            "INCOMPLETE: skipped because token usage was unavailable "
+            f"for one or more attempts (max_tokens={max_tokens})"
+        )
+    return (
+        f"INCOMPLETE: skipped by token budget "
+        f"(max_tokens={max_tokens}, observed_tokens={observed_tokens})"
+    )
 
 
 def _aggregate(states: tuple[AttemptState, ...], expected_runs: int) -> CanaryAggregate:
@@ -142,7 +180,7 @@ def build_bundle(
     baseline_lock_qualock_version: str = "0.0.1-legacy",
     max_attempts: int | None = None,
     max_tokens: int | None = None,
-    observed_tokens: int | None = 0,
+    observed_tokens: int | None | object = _UNSET,
     include_pricing: bool = False,
 ) -> BuiltBundle:
     root.mkdir(parents=True, exist_ok=True)
@@ -180,8 +218,18 @@ def build_bundle(
         canary_fingerprint_sha256 = _sha256_hex(f"fingerprint:{scenario.canary_id}")
         prepared_image_digest = "sha256:" + _sha256_hex(f"image:{scenario.canary_id}")
 
-        baseline_attempts = _side_attempts(scenario.canary_id, "baseline", scenario.baseline)
-        candidate_attempts = _side_attempts(scenario.canary_id, "candidate", scenario.candidate)
+        baseline_attempts = _side_attempts(
+            scenario.canary_id,
+            "baseline",
+            scenario.baseline,
+            usage_observed=scenario.usage_observed,
+        )
+        candidate_attempts = _side_attempts(
+            scenario.canary_id,
+            "candidate",
+            scenario.candidate,
+            usage_observed=scenario.usage_observed,
+        )
         for attempt in baseline_attempts:
             run_order.append([scenario.canary_id, "baseline", attempt["repetition"]])
         for attempt in candidate_attempts:
@@ -192,6 +240,16 @@ def build_bundle(
         comparison = qualify_canary(
             scenario.canary_id, baseline_aggregate, candidate_aggregate, critical=scenario.critical
         )
+        if scenario.reason is not None:
+            comparison = CanaryComparison(
+                canary_id=comparison.canary_id,
+                baseline=comparison.baseline,
+                candidate=comparison.candidate,
+                critical=comparison.critical,
+                verdict=comparison.verdict,
+                reason=scenario.reason,
+                baseline_stable=comparison.baseline_stable,
+            )
         comparisons.append(comparison)
 
         canary_records[scenario.canary_id] = {
@@ -253,6 +311,18 @@ def build_bundle(
         len(payload["attempts"]) == 2 * canary_records[payload["canary_id"]]["repetitions"]
         for payload in execution_payloads
     )
+    if observed_tokens is _UNSET:
+        derived_tokens: int | None = 0
+        for payload in execution_payloads:
+            for attempt in payload["attempts"]:
+                if derived_tokens is not None:
+                    usage = attempt["usage"]
+                    if usage["observed"]:
+                        derived_tokens += usage["input_tokens"] + usage["output_tokens"]
+                    else:
+                        derived_tokens = None
+        observed_tokens = derived_tokens
+
     completeness_payload = {
         "attempts_expected": attempts_expected,
         "attempts_used": attempts_used,
