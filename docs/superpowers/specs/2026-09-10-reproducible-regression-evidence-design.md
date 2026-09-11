@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-10
 **Base:** `main@1d586cda71144d11df88885cdafb86300c616e93`
-**Status:** Approved design; implementation plan ready
+**Status:** Verifier delivered; case study pending
 
 ## Purpose
 

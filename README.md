@@ -56,7 +56,7 @@ Core guarantees:
 - web/MCP/protected-path contamination can invalidate an attempt;
 - three-run critical policy is conservative: only `3/3 -> 0/3` hard-blocks by default;
 - token/runtime changes are advisory in v0.1;
-- evidence remains local under `.qualock/results/`.
+- technical evidence remains local under `.qualock/results/` by default; completed checks with Batch #45 provenance can be exported as publication-safe, offline-verifiable evidence bundles.
 
 ## Install for development
 
@@ -144,6 +144,24 @@ Or resolve the current npm release to an exact version before qualification:
 ```bash
 qualock check codex@latest
 ```
+
+### Export and verify portable evidence
+
+A completed qualification created with current QuaLock tooling can be exported as a deterministic, publication-safe evidence directory:
+
+```bash
+qualock evidence export check-... --out evidence-bundle
+```
+
+Copy that directory anywhere and verify it without the original project checkout:
+
+```bash
+qualock evidence verify evidence-bundle
+```
+
+`export` fails closed when required provenance is missing or current project metadata no longer matches the qualification closely enough to produce a trustworthy bundle. It does not rerun the agent. `verify` is offline and read-only: it performs no provider/network access, subprocess or Docker execution, or writes inside the bundle. It checks the file inventory and hashes, cross-file provenance, attempt completeness, and recomputes the qualification verdict from bundled structured evidence.
+
+A successfully verified `PASS`, `WARN`, `BLOCK`, or `INCOMPLETE` bundle exits `0`; verification means the evidence is internally consistent and untampered under the bundle contract, not that the candidate passed. Malformed or tampered bundles exit `3`.
 
 Release monitoring supports Codex, Claude Code, and Gemini CLI. QuaLock discovers the
 latest published npm release for the configured agent and qualifies it
