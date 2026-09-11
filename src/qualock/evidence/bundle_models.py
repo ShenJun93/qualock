@@ -347,11 +347,6 @@ class EvidenceManifest(BaseModel):
         dict[str, BundleFileRecord], Field(max_length=len(REQUIRED_PAYLOAD_FILENAMES) + 1)
     ]
 
-    @model_validator(mode="after")
-    def _require_distinct_versions(self) -> "EvidenceManifest":
-        if self.run_qualock_version == self.exporter_qualock_version:
-            raise ValueError("run_qualock_version and exporter_qualock_version must be distinct")
-        return self
 
     @model_validator(mode="after")
     def _require_gemini_support_fingerprint(self) -> "EvidenceManifest":
