@@ -25,6 +25,11 @@ from qualock.commands import (
     parse_agent_spec,
 )
 from qualock.config.io import ConfigError, write_default_config
+from qualock.evidence.bundle_models import EvidenceBundleError
+from qualock.evidence.export import export_evidence_bundle
+from qualock.evidence.provenance import EvidenceProvenanceError
+from qualock.evidence.render import render_evidence_export, render_evidence_verify
+from qualock.evidence.verify import verify_evidence_bundle
 from qualock.github_pr.commands import prepare_pr, qualify_prepared_pr
 from qualock.github_pr.publisher import (
     GitHubPublishError,
@@ -102,6 +107,15 @@ schedule_app = typer.Typer(no_args_is_help=True, add_completion=False)
 app.add_typer(schedule_app, name="schedule")
 github_app = typer.Typer(no_args_is_help=True, add_completion=False)
 app.add_typer(github_app, name="github")
+evidence_app = typer.Typer(no_args_is_help=True, add_completion=False)
+app.add_typer(evidence_app, name="evidence")
+_EVIDENCE_QUALIFICATION_ID_ARGUMENT = typer.Argument(..., metavar="QUALIFICATION_ID")
+_EVIDENCE_OUT_OPTION = typer.Option(
+    ...,
+    "--out",
+    help="Directory where the evidence bundle will be written.",
+)
+_EVIDENCE_BUNDLE_ARGUMENT = typer.Argument(..., metavar="DIRECTORY")
 console = Console()
 
 
@@ -993,6 +1007,57 @@ def github_report_pr_command(
         del exc
         console.print("GitHub PR report could not be published", markup=False)
         raise typer.Exit(1) from None
+
+
+@evidence_app.command("export")
+def evidence_export_command(
+    qualification_id: str = _EVIDENCE_QUALIFICATION_ID_ARGUMENT,
+    out: Path = _EVIDENCE_OUT_OPTION,
+) -> None:
+    try:
+        exported = export_evidence_bundle(Path.cwd(), qualification_id, out)
+    except (
+        EvidenceBundleError,
+        EvidenceProvenanceError,
+        BaselineStaleError,
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        ValueError,
+    ) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception:  # noqa: BLE001 - unexpected export failures map to stable exit 1
+        console.print("evidence export failed", markup=False)
+        raise typer.Exit(1) from None
+
+    console.print(render_evidence_export(exported), end="", markup=False)
+
+
+@evidence_app.command("verify")
+def evidence_verify_command(
+    bundle: Path = _EVIDENCE_BUNDLE_ARGUMENT,
+) -> None:
+    try:
+        verified = verify_evidence_bundle(bundle)
+    except (
+        EvidenceBundleError,
+        EvidenceProvenanceError,
+        BaselineStaleError,
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        ValueError,
+    ) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception:  # noqa: BLE001 - unexpected verify failures map to stable exit 1
+        console.print("evidence verification failed", markup=False)
+        raise typer.Exit(1) from None
+
+    console.print(render_evidence_verify(verified), end="", markup=False)
 
 
 if __name__ == "__main__":
