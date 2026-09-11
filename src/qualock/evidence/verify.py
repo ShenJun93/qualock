@@ -17,24 +17,17 @@ from pydantic import BaseModel, ValidationError
 from qualock.evidence.bundle_io import (
     inspect_bundle_files,
     read_bounded_regular_file,
-    sha256_regular_file,
 )
 from qualock.evidence.bundle_models import (
     BASELINE_LOCK_FILENAME,
-    BASELINE_LOCK_MAX_BYTES,
     CANARIES_FILENAME,
-    CANARIES_MAX_BYTES,
     FILE_MAX_BYTES,
     MANIFEST_FILENAME,
     MANIFEST_MAX_BYTES,
     PRICING_FILENAME,
-    PRICING_MAX_BYTES,
     PROVENANCE_FILENAME,
-    PROVENANCE_MAX_BYTES,
     QUALIFICATION_FILENAME,
-    QUALIFICATION_MAX_BYTES,
     REPORT_FILENAME,
-    REPORT_MAX_BYTES,
     REQUIRED_PAYLOAD_FILENAMES,
     EvidenceBundleError,
     EvidenceBundleReason,
@@ -52,7 +45,7 @@ from qualock.evidence.fingerprint import sha256_canonical
 from qualock.evidence.provenance import EvidenceProvenance
 from qualock.history.models import HistoricalAttempt, HistoricalExecution, LoadedReport
 from qualock.pricing.sidecar import PricingSidecarPayloadError, parse_pricing_sidecar_payload
-from qualock.qualification.models import CanaryAggregate
+from qualock.qualification.models import CanaryAggregate, CanaryComparison
 from qualock.qualification.policy import qualify_canary, qualify_suite
 
 _VALID_SIDES = frozenset({"baseline", "candidate"})
@@ -70,35 +63,35 @@ def verify_evidence_bundle(root: Path) -> VerifiedEvidenceBundle:
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
     _verify_inventory(names, manifest)
-    _verify_payload_hashes(root, manifest)
+    payload_buffers = _verify_payload_hashes(root, manifest)
 
     report = _parse_model(
         PublicReport,
-        read_bounded_regular_file(root, REPORT_FILENAME, max_bytes=REPORT_MAX_BYTES),
+        payload_buffers[REPORT_FILENAME],
         REPORT_FILENAME,
         EvidenceBundleReason.MALFORMED_PAYLOAD,
     )
     qualification = _parse_model(
         PublicQualification,
-        read_bounded_regular_file(root, QUALIFICATION_FILENAME, max_bytes=QUALIFICATION_MAX_BYTES),
+        payload_buffers[QUALIFICATION_FILENAME],
         QUALIFICATION_FILENAME,
         EvidenceBundleReason.MALFORMED_PAYLOAD,
     )
     baseline_lock = _parse_model(
         PublicBaselineLock,
-        read_bounded_regular_file(root, BASELINE_LOCK_FILENAME, max_bytes=BASELINE_LOCK_MAX_BYTES),
+        payload_buffers[BASELINE_LOCK_FILENAME],
         BASELINE_LOCK_FILENAME,
         EvidenceBundleReason.MALFORMED_PAYLOAD,
     )
     provenance = _parse_model(
         EvidenceProvenance,
-        read_bounded_regular_file(root, PROVENANCE_FILENAME, max_bytes=PROVENANCE_MAX_BYTES),
+        payload_buffers[PROVENANCE_FILENAME],
         PROVENANCE_FILENAME,
         EvidenceBundleReason.MALFORMED_PAYLOAD,
     )
     canaries = _parse_model(
         PublicCanaries,
-        read_bounded_regular_file(root, CANARIES_FILENAME, max_bytes=CANARIES_MAX_BYTES),
+        payload_buffers[CANARIES_FILENAME],
         CANARIES_FILENAME,
         EvidenceBundleReason.MALFORMED_PAYLOAD,
     )
@@ -117,7 +110,7 @@ def verify_evidence_bundle(root: Path) -> VerifiedEvidenceBundle:
     _verify_completeness(report, canaries_by_id)
 
     if PRICING_FILENAME in manifest.files:
-        _verify_pricing(root, report)
+        _verify_pricing(payload_buffers[PRICING_FILENAME], root, report)
 
     return VerifiedEvidenceBundle(
         manifest=manifest,
@@ -156,14 +149,18 @@ def _verify_inventory(names: tuple[str, ...], manifest: EvidenceManifest) -> Non
         raise EvidenceBundleError(EvidenceBundleReason.INVENTORY_MISMATCH, "files")
 
 
-def _verify_payload_hashes(root: Path, manifest: EvidenceManifest) -> None:
+def _verify_payload_hashes(root: Path, manifest: EvidenceManifest) -> dict[str, bytes]:
+    buffers: dict[str, bytes] = {}
     for name, record in manifest.files.items():
         max_bytes = FILE_MAX_BYTES.get(name)
         if max_bytes is None:
             raise EvidenceBundleError(EvidenceBundleReason.INVENTORY_MISMATCH, "files")
-        digest, size = sha256_regular_file(root, name, max_bytes=max_bytes)
-        if digest != record.sha256 or size != record.size_bytes:
+        data = read_bounded_regular_file(root, name, max_bytes=max_bytes)
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != record.sha256 or len(data) != record.size_bytes:
             raise EvidenceBundleError(EvidenceBundleReason.DIGEST_MISMATCH, name)
+        buffers[name] = data
+    return buffers
 
 
 def _require_all_equal(values: Sequence[object], reason: EvidenceBundleReason, label: str) -> None:
@@ -185,12 +182,22 @@ def _verify_global_identities(
         "qualification_id",
     )
     _require_all_equal(
-        [manifest.baseline_version, report.baseline_version, qualification.baseline_version],
+        [
+            manifest.baseline_version,
+            report.baseline_version,
+            qualification.baseline_version,
+            manifest.baseline_identity.version,
+        ],
         EvidenceBundleReason.IDENTITY_MISMATCH,
         "baseline_version",
     )
     _require_all_equal(
-        [manifest.candidate_version, report.candidate_version, qualification.candidate_version],
+        [
+            manifest.candidate_version,
+            report.candidate_version,
+            qualification.candidate_version,
+            manifest.candidate_identity.version,
+        ],
         EvidenceBundleReason.IDENTITY_MISMATCH,
         "candidate_version",
     )
@@ -405,6 +412,30 @@ def _verify_report_executions(
     return aggregates
 
 
+def _budget_skip_reasons(
+    report: PublicReport, canary: PublicCanary, attempts_expected: int
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    completeness = report.completeness
+    if completeness.max_attempts is not None and completeness.max_attempts < attempts_expected:
+        reasons.append(
+            "INCOMPLETE: skipped by attempt budget "
+            f"(max_attempts={completeness.max_attempts}, complete_canary_attempts={2 * canary.repetitions})"
+        )
+    if completeness.max_tokens is not None:
+        if completeness.observed_tokens is None:
+            reasons.append(
+                "INCOMPLETE: skipped because token usage was unavailable "
+                f"for one or more attempts (max_tokens={completeness.max_tokens})"
+            )
+        elif completeness.observed_tokens >= completeness.max_tokens:
+            reasons.append(
+                "INCOMPLETE: skipped by token budget "
+                f"(max_tokens={completeness.max_tokens}, observed_tokens={completeness.observed_tokens})"
+            )
+    return tuple(reasons)
+
+
 def _verify_policy(
     manifest: EvidenceManifest,
     report: PublicReport,
@@ -412,6 +443,7 @@ def _verify_policy(
     canaries_by_id: dict[str, PublicCanary],
     aggregates: dict[str, tuple[CanaryAggregate, CanaryAggregate]],
 ) -> None:
+    attempts_expected = sum(2 * canary.repetitions for canary in canaries_by_id.values())
     comparisons = []
     for execution in report.executions:
         canary = canaries_by_id[execution.canary_id]
@@ -419,12 +451,31 @@ def _verify_policy(
         comparison = qualify_canary(
             execution.canary_id, baseline_aggregate, candidate_aggregate, critical=canary.critical
         )
-        comparisons.append(comparison)
 
-        if execution.verdict != comparison.verdict or execution.reason != comparison.reason:
+        if execution.verdict != comparison.verdict:
             raise EvidenceBundleError(EvidenceBundleReason.VERDICT_MISMATCH, "verdict")
+
+        allowed_reasons: tuple[str, ...] = (comparison.reason,)
+        if not execution.attempts:
+            allowed_reasons += _budget_skip_reasons(report, canary, attempts_expected)
+
+        if execution.reason not in allowed_reasons:
+            raise EvidenceBundleError(EvidenceBundleReason.VERDICT_MISMATCH, "verdict")
+
         if manifest.canaries[execution.canary_id].verdict != comparison.verdict:
             raise EvidenceBundleError(EvidenceBundleReason.VERDICT_MISMATCH, "verdict")
+
+        if execution.reason != comparison.reason:
+            comparison = CanaryComparison(
+                canary_id=comparison.canary_id,
+                baseline=comparison.baseline,
+                candidate=comparison.candidate,
+                critical=comparison.critical,
+                verdict=comparison.verdict,
+                reason=execution.reason,
+                baseline_stable=comparison.baseline_stable,
+            )
+        comparisons.append(comparison)
 
     suite_verdict = qualify_suite(comparisons)
     if (
@@ -444,20 +495,44 @@ def _verify_completeness(report: PublicReport, canaries_by_id: dict[str, PublicC
         for execution in report.executions
     )
 
+    recomputed_observed_tokens: int | None = 0
+    for execution in report.executions:
+        for attempt in execution.attempts:
+            if recomputed_observed_tokens is not None:
+                if attempt.usage.observed:
+                    recomputed_observed_tokens += (
+                        attempt.usage.input_tokens + attempt.usage.output_tokens
+                    )
+                else:
+                    recomputed_observed_tokens = None
+
     stored = report.completeness
     if (
         stored.attempts_expected != attempts_expected
         or stored.attempts_used != attempts_used
         or stored.all_canaries_complete != all_complete
+        or stored.observed_tokens != recomputed_observed_tokens
     ):
         raise EvidenceBundleError(EvidenceBundleReason.COMPLETENESS_MISMATCH, "completeness")
 
-    if not all_complete and stored.max_attempts is None and stored.max_tokens is None:
+    if stored.max_attempts is not None and stored.attempts_used > stored.max_attempts:
         raise EvidenceBundleError(EvidenceBundleReason.COMPLETENESS_MISMATCH, "completeness")
 
+    if not all_complete:
+        if stored.max_attempts is None and stored.max_tokens is None:
+            raise EvidenceBundleError(EvidenceBundleReason.COMPLETENESS_MISMATCH, "completeness")
 
-def _verify_pricing(root: Path, report: PublicReport) -> None:
-    pricing_bytes = read_bounded_regular_file(root, PRICING_FILENAME, max_bytes=PRICING_MAX_BYTES)
+        attempt_budget_stopping = (
+            stored.max_attempts is not None and stored.max_attempts < attempts_expected
+        )
+        token_budget_stopping = stored.max_tokens is not None and (
+            stored.observed_tokens is None or stored.observed_tokens >= stored.max_tokens
+        )
+        if not (attempt_budget_stopping or token_budget_stopping):
+            raise EvidenceBundleError(EvidenceBundleReason.COMPLETENESS_MISMATCH, "completeness")
+
+
+def _verify_pricing(pricing_bytes: bytes, root: Path, report: PublicReport) -> None:
     try:
         pricing_payload = json.loads(pricing_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
