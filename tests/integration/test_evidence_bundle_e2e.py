@@ -174,6 +174,7 @@ def test_standalone_export_copy_delete_project_verify_e2e(
     shutil.copytree(export_dir, standalone_dir)
 
     # Completely delete the source QuaLock project and export dir
+    monkeypatch.chdir(tmp_path)
     shutil.rmtree(project_root)
     shutil.rmtree(export_dir)
     assert not project_root.exists()
@@ -243,6 +244,7 @@ def test_standalone_verify_fails_on_one_byte_tamper(
     shutil.copytree(export_dir, tampered_dir)
 
     # Delete source project
+    monkeypatch.chdir(tmp_path)
     shutil.rmtree(project_root)
     shutil.rmtree(export_dir)
 
@@ -292,6 +294,7 @@ def test_standalone_verify_fails_on_one_byte_tamper_pricing(
     tampered_dir = tmp_path / "bundle-tampered-pricing"
     shutil.copytree(export_dir, tampered_dir)
 
+    monkeypatch.chdir(tmp_path)
     shutil.rmtree(project_root)
     shutil.rmtree(export_dir)
 
@@ -338,6 +341,7 @@ def test_standalone_e2e_block_verdict_verifies_exit_0(
 
     standalone_dir = tmp_path / "standalone-block"
     shutil.copytree(export_dir, standalone_dir)
+    monkeypatch.chdir(tmp_path)
     shutil.rmtree(project_root)
     shutil.rmtree(export_dir)
 
@@ -379,6 +383,7 @@ def test_standalone_e2e_warn_verdict_verifies_exit_0(
 
     standalone_dir = tmp_path / "standalone-warn"
     shutil.copytree(export_dir, standalone_dir)
+    monkeypatch.chdir(tmp_path)
     shutil.rmtree(project_root)
     shutil.rmtree(export_dir)
 
@@ -419,6 +424,7 @@ def test_standalone_e2e_incomplete_verdict_verifies_exit_0(
 
     standalone_dir = tmp_path / "standalone-incomplete"
     shutil.copytree(export_dir, standalone_dir)
+    monkeypatch.chdir(tmp_path)
     shutil.rmtree(project_root)
     shutil.rmtree(export_dir)
 
@@ -456,6 +462,7 @@ def test_standalone_verify_preserves_bytes_across_repeated_invocations(
 
     standalone_dir = tmp_path / "bundle-repeated"
     shutil.copytree(export_dir, standalone_dir)
+    monkeypatch.chdir(tmp_path)
     shutil.rmtree(project_root)
     shutil.rmtree(export_dir)
 
