@@ -452,16 +452,15 @@ def test_evidence_manifest_round_trips_valid_payload() -> None:
     assert manifest.baseline_identity == RuntimeAgentIdentity.model_validate(_identity_payload())
 
 
-def test_evidence_manifest_requires_distinct_run_and_exporter_version() -> None:
+def test_evidence_manifest_allows_equal_run_and_exporter_version() -> None:
     payload = _manifest_payload()
     payload["exporter_qualock_version"] = payload["run_qualock_version"]
-    with pytest.raises(ValidationError):
-        EvidenceManifest.model_validate(payload)
+    manifest = EvidenceManifest.model_validate(payload)
+    assert manifest.exporter_qualock_version == manifest.run_qualock_version
 
 
 def test_evidence_manifest_allows_exporter_version_equal_to_baseline_lock_version() -> None:
-    # No equality is implied between exporter_qualock_version and any other
-    # version field except that it must differ from run_qualock_version.
+    # No equality is implied between exporter_qualock_version and any other version field.
     payload = _manifest_payload()
     payload["exporter_qualock_version"] = "0.0.1-legacy"
     manifest = EvidenceManifest.model_validate(payload)
