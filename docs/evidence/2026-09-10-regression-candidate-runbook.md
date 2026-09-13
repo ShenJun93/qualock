@@ -1,8 +1,10 @@
 # Batch #45 case-study candidate runbook
 
 **Prepared:** 2026-09-11
-**Status:** reviewed runbook; first authorized execution stopped during baseline because the provider usage limit was exhausted; candidate was not run; a fresh authorization is required for any later retry
-**Verifier prerequisite:** merged `main@bdf1d5c1a0a4daafa372c6a988bec798a6deb8a2`
+**Last updated:** 2026-09-13
+**Status:** reviewed runbook; first authorization quota-stopped, then a fresh authorized bounded run completed `3/3 -> 3/3` with verdict `PASS`; no selected-hypothesis regression was observed, no automatic fallback is authorized, and the Batch #45 case-study milestone remains open
+**Frozen execution SHA:** `bdf1d5c1a0a4daafa372c6a988bec798a6deb8a2`
+**Current evidence tooling:** `main@4e26156380f644149c60f25041668d2cb1aada3b` after merged PR #44
 
 ## Decision
 
@@ -81,7 +83,7 @@ A clean run has exactly **9 provider attempts**: three baseline-lock attempts, t
 
 Budget basis comes from the clean Codex `0.150.0 -> 0.151.0` Click evidence under the same model/task shape. Its three baseline-side Click attempts used 940,321 input tokens, 9,875 output tokens, and 306.5 seconds of agent runtime; the full six-attempt paired Click check used 1,525,700 input tokens, 18,458 output tokens, and 577.0 seconds. Using the first figure as a proxy for baseline establishment gives a clean-run basis of 2,466,021 input tokens, 28,333 output tokens, and 883.5 seconds of summed agent runtime.
 
-The conservative authorization ceiling is **9 attempts, 4,000,000 observed input tokens, 60,000 observed output tokens, and 30 minutes summed agent runtime**. Before starting the six-attempt check, stop and reassess if the three-attempt baseline phase alone exceeds 1,500,000 input tokens or 10 minutes summed agent runtime.
+The conservative authorization ceiling is **9 attempts, 4,000,000 observed input tokens, 60,000 observed output tokens, and 30 minutes summed agent runtime**. Before starting the six-attempt check, stop and reassess if the three-attempt baseline phase alone exceeds 1,500,000 input tokens, 60,000 output tokens, or 10 minutes summed agent runtime.
 
 `qualock check --max-attempts 6` is used as the hard attempt-count cap. `--max-tokens` is intentionally not presented as a hard spend cap here: the current implementation checks that threshold only between complete canaries, so a one-canary experiment cannot rely on it to interrupt the six paired attempts.
 
@@ -343,21 +345,34 @@ A result is publication-eligible for this selected hypothesis only when the stab
 
 On 2026-09-11 the operator explicitly authorized the frozen experiment. The candidate-specific execution plan was written before spend, the detached execution worktree was created at `bdf1d5c1a0a4daafa372c6a988bec798a6deb8a2`, and the baseline phase materialized Codex `0.149.1`.
 
-QuaLock started exactly three baseline attempts. All three were invalid (`0/0` valid successes) because Codex returned the same provider usage-limit error before model work began. The CLI reported a retry time of `Sep 15th, 2026 5:10 AM`. Usage was therefore unobserved and the baseline stability/accounting gate failed. This is an infrastructure/quota stop, not behavioral evidence about `0.149.1` or `0.150.1`.
+QuaLock started exactly three baseline attempts. All three were invalid (`0/3` valid; `0/3` successful) because Codex returned the same provider usage-limit error before model work began. The CLI reported a retry time of `Sep 15th, 2026 5:10 AM`. That string is retained verbatim as the provider message from this failed attempt; its timezone was not stated and it was not treated as an authoritative lockout schedule. Usage was therefore unobserved and the baseline stability/accounting gate failed. This is an infrastructure/quota stop, not behavioral evidence about `0.149.1` or `0.150.1`.
 
 The frozen no-retry contract was honored: Codex `0.150.1` was not materialized, zero candidate attempts were started, no `check-*` artifact exists, and no fallback candidate was tried. The baseline source checkout passed the post-stop isolation audit. Local execution bookkeeping is retained outside the repository under `/home/pacmap/qualock-regression-run-logs/`; raw provider event text is not added to this publication-oriented runbook.
 
 This attempt does **not** satisfy the Batch #45 case-study milestone. Any fresh execution after provider quota becomes available starts again from the three-attempt baseline phase and requires new explicit operator authorization.
 
+## Fresh authorized execution — PASS / no observed difference
+
+On local date 2026-09-13 the operator explicitly authorized a fresh run of the unchanged frozen experiment; the qualification IDs below encode UTC timestamps (`20260912T...Z`). Although the earlier failed attempt had reported `try again at Sep 15th, 2026 5:10 AM`, the provider accepted authenticated requests on 2026-09-13 and the run completed normally; no provider explanation for that earlier-than-message availability was observed, so the earlier retry string is not used to infer an actual reset time. The accepted execution stayed at `bdf1d5c1a0a4daafa372c6a988bec798a6deb8a2`. Baseline qualification `baseline-20260912T231904Z-7ce9013f` completed `3/3` valid and `3/3` successful on Codex `0.149.1`, with 900,820 observed input tokens, 11,654 observed output tokens, and 343,892 ms summed agent runtime. The baseline gate therefore passed.
+
+Paired qualification `check-20260912T233259Z-4839659f` then used exactly six attempts. All six were valid: baseline `3/3` and candidate `3/3` both succeeded, so QuaLock returned `PASS`. The paired phase recorded 1,807,511 input tokens, 22,404 output tokens, and 634,798 ms summed agent runtime. Across the bounded nine-attempt experiment the observed totals were 2,708,331 input tokens, 34,058 output tokens, and 978,690 ms (about 16.3 minutes), all within the frozen planning envelope.
+
+Both accepted source materializations passed the post-run isolation audit: exact Click base SHA `3cbcf9b11546f4cf10b36d3e2e531733ba6fe001`, zero remotes, zero ordinary refs, one reachable commit, clean checkout, exact shallow boundary, and no unreachable objects. This is valid **no-difference evidence** for the selected candidate, not a qualifying regression. It does not close the Batch #45 milestone and does not authorize rank 2, rank 3, or any retry/fallback automatically.
+
+### Non-authoritative additional execution worktree
+
+An additional later detached execution worktree also exists, but it began after the fresh authorization had already been consumed by the accepted bounded experiment above. It is therefore a protocol deviation and is not case-study evidence. Its baseline completed `3/3`, while its paired check ended `INCOMPLETE` after only `2/2` valid successes per side and two final invalid/unobserved attempts when provider usage was exhausted. Its source isolation audit passed, but neither those partial results nor the provider stop may be used to infer a behavioral difference. No further provider attempt was made after this state was identified. The detached worktree is retained only for local forensic inspection/cleanup and is explicitly non-authoritative; it must not be reused for provider execution without fresh authorization.
+
+### Evidence export compatibility bug and merged fix
+
+The first local export of the accepted PASS qualification failed closed with `identity_mismatch: baseline_identity`. Investigation showed that the legacy non-Gemini baseline lock intentionally had `support_sha256: null`, while prospective provenance correctly recorded the actual Codex `codex-code-mode-host` support fingerprint. The exporter and standalone verifier were incorrectly requiring literal equality between those two fields.
+
+The fix preserves strict name/version/binary identity, preserves exact manifest-to-provenance support identity, and still requires exact support matching whenever the lock has a non-null support digest. Only legacy non-Gemini `null` is treated as unbound; Gemini remains fail-closed on missing support identity. The TDD fix was independently reviewed clean and merged in PR #44 as `main@4e26156380f644149c60f25041668d2cb1aada3b`.
+
+Replaying export and standalone verification from `/tmp` against that exact merged `main` succeeded for `check-20260912T233259Z-4839659f`. The exported manifest SHA-256 is `fb90f57faa1b8c5b201beea8e4110a9831c684102b01511f98393d71c3be9d53`, the stored verdict remains `PASS`, and the baseline runtime support fingerprint remains `83e05eb8bd3c8632272d9aa05713db03ba7d096f818767a0b5d39e9f87e43289`. This repair makes the accepted no-difference result portable; it does not change the behavioral outcome.
+
 ## Authorization boundary
 
-The 2026-09-11 authorization was consumed by the stopped baseline attempt. A future authorization must explicitly cover the next bounded experiment:
+The 2026-09-13 fresh authorization was consumed by the accepted nine-attempt experiment. Because the selected hypothesis produced `PASS 3/3 -> 3/3`, the frozen no-automatic-fallback rule now applies. Any new candidate, retry, fallback, or other authenticated provider experiment requires a new candidate-specific rationale and a new explicit operator authorization before provider spend.
 
-- scoped first-use materialization of `@openai/codex@0.149.1` and `@openai/codex@0.150.1` under QuaLock's user cache if they are still absent;
-- three authenticated baseline attempts, followed only after the baseline stability/accounting gate by six authenticated paired attempts;
-- no retries and no automatic fallback candidate;
-- hard cap of nine provider attempts;
-- planning envelope of 4,000,000 observed input tokens, 60,000 observed output tokens, and 30 minutes summed agent runtime, with the explicit limitation that the six-attempt single-canary check cannot be interrupted by QuaLock between paired attempts on token/runtime telemetry;
-- local source-isolation audit plus evidence export/verify after the provider phases.
-
-If authorization is granted, first write the short candidate-specific execution plan required by Task 7.3, then execute this recipe without changing the frozen agent pair, model/reasoning configuration, canary bytes, repetition count, source SHA, or success criterion. Any change to those inputs, or any second candidate experiment after a no-difference result, requires a new rationale and a new explicit authorization.
+The current accepted result may be retained as no-difference evidence, but it is not publication-eligible for the selected regression claim and does not satisfy the open Batch #45 case-study milestone. Local documentation, verification, and review do not grant authority to publish evidence, mutate the ROADMAP delivery claim, or start another provider experiment.
