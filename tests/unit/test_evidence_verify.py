@@ -250,6 +250,18 @@ def test_verify_evidence_bundle_accepts_non_gemini_null_support(tmp_path: Path) 
     assert bundle.manifest.baseline_identity.support_sha256 is None
 
 
+def test_verify_evidence_bundle_rejects_non_gemini_explicit_support_mismatch(tmp_path: Path) -> None:
+    built = _build(tmp_path, agent_name="codex", baseline_support_sha256="b" * 64)
+    provenance = load_json(built.root, PROVENANCE_FILENAME)
+    provenance["baseline_identity"]["support_sha256"] = "c" * 64
+    replace_payload(built, PROVENANCE_FILENAME, provenance)
+    built.manifest["baseline_identity"]["support_sha256"] = "c" * 64
+    write_manifest(built.root, built.manifest)
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.IDENTITY_MISMATCH
+
+
 # --- Cross-file identity mismatches ---------------------------------------------
 
 
