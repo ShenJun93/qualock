@@ -376,3 +376,36 @@ Replaying export and standalone verification from `/tmp` against that exact merg
 The 2026-09-13 fresh authorization was consumed by the accepted nine-attempt experiment. Because the selected hypothesis produced `PASS 3/3 -> 3/3`, the frozen no-automatic-fallback rule now applies. Any new candidate, retry, fallback, or other authenticated provider experiment requires a new candidate-specific rationale and a new explicit operator authorization before provider spend.
 
 The current accepted result may be retained as no-difference evidence, but it is not publication-eligible for the selected regression claim and does not satisfy the open Batch #45 case-study milestone. Local documentation, verification, and review do not grant authority to publish evidence, mutate the ROADMAP delivery claim, or start another provider experiment.
+
+## Next candidate research — second-pass non-selection
+
+**Research date:** 2026-09-13
+**Status:** no next provider candidate selected; independent review blocked the resource proposal; no provider execution is authorized
+
+The first second-pass proposal was Codex `0.150.0` -> `0.151.0` on `click-sentinel-duplication`, using the older clean QuaLock input-token delta as discovery prior. That proposal is **rejected**, not frozen for execution.
+
+Independent review found two blocking attribution problems. First, the proposed `<= 0.75` aggregate-input ratio plus `2/3` directional rule was not demonstrated to exceed the canary's own run-to-run noise: the three historical baseline attempts span 184,131 to 437,501 input tokens, and a two-of-three directional win is weak evidence by itself. Second, the Codex model snapshot is not independently pinnable under the current ChatGPT-authenticated path (`snapshot: null`), so fresh token-count movement could reflect service-side model changes rather than the CLI version pair. Historical `940,321 -> 585,379` input usage remains an advisory discovery observation only; it is not a Batch #45 qualifying difference.
+
+The review also caught a non-blocking classifier defect: any future offline classifier should derive valid/success counts directly from public attempt rows instead of depending on execution-level rollups. No provider attempt was made from the rejected proposal.
+
+### Second-pass public signal screen
+
+1. **Codex `0.147.0` -> `0.152.0`, Windows `--ignore-user-config` shell-policy regression.** Issue: https://github.com/openai/codex/issues/42172. The report is a strong deterministic `codex exec` A/B, but it is Windows-specific. QuaLock's current Codex resolver materializes `@openai/codex-linux-*` binaries and its Windows code is scheduler infrastructure, not a native-Windows Codex execution backend. Reject as a topology mismatch.
+
+2. **Codex `0.150.1` -> `0.151.0`, app-server zero-turn persistence regression.** Issue: https://github.com/openai/codex/issues/42099. The behavior is deterministic and local, but it is specific to `codex app-server thread/start` / resume. QuaLock's qualification adapter invokes `codex exec`; the existing coding canaries do not traverse app-server session persistence. Reject as an execution-path mismatch.
+
+3. **Codex `0.151.0` / `0.152.0`, installation-ID write under an outer read-only sandbox.** Issue: https://github.com/openai/codex/issues/42398. QuaLock gives Codex a writable tmpfs `CODEX_HOME` at `/opt/qualock/auth` and only mounts the seeded `auth.json` read-only before copying it into that tmpfs. The reported outer-read-only precondition therefore is not present. Reject as a topology mismatch.
+
+4. **Gemini CLI `0.58.0` -> `0.59.0`, workspace-trust hardening.** Release: https://github.com/google-gemini/gemini-cli/releases/tag/v0.59.0. The release strengthens fail-closed workspace trust, but an independent real-CLI record already shows Gemini `0.58.0` refusing an untrusted headless launch with exit 55 unless trust is explicitly granted. QuaLock also supplies empty MCP configuration and disables the relevant extension surface. Reject because the public evidence does not establish a clean version-local A/B for the current path.
+
+5. **Claude Code `2.1.81` -> `2.1.83`, empty `--print` text/result regression.** Issue: https://github.com/anthropics/claude-code/issues/38725. QuaLock invokes `claude -p --output-format stream-json --verbose`; the report explicitly says the model response is still present in stream-json while text/final-result aggregation is broken. Reject because QuaLock consumes the unaffected output path.
+
+6. **Claude Code `2.1.104` -> `2.1.112`, `--no-session-persistence` side effect.** Issue: https://github.com/anthropics/claude-code/issues/49565. QuaLock does pass `--no-session-persistence`, but its Claude config home is an invocation tmpfs and the reported leaked session stub is not represented in the public attempt outcome. Reject because the observed difference would not satisfy the current offline structured-evidence contract.
+
+### Research conclusion and authorization boundary
+
+No candidate in this second pass satisfies all required gates at once: exact stable versions, current Linux headless QuaLock topology, a deterministic mapping to an existing coding canary, a valid structured attempt outcome visible in the public bundle, and attribution that is not dominated by an unpinned model/service variable.
+
+Accordingly, **no next authenticated provider experiment is proposed from this research pass**. This is an explicit non-selection, not permission to fall back automatically. The Batch #45 milestone remains open.
+
+A future candidate research pass should start only from a new public signal that directly hits one of QuaLock's actual automation paths (`codex exec`, Claude `-p` stream-json, or Gemini `--prompt` stream-json) and predicts a structured coding-attempt difference under an existing canary. If a genuinely necessary new canary or execution surface is identified, it requires its own bounded design/TDD/review approval before any provider run; it must not be invented merely to force a difference.
