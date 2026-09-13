@@ -351,18 +351,19 @@ qualification/
 
 `paired-change-run-v1.json` contains `PairedChangeRunV1` and deliberately has no Evidence Bundle manifest digest.
 
-After `qualock evidence export`, portable protocol artifacts live beside, not inside, Evidence Bundle V1:
+After `qualock evidence export --out BUNDLE`, `BUNDLE` remains exactly the Evidence Bundle V1 directory so existing CLI/API consumers and strict bundle inventory semantics do not change. Portable protocol artifacts live in a deterministic companion directory named `<BUNDLE>.paired-change-v1`:
 
 ```text
-export-root/
-  evidence-bundle-v1/
-  protocol/
-    paired-change-v1/
-      protocol-evidence.json
-      claim-receipt.json
+BUNDLE/
+  ... exact Evidence Bundle V1 inventory ...
+BUNDLE.paired-change-v1/
+  protocol-evidence.json
+  claim-receipt.json   # created or checked by the claim verifier
 ```
 
-`protocol-evidence.json` is materialized from the local run sidecar and binds the exact exported Evidence Bundle V1 manifest by digest. `claim-receipt.json` binds both those portable inputs and is itself recomputable.
+`protocol-evidence.json` is materialized from the local run sidecar and binds the exact manifest digest inside `BUNDLE`. `claim-receipt.json` binds both portable inputs and is itself recomputable. The standalone verifier receives the bundle path and companion protocol path explicitly; protocol files are never inserted into the strict Evidence Bundle V1 directory.
+
+For a qualification with a paired-change sidecar, export validates and prepares the protocol overlay before publication. Publication must fail closed rather than silently return a portable causal artifact with an unbound or mismatched overlay. Legacy qualifications with no sidecar continue to export only the V1 bundle.
 
 The existing strict Evidence Bundle V1 inventory and schema remain unchanged. Legacy qualification artifacts remain valid for their existing consumers even when no protocol sidecar exists. A check-time sidecar without a later evidence export has no portable causal claim.
 
