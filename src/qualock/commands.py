@@ -230,7 +230,7 @@ def execute_baseline(
         binary.version,
         attempt_evidence,
     )
-    support_sha256 = agent_support_fingerprint(binary) if agent_name == "gemini" else None
+    support_sha256 = agent_support_fingerprint(binary)
     if agent_name == "gemini" and support_sha256 is None:
         raise CommandError("Gemini baseline requires runtime support fingerprint")
 
@@ -304,12 +304,11 @@ def execute_check(
     baseline_binary = resolver.resolve(lock.agent.version)
     if baseline_binary.sha256 != lock.agent.binary_sha256:
         raise BaselineStaleError("baseline binary fingerprint changed")
-    if agent_name == "gemini":
-        if lock.agent.support_sha256 is None:
-            raise BaselineStaleError("baseline support fingerprint missing")
-        support_sha256 = agent_support_fingerprint(baseline_binary)
-        if support_sha256 != lock.agent.support_sha256:
-            raise BaselineStaleError("baseline support fingerprint changed")
+    if agent_name == "gemini" and lock.agent.support_sha256 is None:
+        raise BaselineStaleError("baseline support fingerprint missing")
+    observed_support = agent_support_fingerprint(baseline_binary)
+    if observed_support != lock.agent.support_sha256:
+        raise BaselineStaleError("baseline support fingerprint changed or missing")
     candidate_binary = resolver.resolve(candidate_version)
     backend = backend or _default_backend(root, config, agent_name)
     qid = qualification_id or _qualification_id("check")

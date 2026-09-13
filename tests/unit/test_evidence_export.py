@@ -763,7 +763,7 @@ def test_export_evidence_bundle_budget_stopped_incomplete(
     assert verified.manifest.verdict == Verdict.INCOMPLETE
 
 
-def test_export_evidence_bundle_accepts_non_gemini_runtime_support_with_legacy_null_lock(
+def test_export_evidence_bundle_rejects_non_gemini_runtime_support_with_legacy_null_lock(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
@@ -773,31 +773,25 @@ def test_export_evidence_bundle_accepts_non_gemini_runtime_support_with_legacy_n
         with_support_binary=True,
     )
 
-    lock = json.loads((project_root / ".qualock/baseline.lock").read_text())
-    assert lock["agent"]["support_sha256"] is None
+    lock_path = project_root / ".qualock/baseline.lock"
+    lock = json.loads(lock_path.read_text())
+    lock["agent"]["support_sha256"] = None
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
 
-    provenance = json.loads(
-        (
-            project_root
-            / ".qualock/results/check-codex-support/evidence-provenance.json"
-        ).read_text()
+    provenance_path = (
+        project_root / ".qualock/results/check-codex-support/evidence-provenance.json"
     )
+    provenance = json.loads(provenance_path.read_text())
     assert provenance["baseline_identity"]["support_sha256"] is not None
-    assert provenance["candidate_identity"]["support_sha256"] is not None
+    provenance["baseline_lock_sha256"] = sha256_canonical(lock)
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
 
     dest = tmp_path / "bundle-codex-support"
-    export_evidence_bundle(project_root, "check-codex-support", dest)
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, "check-codex-support", dest)
 
-    manifest = EvidenceManifest.model_validate_json((dest / MANIFEST_FILENAME).read_bytes())
-    assert (
-        manifest.baseline_identity.support_sha256
-        == provenance["baseline_identity"]["support_sha256"]
-    )
-    verified = verify_evidence_bundle(dest)
-    assert (
-        verified.manifest.baseline_identity.support_sha256
-        == provenance["baseline_identity"]["support_sha256"]
-    )
+    assert exc_info.value.reason is EvidenceBundleReason.IDENTITY_MISMATCH
+    assert not dest.exists()
 
 
 def test_export_evidence_bundle_rejects_gemini_legacy_null_lock_support(tmp_path: Path) -> None:

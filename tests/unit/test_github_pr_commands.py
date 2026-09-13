@@ -238,6 +238,28 @@ def gemini_project_fixture(tmp_path: Path) -> ProjectFixture:
     )
 
 
+def _codex_binary(
+    version: str, *, binary_sha256: str = "a" * 64, support_item_sha256: str | None = "e" * 64
+) -> AgentBinary:
+    support_binaries = ()
+    if support_item_sha256 is not None:
+        support_binaries = (
+            AgentSupportBinary(
+                name="codex-code-mode-host",
+                path=Path("/fake/codex-support/codex-code-mode-host"),
+                sha256=support_item_sha256,
+                container_path="/opt/qualock/codex-code-mode-host",
+            ),
+        )
+    return AgentBinary(
+        name="codex",
+        version=version,
+        path=Path(f"/fake/{version}/codex"),
+        sha256=binary_sha256,
+        support_binaries=support_binaries,
+    )
+
+
 def _gemini_binary(
     version: str, *, binary_sha256: str = "a" * 64, support_item_sha256: str = "e" * 64
 ) -> AgentBinary:
@@ -513,6 +535,29 @@ def test_valid_proposed_lock_is_accepted(project_fixture: ProjectFixture) -> Non
         agent_name="codex",
         version=_DEFAULT_CANDIDATE_VERSION,
         binary_sha256="a" * 64,
+    )
+
+
+@pytest.mark.parametrize(
+    "support_sha256",
+    ["E" * 64, "g" * 64, "e" * 63, "e" * 65, "not-a-sha-at-all"],
+)
+def test_proposed_codex_lock_malformed_non_null_support_is_rejected(
+    project_fixture: ProjectFixture, support_sha256: str
+) -> None:
+    raw = project_fixture.proposed_lock_json(support_sha256=support_sha256)
+    with pytest.raises(PrValidationError):
+        validate_proposed_lock(project_fixture.root, raw)
+
+
+def test_valid_codex_proposed_lock_preserves_support(project_fixture: ProjectFixture) -> None:
+    raw = project_fixture.proposed_lock_json(support_sha256="e" * 64)
+    candidate = validate_proposed_lock(project_fixture.root, raw)
+    assert candidate == CandidateRequest(
+        agent_name="codex",
+        version=_DEFAULT_CANDIDATE_VERSION,
+        binary_sha256="a" * 64,
+        support_sha256="e" * 64,
     )
 
 
@@ -1250,6 +1295,89 @@ def test_commands_module_never_imports_or_references_antigravity_or_agy() -> Non
 
 
 # --- agent-aware candidate identity and routing ------------------------------
+
+
+_CODEX_RESOLVED_SUPPORT_FINGERPRINT = agent_support_fingerprint(
+    _codex_binary(_DEFAULT_CANDIDATE_VERSION)
+)
+
+
+def _codex_proposed_raw(fixture: ProjectFixture, **overrides: Any) -> bytes:
+    overrides.setdefault("binary_sha256", "a" * 64)
+    overrides.setdefault("support_sha256", _CODEX_RESOLVED_SUPPORT_FINGERPRINT)
+    return fixture.proposed_lock_json(**overrides)
+
+
+def test_codex_candidate_missing_support_fingerprint_fails_before_check_executor(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = _codex_proposed_raw(project_fixture)
+    resolver = FakeResolver(_codex_binary(_DEFAULT_CANDIDATE_VERSION, support_item_sha256=None))
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert resolver.resolve_calls == [_DEFAULT_CANDIDATE_VERSION]
+
+
+def test_codex_candidate_support_mismatch_fails_before_check_executor(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = _codex_proposed_raw(project_fixture)
+    resolver = FakeResolver(_codex_binary(_DEFAULT_CANDIDATE_VERSION, support_item_sha256="f" * 64))
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=fail_check_executor,
+    )
+
+    assert report.verdict is PrReportVerdict.INCOMPLETE
+    assert PrReasonCode.INVALID_PROPOSED_LOCK in report.reason_codes
+    assert resolver.resolve_calls == [_DEFAULT_CANDIDATE_VERSION]
+
+
+def test_codex_candidate_exact_binary_and_support_match_calls_check_executor_once(
+    project_fixture: ProjectFixture,
+) -> None:
+    context = _context(PrClassification.UPGRADE, agent="codex")
+    raw = _codex_proposed_raw(project_fixture)
+    resolver = FakeResolver(_codex_binary(_DEFAULT_CANDIDATE_VERSION))
+    calls: list[tuple[Path, str, Any]] = []
+
+    def check_executor(
+        root: Path, candidate_spec: str, *, resolver: Any = None
+    ) -> QualificationResult:
+        calls.append((root, candidate_spec, resolver))
+        return _qualification_result(Verdict.PASS)
+
+    report = qualify_prepared_pr(
+        project_fixture.root,
+        context,
+        raw,
+        credential_available=True,
+        resolver=resolver,
+        check_executor=check_executor,
+    )
+
+    assert resolver.resolve_calls == [_DEFAULT_CANDIDATE_VERSION]
+    assert calls == [
+        (project_fixture.root, f"codex@{_DEFAULT_CANDIDATE_VERSION}", resolver)
+    ]
+    assert report.verdict is PrReportVerdict.PASS
 
 
 def test_codex_candidate_routes_exactly_one_codex_check(

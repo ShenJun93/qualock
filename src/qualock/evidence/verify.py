@@ -242,10 +242,7 @@ def _verify_global_identities(
         manifest.baseline_identity.name != baseline_lock.agent.name
         or manifest.baseline_identity.version != baseline_lock.agent.version
         or manifest.baseline_identity.binary_sha256 != baseline_lock.agent.binary_sha256
-        or (
-            baseline_lock.agent.support_sha256 is not None
-            and manifest.baseline_identity.support_sha256 != baseline_lock.agent.support_sha256
-        )
+        or manifest.baseline_identity.support_sha256 != baseline_lock.agent.support_sha256
     ):
         raise EvidenceBundleError(EvidenceBundleReason.IDENTITY_MISMATCH, "baseline_identity")
 
