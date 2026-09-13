@@ -198,7 +198,10 @@ def export_evidence_bundle(
         provenance.baseline_identity.name != lock.agent.name
         or provenance.baseline_identity.version != lock.agent.version
         or provenance.baseline_identity.binary_sha256 != lock.agent.binary_sha256
-        or provenance.baseline_identity.support_sha256 != lock.agent.support_sha256
+        or (
+            lock.agent.support_sha256 is not None
+            and provenance.baseline_identity.support_sha256 != lock.agent.support_sha256
+        )
     ):
         raise EvidenceBundleError(
             EvidenceBundleReason.IDENTITY_MISMATCH, "baseline_identity"

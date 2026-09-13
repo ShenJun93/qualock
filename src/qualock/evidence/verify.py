@@ -238,19 +238,15 @@ def _verify_global_identities(
     if manifest.candidate_identity != provenance.candidate_identity:
         raise EvidenceBundleError(EvidenceBundleReason.IDENTITY_MISMATCH, "candidate_identity")
 
-    baseline_identity_tuple = (
-        manifest.baseline_identity.name,
-        manifest.baseline_identity.version,
-        manifest.baseline_identity.binary_sha256,
-        manifest.baseline_identity.support_sha256,
-    )
-    baseline_lock_agent_tuple = (
-        baseline_lock.agent.name,
-        baseline_lock.agent.version,
-        baseline_lock.agent.binary_sha256,
-        baseline_lock.agent.support_sha256,
-    )
-    if baseline_identity_tuple != baseline_lock_agent_tuple:
+    if (
+        manifest.baseline_identity.name != baseline_lock.agent.name
+        or manifest.baseline_identity.version != baseline_lock.agent.version
+        or manifest.baseline_identity.binary_sha256 != baseline_lock.agent.binary_sha256
+        or (
+            baseline_lock.agent.support_sha256 is not None
+            and manifest.baseline_identity.support_sha256 != baseline_lock.agent.support_sha256
+        )
+    ):
         raise EvidenceBundleError(EvidenceBundleReason.IDENTITY_MISMATCH, "baseline_identity")
 
     recomputed_run_order_sha = sha256_canonical(report.run_order)

@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 import qualock
-from qualock.agents.base import AgentBinary, AgentSupportTree
+from qualock.agents.base import AgentBinary, AgentSupportBinary, AgentSupportTree
 from qualock.canary.models import CanarySpec
 from qualock.commands import execute_baseline, execute_check
 from qualock.config.io import write_default_config
@@ -25,6 +25,7 @@ from qualock.evidence.bundle_models import (
     PublicReport,
 )
 from qualock.evidence.export import ExportedEvidenceBundle, export_evidence_bundle
+from qualock.evidence.fingerprint import sha256_canonical
 from qualock.evidence.verify import verify_evidence_bundle
 from qualock.pricing.sidecar import write_pricing_sidecar
 from qualock.qualification.models import AttemptResult, Usage, Verdict
@@ -34,13 +35,26 @@ from tests.unit.evidence_bundle_fixtures import _pricing_payload
 
 
 class FakeResolver:
-    def __init__(self, agent_name: str = "codex") -> None:
+    def __init__(
+        self, agent_name: str = "codex", *, with_support_binary: bool = False
+    ) -> None:
         self.agent_name = agent_name
+        self.with_support_binary = with_support_binary
         self.calls: list[str] = []
 
     def resolve(self, version: str) -> AgentBinary:
         self.calls.append(version)
         exact = "0.151.0" if version == "latest" else version
+        support_binaries = ()
+        if self.with_support_binary:
+            support_binaries = (
+                AgentSupportBinary(
+                    name="codex-code-mode-host",
+                    path=Path(f"/fake/{self.agent_name}/{exact}/codex-code-mode-host"),
+                    sha256=hashlib.sha256(f"support-binary-{exact}".encode()).hexdigest(),
+                    container_path="/opt/qualock/codex-code-mode-host",
+                ),
+            )
         support_trees = ()
         if self.agent_name == "gemini":
             support_trees = (
@@ -55,6 +69,7 @@ class FakeResolver:
             exact,
             Path(f"/fake/{self.agent_name}/{exact}/agent"),
             hashlib.sha256(f"{self.agent_name}-{exact}".encode()).hexdigest(),
+            support_binaries=support_binaries,
             support_trees=support_trees,
         )
 
@@ -170,6 +185,7 @@ def _create_synthetic_qualification(
     max_attempts: int | None = None,
     max_tokens: int | None = None,
     success_versions: set[str] | None = None,
+    with_support_binary: bool = False,
 ) -> None:
     _setup_project(
         root,
@@ -180,7 +196,9 @@ def _create_synthetic_qualification(
         grader_command=grader_command,
         protected_paths=protected_paths,
     )
-    resolver = FakeResolver(agent_name=agent_name)
+    resolver = FakeResolver(
+        agent_name=agent_name, with_support_binary=with_support_binary
+    )
     backend = FakeBackend(
         success_versions=success_versions,
         events_jsonl=events_jsonl,
@@ -743,6 +761,61 @@ def test_export_evidence_bundle_budget_stopped_incomplete(
 
     verified = verify_evidence_bundle(dest)
     assert verified.manifest.verdict == Verdict.INCOMPLETE
+
+
+def test_export_evidence_bundle_accepts_non_gemini_runtime_support_with_legacy_null_lock(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    _create_synthetic_qualification(
+        project_root,
+        qualification_id="check-codex-support",
+        with_support_binary=True,
+    )
+
+    lock = json.loads((project_root / ".qualock/baseline.lock").read_text())
+    assert lock["agent"]["support_sha256"] is None
+
+    provenance = json.loads(
+        (
+            project_root
+            / ".qualock/results/check-codex-support/evidence-provenance.json"
+        ).read_text()
+    )
+    assert provenance["baseline_identity"]["support_sha256"] is not None
+    assert provenance["candidate_identity"]["support_sha256"] is not None
+
+    dest = tmp_path / "bundle-codex-support"
+    export_evidence_bundle(project_root, "check-codex-support", dest)
+
+    manifest = EvidenceManifest.model_validate_json((dest / MANIFEST_FILENAME).read_bytes())
+    assert (
+        manifest.baseline_identity.support_sha256
+        == provenance["baseline_identity"]["support_sha256"]
+    )
+    verified = verify_evidence_bundle(dest)
+    assert (
+        verified.manifest.baseline_identity.support_sha256
+        == provenance["baseline_identity"]["support_sha256"]
+    )
+
+
+def test_export_evidence_bundle_rejects_gemini_legacy_null_lock_support(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    _create_synthetic_qualification(project_root, agent_name="gemini", qualification_id="check-gemini-null")
+    lock_path = project_root / ".qualock/baseline.lock"
+    lock = json.loads(lock_path.read_text())
+    lock["agent"]["support_sha256"] = None
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    prov_path = project_root / ".qualock/results/check-gemini-null/evidence-provenance.json"
+    provenance = json.loads(prov_path.read_text())
+    provenance["baseline_lock_sha256"] = sha256_canonical(lock)
+    prov_path.write_text(json.dumps(provenance), encoding="utf-8")
+    dest = tmp_path / "bundle-gemini-null"
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, "check-gemini-null", dest)
+    assert exc_info.value.reason is EvidenceBundleReason.INVALID_GEMINI_SUPPORT
+    assert not dest.exists()
 
 
 def test_export_evidence_bundle_gemini_agent(tmp_path: Path) -> None:
