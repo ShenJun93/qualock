@@ -50,7 +50,7 @@ The verifier is deterministic, offline, read-only, and independent of the origin
 
 ## Architecture
 
-The recommended architecture is an additive protocol overlay. Existing qualification produces Evidence Bundle V1 plus Protocol Evidence V1; the `paired-change/v1` verifier recomputes validity conditions and the causal claim, then emits Claim Receipt V1.
+The recommended architecture is an additive two-stage protocol overlay. Qualification execution writes a prospective `PairedChangeRunV1` sidecar that captures the frozen protocol design and run-local protocol context but has no Evidence Bundle manifest binding. Later, `qualock evidence export` creates Evidence Bundle V1 and materializes portable `ProtocolEvidenceV1` by binding that sidecar to the exact exported manifest digest. The `paired-change/v1` verifier then recomputes validity conditions and the causal claim from the bundle plus portable protocol evidence and emits Claim Receipt V1.
 
 `qualification` and `evidence` remain lower-level dependencies. The new protocol subsystem may depend on them; existing qualification/evidence modules must not depend on `paired_change`.
 
@@ -91,9 +91,32 @@ The canonical design is hashed as `protocol_design_sha256`. Every attempt contex
 
 This is a runner-enforced prospective freeze, not remote attestation. Offline verification proves internal consistency of the recorded experiment and QuaLock's protocol invariants; it does not cryptographically prove what an untrusted producer did before producing all artifacts.
 
+## Prospective run sidecar
+
+`PairedChangeRunV1` is the check-time artifact. It is written beside normal qualification artifacts immediately after execution and contains all run-local protocol inputs needed later for causal verification, except any Evidence Bundle manifest binding.
+
+Required top-level identity is:
+
+```text
+schema_version = 1
+protocol_id = paired-change/v1
+protocol_digest
+protocol_design
+protocol_design_sha256
+qualification_id
+baseline_state
+candidate_state
+changeset_sha256
+canaries[]
+```
+
+It MUST NOT contain an `evidence_manifest_sha256`, because no exported manifest exists yet. `ProtocolEvidenceV1` later adds that one portable binding while preserving the canonical run evidence.
+
+The sidecar is prospective evidence, not a portable claim artifact. Its existence alone cannot produce `ClaimReceiptV1`; portable causal verification begins only after export binds the run to an exact Evidence Bundle V1 manifest.
+
 ## Protocol evidence overlay
 
-`ProtocolEvidenceV1` is additive and references an existing Evidence Bundle V1 by manifest digest. It does not change the V1 bundle inventory.
+`ProtocolEvidenceV1` is an export-time materialization derived from a valid `PairedChangeRunV1` plus the newly created Evidence Bundle V1 manifest digest. It is additive, lives beside the exported bundle, and does not change the V1 bundle inventory.
 
 Required top-level identity:
 
@@ -316,10 +339,20 @@ A stored receipt is never a source of truth. Verification recomputes the receipt
 
 ## Storage
 
-Protocol artifacts live beside, not inside, Evidence Bundle V1:
+Check-time and export-time artifacts have separate lifecycles. Normal qualification storage gains one local sidecar:
 
 ```text
 qualification/
+  ... existing qualification artifacts ...
+  paired-change-run-v1.json
+```
+
+`paired-change-run-v1.json` contains `PairedChangeRunV1` and deliberately has no Evidence Bundle manifest digest.
+
+After `qualock evidence export`, portable protocol artifacts live beside, not inside, Evidence Bundle V1:
+
+```text
+export-root/
   evidence-bundle-v1/
   protocol/
     paired-change-v1/
@@ -327,9 +360,9 @@ qualification/
       claim-receipt.json
 ```
 
-`protocol-evidence.json` binds the qualification and Evidence Bundle V1 manifest by digest. `claim-receipt.json` binds both those inputs and is itself recomputable.
+`protocol-evidence.json` is materialized from the local run sidecar and binds the exact exported Evidence Bundle V1 manifest by digest. `claim-receipt.json` binds both those portable inputs and is itself recomputable.
 
-The existing strict Evidence Bundle V1 inventory and schema remain unchanged. Legacy qualification artifacts remain valid for their existing consumers even when no protocol overlay exists.
+The existing strict Evidence Bundle V1 inventory and schema remain unchanged. Legacy qualification artifacts remain valid for their existing consumers even when no protocol sidecar exists. A check-time sidecar without a later evidence export has no portable causal claim.
 
 ## Error model
 
@@ -347,11 +380,13 @@ Rollout is additive and ordered.
 
 **Phase 1 — strengthen substrate.** Generalize support identity, switch the scheduler to balanced deterministic pairing, and capture pair timing/profile bindings. No causal claim is produced yet.
 
-**Phase 2 — write protocol evidence.** New qualifications persist `ProtocolDesignV1` and `ProtocolEvidenceV1` beside existing artifacts. Missing dimensions remain explicitly unavailable rather than fabricated.
+**Phase 2 — write prospective run evidence.** New qualifications persist `ProtocolDesignV1` and `PairedChangeRunV1` beside existing qualification artifacts. Missing dimensions remain explicitly unavailable rather than fabricated. The sidecar has no Evidence Bundle manifest digest and cannot itself yield a portable claim.
 
-**Phase 3 — verify claims offline.** A pure verifier consumes standalone Evidence Bundle V1 plus protocol evidence, recomputes all ten conditions and per-canary claims, and writes or checks `ClaimReceiptV1`.
+**Phase 3 — materialize portable protocol evidence during export.** `qualock evidence export` first creates Evidence Bundle V1, obtains its exact manifest digest, then derives `ProtocolEvidenceV1` from the local run sidecar and binds it to that manifest. The strict V1 bundle inventory is unchanged.
 
-**Phase 4 — present attribution.** CLI/report surfaces may display current qualification verdict and attribution side-by-side. Existing exit codes, GitHub check conclusions, and `PASS/WARN/BLOCK/INCOMPLETE` enforcement remain unchanged in P0.
+**Phase 4 — verify claims offline.** A pure verifier consumes standalone Evidence Bundle V1 plus portable protocol evidence, recomputes all ten conditions and per-canary claims, and writes or checks `ClaimReceiptV1`.
+
+**Phase 5 — present attribution.** CLI/report surfaces may display current qualification verdict and attribution side-by-side. Existing exit codes, GitHub check conclusions, and `PASS/WARN/BLOCK/INCOMPLETE` enforcement remain unchanged in P0.
 
 Legacy qualifications without a protocol overlay have **no causal claim available**. They are not retroactively labeled `UNRESOLVED`.
 
@@ -388,6 +423,7 @@ Required test groups:
 - scheduler property tests for one slot per side/repetition, adjacency, determinism, alternating orientation, and balance;
 - exhaustive claim-transition tests;
 - adversarial vectors for shared mutable state, support drift, runtime/profile drift, missing attempts, manifest rebinding, changed canary fingerprint, and post-run protocol-design mutation;
+- lifecycle tests proving check-time `PairedChangeRunV1` has no manifest binding, portable `ProtocolEvidenceV1` cannot be materialized before an Evidence Bundle V1 manifest exists, and the materialized overlay binds the exact exported manifest digest;
 - backward-compatibility tests proving Evidence Bundle V1 parsing/verification and current verdict recomputation are unchanged;
 - offline-purity tests that fail if the verifier attempts network, subprocess, Docker, resolver, provider, or source-checkout work;
 - determinism tests proving repeated verification emits byte-identical canonical receipts.
@@ -408,20 +444,21 @@ Implementation proceeds red-to-green in this order:
 
 1. generic support identity and legacy trust-gap tests;
 2. balanced scheduler property tests;
-3. strict protocol design/evidence/receipt model tests;
-4. individual gate truth tables;
-5. claim transition tests;
-6. protocol-evidence writer tests;
-7. offline verifier and receipt tests;
-8. qualification integration and presentation tests;
-9. full existing test suite and static checks;
-10. fresh independent review with Critical/Important findings blocking closure.
+3. strict protocol design/run-sidecar/protocol-evidence/receipt model tests;
+4. qualification-side `PairedChangeRunV1` capture and writer tests;
+5. evidence-export materialization and manifest-binding tests for `ProtocolEvidenceV1`;
+6. individual gate truth tables;
+7. claim transition tests;
+8. offline verifier and receipt tests;
+9. qualification/export integration and presentation tests;
+10. full existing test suite and static checks;
+11. fresh independent review with Critical/Important findings blocking closure.
 
 No authenticated provider run is required to implement or review P0.
 
 ## Definition of done
 
-P0 is complete when a synthetic/local deterministic qualification can produce Evidence Bundle V1, Protocol Design/Evidence V1, and Claim Receipt V1; the standalone verifier recomputes all ten required conditions as `TRUE`; and a clean deterministic regression yields `ATTRIBUTABLE_CHANGESET`.
+P0 is complete when a synthetic/local deterministic qualification writes `PairedChangeRunV1`, a subsequent Evidence Bundle V1 export materializes manifest-bound `ProtocolEvidenceV1`, and the standalone verifier produces Claim Receipt V1, recomputes all ten required conditions as `TRUE`, and classifies a clean deterministic regression as `ATTRIBUTABLE_CHANGESET`.
 
 A clean candidate that preserves the contract yields `NO_REGRESSION_OBSERVED`. Adversarial mutations deterministically degrade to `UNRESOLVED` or a stable structural verification error as appropriate.
 
