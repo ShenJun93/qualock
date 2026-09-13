@@ -154,7 +154,9 @@ ISOLATION_PROFILE
 RESOURCE_POLICY
 ```
 
-A canary declares only dimensions material to attribution for that behavior.
+A canary declares only dimensions material to attribution for that behavior. In P0 this declaration is protocol-only metadata, not part of the behavior-contract fingerprint. `CanarySpec` may expose it through an optional `paired_change` block, but `_canary_fingerprint_payload()` and therefore legacy `canary_fingerprint` / `suite_fingerprint` MUST exclude that block so existing baselines do not become stale solely because causal protocol metadata was added. `ProtocolDesignV1` binds the declaration instead.
+
+A legacy canary with no material-dimension declaration remains valid for existing qualification semantics but cannot receive an attributable paired-change claim. The protocol records the declaration as unavailable and `MaterialDimensionsControlled=UNKNOWN`; absence is never interpreted as an empty material set.
 
 A local structural shell contract may omit provider-side model identity; a model-quality contract cannot safely omit provider/model routing if that state is material but opaque.
 
