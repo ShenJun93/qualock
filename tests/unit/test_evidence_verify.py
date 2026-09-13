@@ -262,6 +262,28 @@ def test_verify_evidence_bundle_rejects_non_gemini_explicit_support_mismatch(tmp
     assert exc_info.value.reason is EvidenceBundleReason.IDENTITY_MISMATCH
 
 
+def test_verify_evidence_bundle_rejects_non_gemini_legacy_null_lock_with_bound_support(
+    tmp_path: Path,
+) -> None:
+    built = _build(tmp_path, agent_name="codex", baseline_support_sha256="b" * 64)
+    baseline_lock = load_json(built.root, BASELINE_LOCK_FILENAME)
+    baseline_lock["agent"]["support_sha256"] = None
+    replace_payload(built, BASELINE_LOCK_FILENAME, baseline_lock)
+
+    from qualock.evidence.fingerprint import sha256_canonical
+
+    lock_sha = sha256_canonical(baseline_lock)
+    provenance = load_json(built.root, PROVENANCE_FILENAME)
+    provenance["baseline_lock_sha256"] = lock_sha
+    replace_payload(built, PROVENANCE_FILENAME, provenance)
+    built.manifest["baseline_lock_sha256"] = lock_sha
+    write_manifest(built.root, built.manifest)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+    assert exc_info.value.reason is EvidenceBundleReason.IDENTITY_MISMATCH
+
+
 # --- Cross-file identity mismatches ---------------------------------------------
 
 

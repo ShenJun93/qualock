@@ -157,15 +157,15 @@ def validate_proposed_lock(root: Path, raw: bytes) -> CandidateRequest:
     if not _SHA256_RE.fullmatch(proposed.agent.binary_sha256):
         raise PrValidationError("candidate binary sha256 must be exactly lowercase 64-hex")
 
-    support_sha256: str | None = None
-    if trusted_agent == "gemini":
-        if proposed.agent.support_sha256 is None or not _SHA256_RE.fullmatch(
-            proposed.agent.support_sha256
-        ):
-            raise PrValidationError(
-                "candidate support sha256 must be exactly lowercase 64-hex"
-            )
-        support_sha256 = proposed.agent.support_sha256
+    support_sha256 = proposed.agent.support_sha256
+    if support_sha256 is not None and not _SHA256_RE.fullmatch(support_sha256):
+        raise PrValidationError(
+            "candidate support sha256 must be exactly lowercase 64-hex"
+        )
+    if trusted_agent == "gemini" and support_sha256 is None:
+        raise PrValidationError(
+            "candidate support sha256 must be exactly lowercase 64-hex"
+        )
 
     return CandidateRequest(
         agent_name=trusted_agent,
@@ -304,12 +304,11 @@ def qualify_prepared_pr(
         resolved = active_resolver.resolve(candidate.version)
         if resolved.name != candidate.agent_name or resolved.sha256 != candidate.binary_sha256:
             raise PrValidationError("resolved agent binary does not match trusted candidate")
-        if candidate.agent_name == "gemini":
-            observed_support = agent_support_fingerprint(resolved)
-            if observed_support is None or observed_support != candidate.support_sha256:
-                raise PrValidationError(
-                    "resolved Gemini runtime support does not match trusted candidate"
-                )
+        observed_support = agent_support_fingerprint(resolved)
+        if observed_support != candidate.support_sha256:
+            raise PrValidationError(
+                "resolved runtime support does not match trusted candidate"
+            )
         result = check_executor(
             root,
             f"{candidate.agent_name}@{candidate.version}",
