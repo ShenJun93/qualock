@@ -43,12 +43,27 @@ from qualock.pricing.models import CostAnalysis
 from qualock.pricing.resolve import build_pricing_payload
 from qualock.pricing.sidecar import scan_pricing, write_pricing_sidecar
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
+from qualock.protocols.paired_change.design import (
+    build_agent_dependency_state,
+    build_protocol_design,
+)
+from qualock.protocols.paired_change.fingerprint import digest_model
+from qualock.protocols.paired_change.run_sidecar import (
+    PairedChangeRunError,
+    build_paired_change_run,
+    write_paired_change_run,
+)
 from qualock.qualification.models import AttemptResult, QualificationResult
 from qualock.run.backend import DockerQualificationBackend, IntegrityPolicy
 from qualock.run.docker import DockerRunner
-from qualock.run.executor import QualificationBackend, QualificationExecutor
+from qualock.run.executor import (
+    ProtocolAwareQualificationBackend,
+    QualificationBackend,
+    QualificationExecutor,
+)
 from qualock.run.host import LinuxHostRunner
 from qualock.run.host_backend import LinuxHostQualificationBackend
+from qualock.run.models import AttemptRunTrace
 from qualock.run.schedule import Side
 from qualock.source.git import GitSourceManager
 
@@ -313,6 +328,19 @@ def execute_check(
     backend = backend or _default_backend(root, config, agent_name)
     qid = qualification_id or _qualification_id("check")
 
+    control_profiles = None
+    if isinstance(backend, ProtocolAwareQualificationBackend):
+        control_profiles = {canary.id: backend.control_profiles(canary) for canary in canaries}
+    protocol_design = build_protocol_design(
+        suite_sha256=suite_fingerprint(canaries),
+        config_sha256=config_fingerprint(config),
+        repetitions=config.qualification.repetitions,
+        canaries=canaries,
+        control_profiles=control_profiles,
+    )
+    protocol_design_sha256 = digest_model(protocol_design)
+    trace: list[AttemptRunTrace] = []
+
     run_started_at = datetime.now(UTC)
     result = QualificationExecutor(
         backend=backend,
@@ -324,6 +352,8 @@ def execute_check(
         qualification_id=qid,
         max_attempts=max_attempts,
         max_tokens=max_tokens,
+        trace_sink=trace,
+        trace_design_sha256=protocol_design_sha256,
     )
     qualification_dir = write_qualification_artifacts(
         project_dir(root) / "results",
@@ -342,6 +372,36 @@ def execute_check(
         write_evidence_provenance(qualification_dir / "evidence-provenance.json", provenance)
     except (EvidenceProvenanceError, ValidationError) as exc:
         raise CommandError("qualification evidence provenance could not be written") from exc
+
+    try:
+        paired_change_run = build_paired_change_run(
+            protocol_design=protocol_design,
+            protocol_design_sha256=protocol_design_sha256,
+            qualification_id=qid,
+            baseline_state=build_agent_dependency_state(
+                baseline_binary,
+                ModelPin(
+                    id=config.model.id,
+                    snapshot=config.model.snapshot,
+                    reasoning_effort=config.model.reasoning_effort,
+                ),
+            ),
+            candidate_state=build_agent_dependency_state(
+                candidate_binary,
+                ModelPin(
+                    id=config.model.id,
+                    snapshot=config.model.snapshot,
+                    reasoning_effort=config.model.reasoning_effort,
+                ),
+            ),
+            result=result,
+            trace=trace,
+        )
+        write_paired_change_run(
+            qualification_dir / "paired-change-run-v1.json", paired_change_run
+        )
+    except (PairedChangeRunError, ValidationError) as exc:
+        raise CommandError("paired-change run evidence could not be written") from exc
     run_finished_at = datetime.now(UTC)
     _write_pricing_sidecar_best_effort(
         qualification_dir, config, result, run_started_at, run_finished_at

@@ -33,10 +33,17 @@ from qualock.evidence.provenance import EvidenceProvenanceError, read_evidence_p
 from qualock.history.models import HistoryAnalysis, HistorySummary, SuiteEstimate
 from qualock.pricing.models import CostAnalysis, PricingHistory, SuiteCostEstimate
 from qualock.project import load_project
+from qualock.protocols.paired_change.fingerprint import digest_model
+from qualock.protocols.paired_change.run_sidecar import read_paired_change_run
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.host import LinuxHostRunner
 from qualock.run.host_backend import LinuxHostQualificationBackend
-from qualock.run.models import PreparedTarget
+from qualock.run.models import (
+    AttemptControlContext,
+    AttemptControlProfiles,
+    AttemptExecution,
+    PreparedTarget,
+)
 from qualock.run.schedule import Side
 
 
@@ -98,6 +105,30 @@ class FakeBackend:
             valid=True,
             duration_ms=100,
             usage=Usage(input_tokens=10, output_tokens=1, observed=True),
+        )
+
+
+class ProtocolAwareFakeBackend(FakeBackend):
+    def control_profiles(self, canary) -> AttemptControlProfiles:
+        return AttemptControlProfiles(
+            preparation_sha256="1" * 64,
+            isolation_sha256="2" * 64,
+            resource_sha256="3" * 64,
+            runtime_sha256="4" * 64,
+        )
+
+    def run_attempt_with_context(
+        self, *, canary, prepared, binary, side: Side, repetition: int
+    ) -> AttemptExecution:
+        result = self.run_attempt(
+            canary=canary, prepared=prepared, binary=binary, side=side, repetition=repetition
+        )
+        return AttemptExecution(
+            result=result,
+            context=AttemptControlContext(
+                profiles=self.control_profiles(canary),
+                isolation_instance_sha256="5" * 64,
+            ),
         )
 
 
@@ -595,6 +626,88 @@ def test_check_reruns_pinned_baseline_and_candidate_and_writes_report(tmp_path: 
     assert (tmp_path / ".qualock/results/check-q/report.json").is_file()
 
 
+def test_check_writes_paired_change_run_sidecar_with_legacy_backend(tmp_path: Path) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-sidecar",
+        created_at="2026-09-10T00:00:00Z",
+    )
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-sidecar",
+    )
+
+    sidecar_path = tmp_path / ".qualock/results/check-sidecar/paired-change-run-v1.json"
+    assert sidecar_path.is_file()
+    run = read_paired_change_run(sidecar_path)
+
+    assert run.qualification_id == "check-sidecar"
+    assert run.qualification_id == result.qualification_id
+    assert run.protocol_design_sha256 == digest_model(run.protocol_design)
+    assert run.baseline_state.version == "0.150.0"
+    assert run.candidate_state.version == "0.151.0"
+    assert len(run.canaries) == 1
+    canary_evidence = run.canaries[0]
+    assert canary_evidence.canary_id == "sample"
+    assert len(canary_evidence.pairs) == 3
+    for attempt in (item for pair in canary_evidence.pairs for item in pair.attempts):
+        assert attempt.protocol_design_sha256 == run.protocol_design_sha256
+
+    design_canary = run.protocol_design.canaries[0]
+    assert design_canary.material_dimensions is None
+    assert design_canary.preparation_sha256 is None
+    assert design_canary.isolation_sha256 is None
+    assert design_canary.resource_sha256 is None
+    assert design_canary.runtime_sha256 is None
+
+
+def test_check_writes_paired_change_run_sidecar_with_protocol_aware_backend(
+    tmp_path: Path,
+) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    backend = ProtocolAwareFakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-sidecar-aware",
+        created_at="2026-09-10T00:00:00Z",
+    )
+    execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-sidecar-aware",
+    )
+
+    sidecar_path = (
+        tmp_path / ".qualock/results/check-sidecar-aware/paired-change-run-v1.json"
+    )
+    run = read_paired_change_run(sidecar_path)
+
+    design_canary = run.protocol_design.canaries[0]
+    assert design_canary.preparation_sha256 == "1" * 64
+    assert design_canary.isolation_sha256 == "2" * 64
+    assert design_canary.resource_sha256 == "3" * 64
+    assert design_canary.runtime_sha256 == "4" * 64
+
+    pair_attempt = run.canaries[0].pairs[0].attempts[0]
+    assert pair_attempt.isolation_instance_sha256 == "5" * 64
+    assert pair_attempt.preparation_sha256 == "1" * 64
+
+
 def test_check_forwards_attempt_budget_and_writes_incomplete_report(tmp_path: Path) -> None:
     setup_project(tmp_path)
     resolver = FakeResolver()
@@ -845,6 +958,7 @@ def test_check_pricing_writer_failure_is_advisory(
         "report.json",
         "qualification.json",
         "evidence-provenance.json",
+        "paired-change-run-v1.json",
     }
 
 
