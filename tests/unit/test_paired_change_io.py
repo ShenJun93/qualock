@@ -496,3 +496,25 @@ def test_windows_api_signature_configuration_is_pointer_safe() -> None:
     assert ntdll.NtCreateFile.argtypes[0] == paired_io.ctypes.POINTER(
         paired_io.wintypes.HANDLE
     )
+@pytest.mark.skipif(os.name != "nt", reason="Windows share-delete semantics")
+def test_windows_pinned_directory_blocks_ancestor_replacement(tmp_path: Path) -> None:
+    from qualock.protocols.paired_change import io as paired_io
+
+    ancestor = tmp_path / "ancestor"
+    protocol_path = ancestor / "nested" / "protocol"
+    protocol_path.mkdir(parents=True)
+    (protocol_path / _PROTOCOL_EVIDENCE_FILENAME).write_bytes(b"original")
+
+    session = paired_io._PinnedProtocolDirectory(
+        protocol_path,
+        root_reason=PairedChangeVerificationReason.MALFORMED_PROTOCOL_EVIDENCE,
+    )
+    moved = tmp_path / "moved"
+    with session:
+        with pytest.raises(PermissionError):
+            ancestor.rename(moved)
+        assert session.read_bounded(
+            _PROTOCOL_EVIDENCE_FILENAME,
+            max_bytes=1024,
+            reason=PairedChangeVerificationReason.MALFORMED_PROTOCOL_EVIDENCE,
+        ) == b"original"
