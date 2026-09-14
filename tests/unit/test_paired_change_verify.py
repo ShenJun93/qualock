@@ -82,6 +82,40 @@ def test_verify_paired_change_details_returns_immutable_verified_result() -> Non
         verified.protocol_evidence_sha256 = SHA_F  # type: ignore[misc]
 
 
+def test_verify_paired_change_details_delegates_exact_companion_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, bundle_path, protocol_path = _exported(tmp_path)
+    receipt_path = protocol_path / CLAIM_RECEIPT_FILENAME
+    receipt_value = verify_paired_change(bundle_path, protocol_path).model_dump(
+        mode="json"
+    )
+    raw_receipt = json.dumps(receipt_value, indent=2).encode("utf-8")
+    receipt_path.write_bytes(raw_receipt)
+    raw_protocol = (protocol_path / PROTOCOL_EVIDENCE_FILENAME).read_bytes()
+    captured: tuple[bytes, bytes | None] | None = None
+
+    from qualock.protocols.paired_change import verify as paired_verify
+
+    expected = paired_verify.verify_paired_change_payloads(
+        _bundle_payloads(bundle_path), raw_protocol, raw_receipt
+    )
+
+    def capture_payloads(
+        bundle_files: dict[str, bytes],
+        protocol_evidence_bytes: bytes,
+        claim_receipt_bytes: bytes | None,
+    ):
+        nonlocal captured
+        captured = (protocol_evidence_bytes, claim_receipt_bytes)
+        return expected
+
+    monkeypatch.setattr(paired_verify, "verify_paired_change_payloads", capture_payloads)
+
+    assert paired_verify.verify_paired_change_details(bundle_path, protocol_path) == expected
+    assert captured == (raw_protocol, raw_receipt)
+
+
 def test_verify_paired_change_payloads_preserves_stored_claim_mismatch() -> None:
     bundle_path = GOLDEN_VECTOR / "bundle"
     protocol_path = GOLDEN_VECTOR / "protocol"

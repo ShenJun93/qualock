@@ -59,18 +59,22 @@ def verify_evidence_bundle(root: Path) -> VerifiedEvidenceBundle:
 
 def _read_evidence_bundle_payloads(root: Path) -> dict[str, bytes]:
     names = inspect_bundle_files(root)
-    return {
-        name: read_bounded_regular_file(
-            root,
-            name,
-            max_bytes=(
-                MANIFEST_MAX_BYTES
-                if name == MANIFEST_FILENAME
-                else FILE_MAX_BYTES[name]
-            ),
+    manifest_bytes = read_bounded_regular_file(
+        root, MANIFEST_FILENAME, max_bytes=MANIFEST_MAX_BYTES
+    )
+    manifest = _parse_model(
+        EvidenceManifest,
+        manifest_bytes,
+        MANIFEST_FILENAME,
+        EvidenceBundleReason.MALFORMED_MANIFEST,
+    )
+    _verify_inventory(names, manifest)
+    files = {MANIFEST_FILENAME: manifest_bytes}
+    for name in manifest.files:
+        files[name] = read_bounded_regular_file(
+            root, name, max_bytes=FILE_MAX_BYTES[name]
         )
-        for name in names
-    }
+    return files
 
 
 def verify_evidence_bundle_payloads(

@@ -10,7 +10,6 @@ from pathlib import Path
 from pydantic import ValidationError
 
 import qualock
-from qualock.evidence.bundle_io import canonical_json_file_bytes
 from qualock.evidence.bundle_models import EvidenceManifest, VerifiedEvidenceBundle
 from qualock.evidence.verify import (
     _read_evidence_bundle_payloads,
@@ -27,7 +26,7 @@ from .io import (
     _parse_model,
     _preflight_protocol_payload,
     _protocol_payload_value,
-    _read_protocol_companion,
+    _read_protocol_companion_payloads,
 )
 from .models import (
     AgentDependencyStateV1,
@@ -284,14 +283,11 @@ def verify_paired_change_details(
     bundle_path: Path, protocol_path: Path
 ) -> VerifiedPairedChangeV1:
     bundle_files = _read_evidence_bundle_payloads(bundle_path)
-    _evidence, protocol_evidence_bytes, stored = _read_protocol_companion(protocol_path)
-    stored_bytes = (
-        None
-        if stored is None
-        else canonical_json_file_bytes(stored.model_dump(mode="json"))
+    protocol_evidence_bytes, claim_receipt_bytes = (
+        _read_protocol_companion_payloads(protocol_path)
     )
     return verify_paired_change_payloads(
-        bundle_files, protocol_evidence_bytes, stored_bytes
+        bundle_files, protocol_evidence_bytes, claim_receipt_bytes
     )
 
 
