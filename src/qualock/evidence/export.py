@@ -12,7 +12,6 @@ import errno
 import hashlib
 import json
 import os
-import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -747,15 +746,17 @@ def export_evidence_bundle(
         # Best-effort rollback. Published names are atomically claimed back to
         # their private staging names; ownership is checked before deciding
         # whether a claimed replacement should be restored.
-        if protocol_temp_dir is not None:
-            if protocol_published and protocol_identity is not None:
-                _rollback_published_directory(
-                    protocol_dest, protocol_temp_dir, protocol_identity
-                )
-            else:
-                shutil.rmtree(protocol_temp_dir, ignore_errors=True)
+        if (
+            protocol_temp_dir is not None
+            and protocol_published
+            and protocol_identity is not None
+        ):
+            _rollback_published_directory(
+                protocol_dest, protocol_temp_dir, protocol_identity
+            )
         if bundle_published and bundle_identity is not None:
             _rollback_published_directory(dest, temp_dir, bundle_identity)
-        else:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        # Unpublished staging pathnames may have been renamed away and replaced
+        # by another process. Leave them untouched: pathname-based recursive
+        # deletion cannot guarantee ownership without a check/delete race.
         raise
