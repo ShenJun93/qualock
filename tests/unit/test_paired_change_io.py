@@ -410,3 +410,24 @@ def test_write_claim_receipt_fails_closed_without_o_nofollow(
 
     assert exc_info.value.reason is PairedChangeVerificationReason.MALFORMED_RECEIPT
     assert not (protocol_path / _CLAIM_RECEIPT_FILENAME).exists()
+
+
+def test_windows_root_open_failure_maps_to_domain_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qualock.protocols.paired_change import io as paired_io
+
+    monkeypatch.setattr(paired_io.os, "name", "nt")
+
+    def fail_open(*args: object, **kwargs: object) -> int:
+        raise OSError(2, "missing protocol directory")
+
+    monkeypatch.setattr(paired_io, "_win_create_handle", fail_open)
+
+    with pytest.raises(PairedChangeVerificationError) as exc_info:
+        paired_io.read_protocol_evidence(tmp_path / "missing")
+
+    assert (
+        exc_info.value.reason
+        is PairedChangeVerificationReason.MALFORMED_PROTOCOL_EVIDENCE
+    )

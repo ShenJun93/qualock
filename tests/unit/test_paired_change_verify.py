@@ -236,3 +236,54 @@ def test_verify_paired_change_classifies_duplicate_pair_as_layout_mismatch(tmp_p
     with pytest.raises(PairedChangeVerificationError) as exc_info:
         verify_paired_change(bundle_path, protocol_path)
     assert exc_info.value.reason is PairedChangeVerificationReason.PAIR_LAYOUT_MISMATCH
+
+
+import os
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX rename semantics required")
+def test_verify_paired_change_pins_companion_directory_across_receipt_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, bundle_path, protocol_path = _exported(tmp_path)
+    expected = verify_paired_change(bundle_path, protocol_path)
+    replacement_receipt = expected.model_copy(update={"verifier_version": "replacement"})
+
+    from qualock.protocols.paired_change import io as paired_io
+
+    original_preflight = paired_io._preflight_protocol_payload
+    swapped = False
+
+    def swap_after_protocol_read(value: object) -> None:
+        nonlocal swapped
+        original_preflight(value)
+        if swapped:
+            return
+        swapped = True
+        moved = protocol_path.with_name(protocol_path.name + ".moved")
+        protocol_path.rename(moved)
+        protocol_path.mkdir()
+        (protocol_path / PROTOCOL_EVIDENCE_FILENAME).write_bytes(
+            (moved / PROTOCOL_EVIDENCE_FILENAME).read_bytes()
+        )
+        (protocol_path / CLAIM_RECEIPT_FILENAME).write_bytes(
+            canonical_json_file_bytes(replacement_receipt.model_dump(mode="json"))
+        )
+
+    monkeypatch.setattr(paired_io, "_preflight_protocol_payload", swap_after_protocol_read)
+
+    assert verify_paired_change(bundle_path, protocol_path) == expected
+
+
+def test_verify_paired_change_classifies_duplicate_canary_as_layout_mismatch(
+    tmp_path: Path,
+) -> None:
+    _, bundle_path, protocol_path = _exported(tmp_path)
+    path = protocol_path / PROTOCOL_EVIDENCE_FILENAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["canaries"].append(dict(payload["canaries"][0]))
+    path.write_bytes(canonical_json_file_bytes(payload))
+
+    with pytest.raises(PairedChangeVerificationError) as exc_info:
+        verify_paired_change(bundle_path, protocol_path)
+    assert exc_info.value.reason is PairedChangeVerificationReason.PAIR_LAYOUT_MISMATCH

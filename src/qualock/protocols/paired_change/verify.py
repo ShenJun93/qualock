@@ -16,8 +16,7 @@ from .fingerprint import digest_model
 from .io import (
     PairedChangeVerificationError,
     PairedChangeVerificationReason,
-    _read_protocol_evidence_with_bytes,
-    read_claim_receipt,
+    _read_protocol_companion,
 )
 from .models import (
     AgentDependencyStateV1,
@@ -219,7 +218,7 @@ def _build_receipt(
 
 def verify_paired_change(bundle_path: Path, protocol_path: Path) -> ClaimReceiptV1:
     bundle = verify_evidence_bundle(bundle_path)
-    evidence, protocol_evidence_bytes = _read_protocol_evidence_with_bytes(protocol_path)
+    evidence, protocol_evidence_bytes, stored = _read_protocol_companion(protocol_path)
     _verify_protocol_identity(evidence)
     _verify_evidence_binding(bundle, evidence)
     _verify_state_binding(bundle, evidence)
@@ -230,7 +229,6 @@ def verify_paired_change(bundle_path: Path, protocol_path: Path) -> ClaimReceipt
         evidence,
         protocol_evidence_sha256=hashlib.sha256(protocol_evidence_bytes).hexdigest(),
     )
-    stored = read_claim_receipt(protocol_path)
     if stored is not None and stored != receipt:
         _fail(PairedChangeVerificationReason.CLAIM_MISMATCH, "claim-receipt.json")
     return receipt
