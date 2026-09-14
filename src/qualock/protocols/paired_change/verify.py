@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import ValidationError
+
 import qualock
+from qualock.evidence.bundle_io import canonical_json_file_bytes
 from qualock.evidence.bundle_models import EvidenceManifest, VerifiedEvidenceBundle
-from qualock.evidence.verify import verify_evidence_bundle
+from qualock.evidence.verify import (
+    _read_evidence_bundle_payloads,
+    verify_evidence_bundle_payloads,
+)
 
 from .claims import derive_canary_claim
 from .conditions import evaluate_canary_conditions, evaluate_qualification_conditions
@@ -16,6 +24,9 @@ from .fingerprint import digest_model
 from .io import (
     PairedChangeVerificationError,
     PairedChangeVerificationReason,
+    _parse_model,
+    _preflight_protocol_payload,
+    _protocol_payload_value,
     _read_protocol_companion,
 )
 from .models import (
@@ -23,6 +34,14 @@ from .models import (
     ClaimReceiptV1,
     ProtocolEvidenceV1,
 )
+
+
+@dataclass(frozen=True)
+class VerifiedPairedChangeV1:
+    bundle: VerifiedEvidenceBundle
+    evidence: ProtocolEvidenceV1
+    receipt: ClaimReceiptV1
+    protocol_evidence_sha256: str
 
 
 def _fail(reason: PairedChangeVerificationReason, field: str) -> None:
@@ -216,9 +235,31 @@ def _build_receipt(
     )
 
 
-def verify_paired_change(bundle_path: Path, protocol_path: Path) -> ClaimReceiptV1:
-    bundle = verify_evidence_bundle(bundle_path)
-    evidence, protocol_evidence_bytes, stored = _read_protocol_companion(protocol_path)
+def verify_paired_change_payloads(
+    bundle_files: Mapping[str, bytes],
+    protocol_evidence_bytes: bytes,
+    claim_receipt_bytes: bytes | None,
+) -> VerifiedPairedChangeV1:
+    bundle = verify_evidence_bundle_payloads(bundle_files)
+    value = _protocol_payload_value(protocol_evidence_bytes)
+    _preflight_protocol_payload(value)
+    try:
+        evidence = ProtocolEvidenceV1.model_validate(value)
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise PairedChangeVerificationError(
+            PairedChangeVerificationReason.MALFORMED_PROTOCOL_EVIDENCE,
+            "protocol-evidence.json",
+        ) from exc
+    stored = (
+        None
+        if claim_receipt_bytes is None
+        else _parse_model(
+            claim_receipt_bytes,
+            ClaimReceiptV1,
+            PairedChangeVerificationReason.MALFORMED_RECEIPT,
+            "claim-receipt.json",
+        )
+    )
     _verify_protocol_identity(evidence)
     _verify_evidence_binding(bundle, evidence)
     _verify_state_binding(bundle, evidence)
@@ -231,4 +272,28 @@ def verify_paired_change(bundle_path: Path, protocol_path: Path) -> ClaimReceipt
     )
     if stored is not None and stored != receipt:
         _fail(PairedChangeVerificationReason.CLAIM_MISMATCH, "claim-receipt.json")
-    return receipt
+    return VerifiedPairedChangeV1(
+        bundle=bundle,
+        evidence=evidence,
+        receipt=receipt,
+        protocol_evidence_sha256=receipt.protocol_evidence_sha256,
+    )
+
+
+def verify_paired_change_details(
+    bundle_path: Path, protocol_path: Path
+) -> VerifiedPairedChangeV1:
+    bundle_files = _read_evidence_bundle_payloads(bundle_path)
+    _evidence, protocol_evidence_bytes, stored = _read_protocol_companion(protocol_path)
+    stored_bytes = (
+        None
+        if stored is None
+        else canonical_json_file_bytes(stored.model_dump(mode="json"))
+    )
+    return verify_paired_change_payloads(
+        bundle_files, protocol_evidence_bytes, stored_bytes
+    )
+
+
+def verify_paired_change(bundle_path: Path, protocol_path: Path) -> ClaimReceiptV1:
+    return verify_paired_change_details(bundle_path, protocol_path).receipt

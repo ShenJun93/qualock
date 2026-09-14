@@ -17,7 +17,8 @@ from qualock.evidence.bundle_models import (
     EvidenceBundleReason,
     VerifiedEvidenceBundle,
 )
-from qualock.evidence.verify import verify_evidence_bundle
+from qualock.evidence.verify import verify_evidence_bundle, verify_evidence_bundle_payloads
+from qualock.history.models import HistoricalAttempt, HistoricalExecution, LoadedReport
 from qualock.pricing.sidecar import PricingSidecarPayloadError, parse_pricing_sidecar_payload
 from qualock.qualification.models import Verdict
 from tests.unit.evidence_bundle_fixtures import (
@@ -54,7 +55,53 @@ def _snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
     }
 
 
+def _payloads(root: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in root.iterdir()}
+
+
+def _verification_reason(callable_: object) -> EvidenceBundleReason:
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        callable_()  # type: ignore[operator]
+    return exc_info.value.reason
+
+
 # --- Step 3.1 — happy path, inventory, and cross-file identity -----------------
+
+
+def test_verify_evidence_bundle_payloads_matches_path_verifier(tmp_path: Path) -> None:
+    built = _build(tmp_path, include_pricing=True)
+
+    assert verify_evidence_bundle_payloads(_payloads(built.root)) == verify_evidence_bundle(
+        built.root
+    )
+
+
+def test_verify_evidence_bundle_payloads_preserves_manifest_error_reason(
+    tmp_path: Path,
+) -> None:
+    built = _build(tmp_path)
+    files = _payloads(built.root)
+    files[MANIFEST_FILENAME] = b"{not json"
+    (built.root / MANIFEST_FILENAME).write_bytes(files[MANIFEST_FILENAME])
+
+    assert _verification_reason(
+        lambda: verify_evidence_bundle_payloads(files)
+    ) is _verification_reason(lambda: verify_evidence_bundle(built.root))
+
+
+def test_verify_evidence_bundle_payloads_preserves_payload_tamper_reason(
+    tmp_path: Path,
+) -> None:
+    built = _build(tmp_path)
+    files = _payloads(built.root)
+    tampered = bytearray(files[REPORT_FILENAME])
+    tampered[-2] ^= 0xFF
+    files[REPORT_FILENAME] = bytes(tampered)
+    (built.root / REPORT_FILENAME).write_bytes(files[REPORT_FILENAME])
+
+    assert _verification_reason(
+        lambda: verify_evidence_bundle_payloads(files)
+    ) is _verification_reason(lambda: verify_evidence_bundle(built.root))
 
 
 def test_verify_evidence_bundle_accepts_manually_built_valid_bundle(tmp_path: Path) -> None:
@@ -822,6 +869,44 @@ def test_parse_pricing_sidecar_payload_rejects_qualification_id_mismatch() -> No
     with pytest.raises(PricingSidecarPayloadError) as exc_info:
         parse_pricing_sidecar_payload(loaded, payload)
     assert exc_info.value.reason == "pricing qualification_id mismatch"
+
+
+def test_parse_pricing_sidecar_payload_does_not_read_qualification_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built = _build(tmp_path, include_pricing=True)
+    assert built.pricing is not None
+    executions = tuple(
+        HistoricalExecution(
+            canary_id=execution["canary_id"],
+            attempts=tuple(
+                HistoricalAttempt(
+                    side=attempt["side"],
+                    repetition=attempt["repetition"],
+                    success=attempt["success"],
+                    valid=attempt["valid"],
+                    duration_ms=attempt["duration_ms"],
+                    input_tokens=attempt["usage"]["input_tokens"],
+                    output_tokens=attempt["usage"]["output_tokens"],
+                )
+                for attempt in execution["attempts"]
+            ),
+        )
+        for execution in built.report["executions"]
+    )
+    loaded = LoadedReport(
+        qualification_id=built.report["qualification_id"],
+        qualification_dir=Path("/must-not-be-read"),
+        executions=executions,
+    )
+
+    def forbidden(*args: object, **kwargs: object) -> object:
+        raise AssertionError("qualification_dir must not be read")
+
+    monkeypatch.setattr(Path, "open", forbidden)
+    sidecar = parse_pricing_sidecar_payload(loaded, built.pricing)
+
+    assert sidecar.qualification_dir == Path("/must-not-be-read")
 
 
 # --- Fix round 1: I1 TOCTOU single-read tests -------------------------------------

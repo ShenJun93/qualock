@@ -5,6 +5,7 @@ import json
 import shutil
 import socket
 import subprocess
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -19,10 +20,17 @@ from qualock.protocols.paired_change.io import (
     read_protocol_evidence,
 )
 from qualock.protocols.paired_change.models import ClaimClass
-from qualock.protocols.paired_change.verify import verify_paired_change
+from qualock.protocols.paired_change.verify import (
+    verify_paired_change,
+    verify_paired_change_details,
+    verify_paired_change_payloads,
+)
 from tests.unit.test_evidence_export import _create_synthetic_qualification
 
 SHA_F = "f" * 64
+GOLDEN_VECTOR = (
+    Path(__file__).parents[1] / "fixtures" / "paired_change_v1" / "attributable-clean"
+)
 
 
 def _exported(tmp_path: Path):
@@ -43,6 +51,50 @@ def _replace_evidence(protocol_path: Path, **updates: object) -> None:
     (protocol_path / PROTOCOL_EVIDENCE_FILENAME).write_bytes(
         canonical_json_file_bytes(evidence.model_dump(mode="json"))
     )
+
+
+def _bundle_payloads(bundle_path: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in bundle_path.iterdir()}
+
+
+def test_verify_paired_change_payloads_returns_recomputed_details() -> None:
+    bundle_path = GOLDEN_VECTOR / "bundle"
+    protocol_path = GOLDEN_VECTOR / "protocol"
+    protocol_bytes = (protocol_path / PROTOCOL_EVIDENCE_FILENAME).read_bytes()
+
+    verified = verify_paired_change_payloads(
+        _bundle_payloads(bundle_path), protocol_bytes, None
+    )
+
+    assert verified.receipt == verify_paired_change(bundle_path, protocol_path)
+    assert verified.evidence.candidate_state.version == "0.151.0"
+    assert verified.protocol_evidence_sha256 == hashlib.sha256(protocol_bytes).hexdigest()
+
+
+def test_verify_paired_change_details_returns_immutable_verified_result() -> None:
+    bundle_path = GOLDEN_VECTOR / "bundle"
+    protocol_path = GOLDEN_VECTOR / "protocol"
+
+    verified = verify_paired_change_details(bundle_path, protocol_path)
+
+    assert verified.receipt == verify_paired_change(bundle_path, protocol_path)
+    with pytest.raises(FrozenInstanceError):
+        verified.protocol_evidence_sha256 = SHA_F  # type: ignore[misc]
+
+
+def test_verify_paired_change_payloads_preserves_stored_claim_mismatch() -> None:
+    bundle_path = GOLDEN_VECTOR / "bundle"
+    protocol_path = GOLDEN_VECTOR / "protocol"
+    protocol_bytes = (protocol_path / PROTOCOL_EVIDENCE_FILENAME).read_bytes()
+    receipt = verify_paired_change(bundle_path, protocol_path)
+    stored = receipt.model_copy(update={"verifier_version": "tampered"})
+    stored_bytes = canonical_json_file_bytes(stored.model_dump(mode="json"))
+
+    with pytest.raises(PairedChangeVerificationError) as exc_info:
+        verify_paired_change_payloads(
+            _bundle_payloads(bundle_path), protocol_bytes, stored_bytes
+        )
+    assert exc_info.value.reason is PairedChangeVerificationReason.CLAIM_MISMATCH
 
 
 def test_receipt_binds_canonical_protocol_evidence_file_bytes(tmp_path: Path) -> None:
