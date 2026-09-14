@@ -10,11 +10,13 @@ import pytest
 import yaml
 
 import qualock
+import qualock.evidence.export as export_module
 from qualock.agents.base import AgentBinary, AgentSupportBinary, AgentSupportTree
 from qualock.canary.models import CanarySpec
 from qualock.commands import execute_baseline, execute_check
 from qualock.config.io import write_default_config
 from qualock.evidence.bundle_models import (
+    BUNDLE_FILENAMES,
     CANARIES_FILENAME,
     MANIFEST_FILENAME,
     PRICING_FILENAME,
@@ -28,6 +30,7 @@ from qualock.evidence.export import ExportedEvidenceBundle, export_evidence_bund
 from qualock.evidence.fingerprint import sha256_canonical
 from qualock.evidence.verify import verify_evidence_bundle
 from qualock.pricing.sidecar import write_pricing_sidecar
+from qualock.protocols.paired_change.models import ProtocolEvidenceV1
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.models import PreparedTarget
 from qualock.run.schedule import Side
@@ -238,6 +241,7 @@ def test_export_evidence_bundle_happy_path(tmp_path: Path) -> None:
     assert bundle.path == dest
     assert bundle.qualification_id == "check-happy"
     assert len(bundle.manifest_sha256) == 64
+    assert bundle.protocol_path == dest.with_name(dest.name + ".paired-change-v1")
     assert dest.is_dir()
 
     manifest_bytes = (dest / MANIFEST_FILENAME).read_bytes()
@@ -255,6 +259,94 @@ def test_export_evidence_bundle_happy_path(tmp_path: Path) -> None:
 
     verified = verify_evidence_bundle(dest)
     assert verified.manifest.qualification_id == "check-happy"
+
+
+def test_legacy_export_creates_no_protocol_companion(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-legacy"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    sidecar = (
+        project_root
+        / ".qualock"
+        / "results"
+        / qualification_id
+        / "paired-change-run-v1.json"
+    )
+    sidecar.unlink()
+    dest = tmp_path / "legacy-bundle"
+
+    exported = export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exported.path == dest
+    assert exported.protocol_path is None
+    assert not dest.with_name(dest.name + ".paired-change-v1").exists()
+
+
+def test_paired_change_export_preserves_bundle_inventory_and_writes_companion(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-protocol"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "protocol-bundle"
+
+    exported = export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert {path.name for path in dest.iterdir()} <= BUNDLE_FILENAMES
+    assert {path.name for path in dest.iterdir()} == set(BUNDLE_FILENAMES)
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    assert exported.protocol_path == companion
+    assert [path.name for path in companion.iterdir()] == ["protocol-evidence.json"]
+    protocol = ProtocolEvidenceV1.model_validate_json(
+        (companion / "protocol-evidence.json").read_bytes()
+    )
+    assert protocol.evidence_manifest_sha256 == exported.manifest_sha256
+    assert verify_evidence_bundle(dest).manifest_sha256 == exported.manifest_sha256
+
+
+def test_export_rejects_preexisting_protocol_companion_without_publishing_bundle(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-existing-companion"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    companion.mkdir()
+    marker = companion / "owned-by-user"
+    marker.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert not dest.exists()
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_protocol_companion_publish_failure_rolls_back_new_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-companion-failure"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    real_replace = export_module.os.replace
+
+    def fail_companion_publish(source: Path, target: Path) -> None:
+        if Path(target) == companion:
+            raise OSError("simulated companion publication failure")
+        real_replace(source, target)
+
+    monkeypatch.setattr(export_module.os, "replace", fail_companion_publish)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert not dest.exists()
+    assert not companion.exists()
 
 
 def test_export_evidence_bundle_allows_equal_run_and_exporter_version(

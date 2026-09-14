@@ -59,8 +59,13 @@ from qualock.project import (
     project_dir,
     suite_fingerprint,
 )
+from qualock.protocols.paired_change.materialize import materialize_protocol_evidence
+from qualock.protocols.paired_change.run_sidecar import read_paired_change_run
 from qualock.qualification.models import CanaryAggregate, CanaryComparison
 from qualock.qualification.policy import qualify_canary, qualify_suite
+
+_PAIRED_CHANGE_RUN_FILENAME = "paired-change-run-v1.json"
+_PROTOCOL_EVIDENCE_FILENAME = "protocol-evidence.json"
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,7 @@ class ExportedEvidenceBundle:
     path: Path
     qualification_id: str
     manifest_sha256: str
+    protocol_path: Path | None = None
 
 
 def _budget_skip_reasons(
@@ -123,6 +129,12 @@ def export_evidence_bundle(
     dest = destination.resolve()
     if dest.exists():
         raise EvidenceBundleError(EvidenceBundleReason.UNSAFE_PATH, "destination")
+
+    sidecar_path = source_dir / _PAIRED_CHANGE_RUN_FILENAME
+    has_protocol_sidecar = os.path.lexists(sidecar_path)
+    protocol_dest = dest.with_name(dest.name + ".paired-change-v1")
+    if has_protocol_sidecar and os.path.lexists(protocol_dest):
+        raise EvidenceBundleError(EvidenceBundleReason.UNSAFE_PATH, "protocol_path")
 
     try:
         dest.relative_to(source_dir)
@@ -551,6 +563,9 @@ def export_evidence_bundle(
     # 9. Write payload files to a sibling temporary directory
     dest.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix=".export-tmp-", dir=dest.parent))
+    protocol_temp_dir: Path | None = None
+    bundle_published = False
+    protocol_published = False
 
     try:
         files: dict[str, dict[str, Any]] = {}
@@ -612,19 +627,51 @@ def export_evidence_bundle(
         (temp_dir / MANIFEST_FILENAME).write_bytes(manifest_bytes)
         manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
-        # 11. Self-verify temporary bundle BEFORE publication
-        verify_evidence_bundle(temp_dir)
+        # 11. Self-verify and materialize all companion bytes BEFORE publication
+        verified_bundle = verify_evidence_bundle(temp_dir)
+        if has_protocol_sidecar:
+            paired_change_run = read_paired_change_run(sidecar_path)
+            protocol_evidence = materialize_protocol_evidence(
+                paired_change_run, verified_bundle
+            )
+            protocol_bytes = canonical_json_file_bytes(
+                protocol_evidence.model_dump(mode="json")
+            )
+            # Validate the exact bytes that will be published.
+            type(protocol_evidence).model_validate_json(protocol_bytes)
+            protocol_temp_dir = Path(
+                tempfile.mkdtemp(prefix=".paired-change-tmp-", dir=dest.parent)
+            )
+            (protocol_temp_dir / _PROTOCOL_EVIDENCE_FILENAME).write_bytes(
+                protocol_bytes
+            )
 
-        # 12. Atomic same-filesystem publish
+        # 12. Publish the unchanged V1 bundle, then its separate companion.
         os.replace(temp_dir, dest)
+        bundle_published = True
+        if protocol_temp_dir is not None:
+            try:
+                os.replace(protocol_temp_dir, protocol_dest)
+                protocol_published = True
+            except OSError as exc:
+                raise EvidenceBundleError(
+                    EvidenceBundleReason.UNSAFE_PATH, "protocol_path"
+                ) from exc
 
         return ExportedEvidenceBundle(
             path=dest,
             qualification_id=qualification_id,
             manifest_sha256=manifest_sha256,
+            protocol_path=protocol_dest if protocol_published else None,
         )
 
     except Exception:
-        # Cleanup owned temporary directory on any failure; leave destination absent
+        # Best-effort rollback of paths created by this export on any failure.
         shutil.rmtree(temp_dir, ignore_errors=True)
+        if protocol_temp_dir is not None:
+            shutil.rmtree(protocol_temp_dir, ignore_errors=True)
+        if protocol_published:
+            shutil.rmtree(protocol_dest, ignore_errors=True)
+        if bundle_published:
+            shutil.rmtree(dest, ignore_errors=True)
         raise
