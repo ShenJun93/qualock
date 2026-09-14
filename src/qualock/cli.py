@@ -81,6 +81,12 @@ from qualock.project_watch.engine import run_watch as run_project_watch
 from qualock.project_watch.models import WatchEvent, WatchEventKind
 from qualock.project_watch.render import render_watch_event
 from qualock.project_watch.snapshot import ProjectWatchSnapshotError
+from qualock.protocols.paired_change.io import (
+    PairedChangeVerificationError,
+    write_claim_receipt,
+)
+from qualock.protocols.paired_change.render import render_claim_receipt
+from qualock.protocols.paired_change.verify import verify_paired_change
 from qualock.qualification.models import QualificationResult, Verdict
 from qualock.release_monitor.commands import execute_monitor
 from qualock.release_monitor.models import MonitorAction
@@ -116,6 +122,16 @@ _EVIDENCE_OUT_OPTION = typer.Option(
     help="Directory where the evidence bundle will be written.",
 )
 _EVIDENCE_BUNDLE_ARGUMENT = typer.Argument(..., metavar="DIRECTORY")
+_EVIDENCE_PROTOCOL_OPTION = typer.Option(
+    ...,
+    "--protocol",
+    help="Paired-change companion directory to verify.",
+)
+_EVIDENCE_WRITE_RECEIPT_OPTION = typer.Option(
+    False,
+    "--write-receipt",
+    help="Write claim-receipt.json after successful verification.",
+)
 console = Console()
 
 
@@ -1058,6 +1074,36 @@ def evidence_verify_command(
         raise typer.Exit(1) from None
 
     console.print(render_evidence_verify(verified), end="", markup=False)
+
+
+@evidence_app.command("verify-claim")
+def evidence_verify_claim_command(
+    bundle: Path = _EVIDENCE_BUNDLE_ARGUMENT,
+    protocol: Path = _EVIDENCE_PROTOCOL_OPTION,
+    write_receipt: bool = _EVIDENCE_WRITE_RECEIPT_OPTION,
+) -> None:
+    try:
+        receipt = verify_paired_change(bundle, protocol)
+        if write_receipt:
+            write_claim_receipt(protocol, receipt)
+    except (
+        PairedChangeVerificationError,
+        EvidenceBundleError,
+        EvidenceProvenanceError,
+        BaselineStaleError,
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        ValueError,
+    ) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception:  # noqa: BLE001 - unexpected claim verification failures map to 1
+        console.print("claim verification failed", markup=False)
+        raise typer.Exit(1) from None
+
+    console.print(render_claim_receipt(receipt), end="", markup=False)
 
 
 if __name__ == "__main__":
