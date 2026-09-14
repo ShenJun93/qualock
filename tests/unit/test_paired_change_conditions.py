@@ -584,3 +584,89 @@ def test_material_support_null_is_opaque_only_when_adapter_requires_support(
         )(bundle, evidence)
         condition = evaluate_canary_conditions(bundle, evidence, "sample")[-1]
         assert condition.status is expected
+
+
+@pytest.mark.parametrize(
+    "case,status,reason",
+    [
+        ("missing-public-attempt", ConditionStatus.UNKNOWN, "DesignFreezeUnavailable"),
+        ("events-mismatch", ConditionStatus.FALSE, "DesignChanged"),
+        ("manifest-repetitions", ConditionStatus.FALSE, "DesignChanged"),
+        ("manifest-fingerprint", ConditionStatus.FALSE, "DesignChanged"),
+    ],
+)
+def test_design_frozen_binds_exact_public_attempts_and_manifest_canary(
+    tmp_path: Path, case: str, status: ConditionStatus, reason: str
+) -> None:
+    bundle, evidence = _valid_inputs(tmp_path)
+    if case == "missing-public-attempt":
+        bundle, evidence = _attempt_missing(bundle, evidence)
+    elif case == "events-mismatch":
+        bound = evidence.canaries[0].pairs[0].attempts[0].events_sha256
+        replacement = SHA_D if bound != SHA_D else SHA_C
+        bundle = _replace_public_attempt(bundle, 0, events_sha256=replacement)
+    else:
+        record = bundle.manifest.canaries["sample"]
+        update = (
+            {"repetitions": record.repetitions + 1}
+            if case == "manifest-repetitions"
+            else {"canary_fingerprint_sha256": SHA_D}
+        )
+        manifest = bundle.manifest.model_copy(
+            update={"canaries": {"sample": record.model_copy(update=update)}}
+        )
+        bundle = bundle.model_copy(update={"manifest": manifest})
+
+    condition = evaluate_qualification_conditions(bundle, evidence)[1]
+    assert (condition.status, condition.reason) == (status, reason)
+
+
+def test_temporal_pair_valid_rejects_crossed_repetitions_with_valid_timings(
+    tmp_path: Path,
+) -> None:
+    bundle, evidence = _order_imbalanced(*_valid_inputs(tmp_path))
+    timings = {
+        ("baseline", 1): (0, 10),
+        ("candidate", 2): (20, 30),
+        ("candidate", 1): (40, 50),
+        ("baseline", 2): (60, 70),
+    }
+    canary = evidence.canaries[0]
+    pairs = tuple(
+        pair.model_copy(
+            update={
+                "attempts": tuple(
+                    attempt.model_copy(
+                        update={
+                            "started_offset_ms": timings[(attempt.side, attempt.repetition)][0],
+                            "finished_offset_ms": timings[(attempt.side, attempt.repetition)][1],
+                        }
+                    )
+                    for attempt in pair.attempts
+                )
+            }
+        )
+        for pair in canary.pairs
+    )
+    evidence = evidence.model_copy(
+        update={"canaries": (canary.model_copy(update={"pairs": pairs}),)}
+    )
+    bundle = _run_order(
+        bundle,
+        (
+            ("sample", "baseline", 1),
+            ("sample", "candidate", 2),
+            ("sample", "candidate", 1),
+            ("sample", "baseline", 2),
+        ),
+    )
+
+    condition = next(
+        item
+        for item in evaluate_canary_conditions(bundle, evidence, "sample")
+        if item.type is ConditionType.TEMPORAL_PAIR_VALID
+    )
+    assert (condition.status, condition.reason) == (
+        ConditionStatus.FALSE,
+        "PairLayoutInvalid",
+    )

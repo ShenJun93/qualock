@@ -107,6 +107,23 @@ def _evidence_bound(
     )
 
 
+def _public_slot_evidence_status(
+    execution: PublicExecution, repetitions: int
+) -> ConditionStatus:
+    expected = {
+        (side, repetition)
+        for repetition in range(1, repetitions + 1)
+        for side in ("baseline", "candidate")
+    }
+    slots = tuple((attempt.side, attempt.repetition) for attempt in execution.attempts)
+    if len(set(slots)) != len(slots):
+        return ConditionStatus.FALSE
+    actual = set(slots)
+    if actual <= expected:
+        return ConditionStatus.TRUE if actual == expected else ConditionStatus.UNKNOWN
+    return ConditionStatus.FALSE
+
+
 def _design_frozen(
     bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
 ) -> ProtocolConditionV1:
@@ -126,7 +143,8 @@ def _design_frozen(
     manifest_canaries = set(bundle.manifest.canaries)
     design_canaries = {item.canary_id: item for item in evidence.protocol_design.canaries}
     run_canaries = {item.canary_id: item for item in evidence.canaries}
-    execution_canaries = {item.canary_id for item in bundle.report.executions}
+    executions = {item.canary_id: item for item in bundle.report.executions}
+    execution_canaries = set(executions)
     expected_canaries = set(design_canaries)
     if (
         not expected_canaries
@@ -139,18 +157,34 @@ def _design_frozen(
             ConditionStatus.UNKNOWN,
             "DesignFreezeUnavailable",
         )
-    expected_repetitions = set(range(1, evidence.protocol_design.repetitions + 1))
-    if any(
-        _slot_evidence_status(
-            run_canaries[canary_id], evidence.protocol_design.repetitions
-        )
-        is ConditionStatus.UNKNOWN
+    repetitions = evidence.protocol_design.repetitions
+    expected_repetitions = set(range(1, repetitions + 1))
+    run_slot_statuses = tuple(
+        _slot_evidence_status(run_canaries[canary_id], repetitions)
         for canary_id in expected_canaries
-    ) or any(not attempt.protocol_design_sha256 for attempt in attempts):
+    )
+    public_slot_statuses = tuple(
+        _public_slot_evidence_status(executions[canary_id], repetitions)
+        for canary_id in expected_canaries
+    )
+    if (
+        ConditionStatus.UNKNOWN in run_slot_statuses
+        or ConditionStatus.UNKNOWN in public_slot_statuses
+        or any(not attempt.protocol_design_sha256 for attempt in attempts)
+    ):
         return _condition(
             ConditionType.DESIGN_FROZEN,
             ConditionStatus.UNKNOWN,
             "DesignFreezeUnavailable",
+        )
+    if (
+        ConditionStatus.FALSE in run_slot_statuses
+        or ConditionStatus.FALSE in public_slot_statuses
+    ):
+        return _condition(
+            ConditionType.DESIGN_FROZEN,
+            ConditionStatus.FALSE,
+            "DesignChanged",
         )
     matches = (
         digest_model(evidence.protocol_design) == evidence.protocol_design_sha256
@@ -166,8 +200,10 @@ def _design_frozen(
         and all(
             item.canary_fingerprint_sha256
             == public_canaries[canary_id].canary_fingerprint_sha256
+            == bundle.manifest.canaries[canary_id].canary_fingerprint_sha256
             and public_canaries[canary_id].repetitions
-            == evidence.protocol_design.repetitions
+            == bundle.manifest.canaries[canary_id].repetitions
+            == repetitions
             for canary_id, item in design_canaries.items()
         )
         and all(
@@ -179,6 +215,18 @@ def _design_frozen(
             and run_canary.canary_fingerprint_sha256
             == design_canaries[run_canary.canary_id].canary_fingerprint_sha256
             for run_canary in evidence.canaries
+        )
+        and all(
+            {
+                (attempt.side, attempt.repetition): attempt.events_sha256
+                for attempt in executions[canary_id].attempts
+            }
+            == {
+                (attempt.side, attempt.repetition): attempt.events_sha256
+                for pair in run_canaries[canary_id].pairs
+                for attempt in pair.attempts
+            }
+            for canary_id in expected_canaries
         )
         and all(
             {pair.repetition for pair in run_canary.pairs} == expected_repetitions
@@ -508,6 +556,17 @@ def _temporal_pair_valid(
                 "PairLayoutInvalid",
             )
         first_slot, second_slot = order[index], order[index + 1]
+        expected_repetition = index // 2 + 1
+        if (
+            first_slot[2] != expected_repetition
+            or second_slot[2] != expected_repetition
+            or {first_slot[1], second_slot[1]} != {"baseline", "candidate"}
+        ):
+            return _condition(
+                ConditionType.TEMPORAL_PAIR_VALID,
+                ConditionStatus.FALSE,
+                "PairLayoutInvalid",
+            )
         first = attempts.get((first_slot[1], first_slot[2]))
         second = attempts.get((second_slot[1], second_slot[2]))
         if first is None or second is None:
