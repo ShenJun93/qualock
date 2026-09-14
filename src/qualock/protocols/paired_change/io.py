@@ -699,6 +699,30 @@ def _read_protocol_companion(
         return evidence, payload, receipt
 
 
+def _read_protocol_companion_payloads(
+    protocol_path: Path,
+) -> tuple[bytes, bytes | None]:
+    with _PinnedProtocolDirectory(
+        protocol_path,
+        root_reason=PairedChangeVerificationReason.MALFORMED_PROTOCOL_EVIDENCE,
+    ) as session:
+        protocol_payload = session.read_bounded(
+            PROTOCOL_EVIDENCE_FILENAME,
+            max_bytes=PROTOCOL_EVIDENCE_MAX_BYTES,
+            reason=PairedChangeVerificationReason.MALFORMED_PROTOCOL_EVIDENCE,
+        )
+        assert protocol_payload is not None
+        receipt_payload = session.read_bounded(
+            CLAIM_RECEIPT_FILENAME,
+            max_bytes=CLAIM_RECEIPT_MAX_BYTES,
+            reason=PairedChangeVerificationReason.MALFORMED_RECEIPT,
+            optional=True,
+        )
+        if receipt_payload is not None:
+            session.inspect_receipt_inventory()
+        return protocol_payload, receipt_payload
+
+
 def _read_protocol_evidence_with_bytes(
     protocol_path: Path,
 ) -> tuple[ProtocolEvidenceV1, bytes]:

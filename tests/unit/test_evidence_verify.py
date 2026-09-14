@@ -185,6 +185,38 @@ def test_verify_evidence_bundle_rejects_missing_required_file(tmp_path: Path) ->
     assert exc_info.value.reason is EvidenceBundleReason.INVENTORY_MISMATCH
 
 
+def test_verify_evidence_bundle_missing_manifest_preserves_unsafe_path(tmp_path: Path) -> None:
+    built = _build(tmp_path)
+    (built.root / MANIFEST_FILENAME).unlink()
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+
+
+def test_verify_evidence_bundle_parses_manifest_before_payload_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from qualock.evidence import bundle_io
+
+    built = _build(tmp_path)
+    (built.root / MANIFEST_FILENAME).write_bytes(b"not-json")
+    original_open = bundle_io._open_validated_regular_file
+
+    def reject_payload_reads(root: Path, name: str):
+        if name != MANIFEST_FILENAME:
+            raise AssertionError(f"payload read before manifest validation: {name}")
+        return original_open(root, name)
+
+    monkeypatch.setattr(bundle_io, "_open_validated_regular_file", reject_payload_reads)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        verify_evidence_bundle(built.root)
+
+    assert exc_info.value.reason is EvidenceBundleReason.MALFORMED_MANIFEST
+
+
 def test_verify_evidence_bundle_rejects_manifest_missing_file_entry(tmp_path: Path) -> None:
     built = _build(tmp_path)
     del built.manifest["files"][CANARIES_FILENAME]
