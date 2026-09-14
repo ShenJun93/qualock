@@ -431,3 +431,68 @@ def test_windows_root_open_failure_maps_to_domain_error(
         exc_info.value.reason
         is PairedChangeVerificationReason.MALFORMED_PROTOCOL_EVIDENCE
     )
+
+
+def test_windows_receipt_creation_uses_pinned_root_relative_primitive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io as stdlib_io
+
+    from qualock.protocols.paired_change import io as paired_io
+
+    session = paired_io._PinnedProtocolDirectory(
+        tmp_path,
+        root_reason=PairedChangeVerificationReason.MALFORMED_RECEIPT,
+    )
+    session._win_handle = 123
+    session._win_final = r"\?\C:\pinned"
+    monkeypatch.setattr(paired_io.os, "name", "nt")
+    calls: list[tuple[int, str]] = []
+
+    def relative_create(root_handle: int, name: str):
+        calls.append((root_handle, name))
+        return stdlib_io.BytesIO()
+
+    monkeypatch.setattr(
+        paired_io, "_win_create_relative_file", relative_create, raising=False
+    )
+    monkeypatch.setattr(
+        paired_io,
+        "_win_create_handle",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("receipt creation reopened a pathname")
+        ),
+    )
+
+    session.create_receipt(b"receipt")
+
+    assert calls == [(123, _CLAIM_RECEIPT_FILENAME)]
+
+
+def test_windows_api_signature_configuration_is_pointer_safe() -> None:
+    from types import SimpleNamespace
+
+    from qualock.protocols.paired_change import io as paired_io
+
+    class FakeFunction:
+        argtypes: object = None
+        restype: object = None
+
+    kernel32 = SimpleNamespace(
+        CreateFileW=FakeFunction(),
+        GetFileInformationByHandle=FakeFunction(),
+        GetFinalPathNameByHandleW=FakeFunction(),
+        CloseHandle=FakeFunction(),
+    )
+    ntdll = SimpleNamespace(
+        NtCreateFile=FakeFunction(),
+        RtlNtStatusToDosError=FakeFunction(),
+    )
+
+    paired_io._configure_windows_api(kernel32, ntdll)
+
+    assert kernel32.CreateFileW.restype is paired_io.wintypes.HANDLE
+    assert kernel32.CloseHandle.argtypes == [paired_io.wintypes.HANDLE]
+    assert ntdll.NtCreateFile.argtypes[0] == paired_io.ctypes.POINTER(
+        paired_io.wintypes.HANDLE
+    )
