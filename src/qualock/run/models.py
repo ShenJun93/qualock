@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from qualock.qualification.models import AttemptResult
+
 
 @dataclass(frozen=True)
 class PreparedTarget:
@@ -30,3 +32,35 @@ class GradeResult:
     stdout: str
     stderr: str
     timed_out: bool
+
+
+@dataclass(frozen=True)
+class AttemptControlProfiles:
+    preparation_sha256: str | None
+    isolation_sha256: str | None
+    resource_sha256: str | None
+    runtime_sha256: str | None
+
+
+@dataclass(frozen=True)
+class AttemptControlContext:
+    profiles: AttemptControlProfiles
+    isolation_instance_sha256: str | None
+
+
+@dataclass(frozen=True)
+class AttemptExecution:
+    result: AttemptResult
+    context: AttemptControlContext
+
+
+@dataclass(frozen=True)
+class AttemptRunTrace:
+    canary_id: str
+    side: str
+    repetition: int
+    trace_design_sha256: str | None
+    started_offset_ms: int
+    finished_offset_ms: int
+    events_sha256: str
+    context: AttemptControlContext
