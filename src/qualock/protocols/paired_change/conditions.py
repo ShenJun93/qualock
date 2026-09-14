@@ -56,13 +56,18 @@ def _run_canary(
 
 
 def _state_complete(state: AgentDependencyStateV1) -> bool:
-    return bool(
+    common_identity_complete = bool(
         state.agent_name
         and state.version
         and state.binary_sha256
         and state.model.id
         and state.model.reasoning_effort
     )
+    support_identity_complete = (
+        state.agent_name.lower() not in {"codex", "gemini"}
+        or state.support_sha256 is not None
+    )
+    return common_identity_complete and support_identity_complete
 
 
 def _state_matches_manifest(
@@ -111,16 +116,42 @@ def _design_frozen(
         for pair in canary.pairs
         for attempt in pair.attempts
     )
-    if not evidence.protocol_design_sha256 or not attempts or any(
-        not attempt.protocol_design_sha256 for attempt in attempts
-    ):
+    if not evidence.protocol_design_sha256:
         return _condition(
             ConditionType.DESIGN_FROZEN,
             ConditionStatus.UNKNOWN,
             "DesignFreezeUnavailable",
         )
     public_canaries = {item.canary_id: item for item in bundle.canaries.canaries}
+    manifest_canaries = set(bundle.manifest.canaries)
     design_canaries = {item.canary_id: item for item in evidence.protocol_design.canaries}
+    run_canaries = {item.canary_id: item for item in evidence.canaries}
+    execution_canaries = {item.canary_id for item in bundle.report.executions}
+    expected_canaries = set(design_canaries)
+    if (
+        not expected_canaries
+        or not expected_canaries.issubset(public_canaries)
+        or not expected_canaries.issubset(run_canaries)
+        or not expected_canaries.issubset(execution_canaries)
+    ):
+        return _condition(
+            ConditionType.DESIGN_FROZEN,
+            ConditionStatus.UNKNOWN,
+            "DesignFreezeUnavailable",
+        )
+    expected_repetitions = set(range(1, evidence.protocol_design.repetitions + 1))
+    if any(
+        _slot_evidence_status(
+            run_canaries[canary_id], evidence.protocol_design.repetitions
+        )
+        is ConditionStatus.UNKNOWN
+        for canary_id in expected_canaries
+    ) or any(not attempt.protocol_design_sha256 for attempt in attempts):
+        return _condition(
+            ConditionType.DESIGN_FROZEN,
+            ConditionStatus.UNKNOWN,
+            "DesignFreezeUnavailable",
+        )
     matches = (
         digest_model(evidence.protocol_design) == evidence.protocol_design_sha256
         and evidence.protocol_digest == evidence.protocol_design.protocol_digest
@@ -128,7 +159,10 @@ def _design_frozen(
         and evidence.protocol_design.config_sha256 == bundle.manifest.config_sha256
         and evidence.protocol_design.order_policy == "alternating-v1"
         and evidence.protocol_design.lifecycle == "FRESH"
-        and set(design_canaries) == set(public_canaries)
+        and expected_canaries == set(public_canaries)
+        and expected_canaries == manifest_canaries
+        and expected_canaries == set(run_canaries)
+        and expected_canaries == execution_canaries
         and all(
             item.canary_fingerprint_sha256
             == public_canaries[canary_id].canary_fingerprint_sha256
@@ -144,6 +178,21 @@ def _design_frozen(
             run_canary.canary_id in design_canaries
             and run_canary.canary_fingerprint_sha256
             == design_canaries[run_canary.canary_id].canary_fingerprint_sha256
+            for run_canary in evidence.canaries
+        )
+        and all(
+            {pair.repetition for pair in run_canary.pairs} == expected_repetitions
+            and len(run_canary.pairs) == evidence.protocol_design.repetitions
+            and all(
+                pair.repetition in expected_repetitions
+                and len(pair.attempts) == 2
+                and {(item.side, item.repetition) for item in pair.attempts}
+                == {
+                    ("baseline", pair.repetition),
+                    ("candidate", pair.repetition),
+                }
+                for pair in run_canary.pairs
+            )
             for run_canary in evidence.canaries
         )
     )
@@ -194,6 +243,7 @@ def _preparation_equivalent(
     design: CanaryProtocolDesignV1 | None,
     run: CanaryRunEvidenceV1 | None,
     public: PublicExecution | None,
+    repetitions: int | None,
 ) -> ProtocolConditionV1:
     attempts = () if run is None else tuple(a for p in run.pairs for a in p.attempts)
     expected_target = (
@@ -208,6 +258,8 @@ def _preparation_equivalent(
         or run.prepared_target_sha256 is None
         or design.preparation_sha256 is None
         or not attempts
+        or repetitions is None
+        or _slot_evidence_status(run, repetitions) is not ConditionStatus.TRUE
         or any(item.preparation_sha256 is None for item in attempts)
     ):
         return _condition(
@@ -298,11 +350,16 @@ def _attempts_isolated(
         status, reason = ConditionStatus.UNKNOWN, "IsolationUnverified"
     else:
         instances = [item.isolation_instance_sha256 for item in attempts]
-        matches = len(set(instances)) == len(instances) and all(
+        profile_matches = all(
             item.isolation_sha256 == design.isolation_sha256 for item in attempts
         )
-        status = ConditionStatus.TRUE if matches else ConditionStatus.FALSE
-        reason = "IsolationVerified" if matches else "IsolationReuseDetected"
+        instances_distinct = len(set(instances)) == len(instances)
+        if not profile_matches:
+            status, reason = ConditionStatus.FALSE, "IsolationProfileMismatch"
+        elif not instances_distinct:
+            status, reason = ConditionStatus.FALSE, "IsolationReuseDetected"
+        else:
+            status, reason = ConditionStatus.TRUE, "IsolationVerified"
     return _condition(ConditionType.ATTEMPTS_ISOLATED, status, reason)
 
 
@@ -377,21 +434,64 @@ def _attempts_by_slot(
     }
 
 
+def _slot_evidence_status(
+    run: CanaryRunEvidenceV1, repetitions: int
+) -> ConditionStatus:
+    expected = {
+        (side, repetition)
+        for repetition in range(1, repetitions + 1)
+        for side in ("baseline", "candidate")
+    }
+    attempts = tuple(item for pair in run.pairs for item in pair.attempts)
+    actual = {(item.side, item.repetition) for item in attempts}
+    pair_repetitions = {pair.repetition for pair in run.pairs}
+    expected_repetitions = set(range(1, repetitions + 1))
+    if actual <= expected and pair_repetitions <= expected_repetitions:
+        if (
+            actual != expected
+            or pair_repetitions != expected_repetitions
+            or len(attempts) != len(expected)
+            or len(run.pairs) != repetitions
+        ):
+            return ConditionStatus.UNKNOWN
+        return ConditionStatus.TRUE
+    return ConditionStatus.FALSE
+
+
 def _temporal_pair_valid(
     bundle: VerifiedEvidenceBundle,
     canary_id: str,
     design: CanaryProtocolDesignV1 | None,
     run: CanaryRunEvidenceV1 | None,
+    repetitions: int | None,
 ) -> ProtocolConditionV1:
-    if design is None or run is None or design.max_pair_gap_ms is None:
+    if (
+        design is None
+        or run is None
+        or repetitions is None
+        or design.max_pair_gap_ms is None
+    ):
         return _condition(
             ConditionType.TEMPORAL_PAIR_VALID,
             ConditionStatus.UNKNOWN,
             "TemporalEvidenceMissing",
         )
+    slot_status = _slot_evidence_status(run, repetitions)
+    if slot_status is ConditionStatus.UNKNOWN:
+        return _condition(
+            ConditionType.TEMPORAL_PAIR_VALID,
+            ConditionStatus.UNKNOWN,
+            "TemporalEvidenceMissing",
+        )
+    if slot_status is ConditionStatus.FALSE:
+        return _condition(
+            ConditionType.TEMPORAL_PAIR_VALID,
+            ConditionStatus.FALSE,
+            "PairLayoutInvalid",
+        )
     attempts = _attempts_by_slot(run)
     order = _canary_order(bundle, canary_id)
-    if len(order) != evidence_count(run) or not _canary_order_is_adjacent(
+    if len(order) != repetitions * 2 or not _canary_order_is_adjacent(
         bundle, canary_id
     ):
         return _condition(
@@ -450,16 +550,13 @@ def _all_equal(values: Iterable[str | None]) -> ConditionStatus:
     return ConditionStatus.TRUE
 
 
-def evidence_count(run: CanaryRunEvidenceV1) -> int:
-    return sum(len(pair.attempts) for pair in run.pairs)
-
-
 def _controlled_dimension_status(
     dimension: MaterialDimension,
     bundle: VerifiedEvidenceBundle,
     evidence: ProtocolEvidenceV1,
     design: CanaryProtocolDesignV1,
     run: CanaryRunEvidenceV1,
+    repetitions: int,
 ) -> ConditionStatus:
     attempts = tuple(attempt for pair in run.pairs for attempt in pair.attempts)
     if dimension is MaterialDimension.AGENT_BINARY:
@@ -478,6 +575,13 @@ def _controlled_dimension_status(
             else ConditionStatus.FALSE
         )
     if dimension is MaterialDimension.AGENT_SUPPORT:
+        states = (evidence.baseline_state, evidence.candidate_state)
+        if any(
+            item.agent_name.lower() in {"codex", "gemini"}
+            and item.support_sha256 is None
+            for item in states
+        ):
+            return ConditionStatus.UNKNOWN
         return (
             ConditionStatus.TRUE
             if evidence.baseline_state.support_sha256
@@ -515,7 +619,7 @@ def _controlled_dimension_status(
     }
     field = profile_fields[dimension]
     expected = getattr(design, field)
-    if expected is None:
+    if expected is None or _slot_evidence_status(run, repetitions) is not ConditionStatus.TRUE:
         return ConditionStatus.UNKNOWN
     status = _all_equal((expected, *(getattr(item, field) for item in attempts)))
     return status
@@ -526,15 +630,24 @@ def _material_dimensions_controlled(
     evidence: ProtocolEvidenceV1,
     design: CanaryProtocolDesignV1 | None,
     run: CanaryRunEvidenceV1 | None,
+    repetitions: int | None,
 ) -> ProtocolConditionV1:
-    if design is None or run is None or design.material_dimensions is None:
+    if (
+        design is None
+        or run is None
+        or repetitions is None
+        or design.material_dimensions is None
+        or _slot_evidence_status(run, repetitions) is not ConditionStatus.TRUE
+    ):
         status, reason = ConditionStatus.UNKNOWN, "RequiredDimensionOpaque"
     else:
         changeset = derive_changeset(evidence.baseline_state, evidence.candidate_state)
         statuses = tuple(
             ConditionStatus.TRUE
             if dimension in changeset.changed_dimensions
-            else _controlled_dimension_status(dimension, bundle, evidence, design, run)
+            else _controlled_dimension_status(
+                dimension, bundle, evidence, design, run, repetitions
+            )
             for dimension in design.material_dimensions
         )
         if ConditionStatus.FALSE in statuses:
@@ -558,11 +671,11 @@ def evaluate_canary_conditions(
     public = _public_execution(bundle, canary_id)
     repetitions = evidence.protocol_design.repetitions if design is not None else None
     return (
-        _preparation_equivalent(bundle, design, run, public),
+        _preparation_equivalent(bundle, design, run, public, repetitions),
         _baseline_stable(public, repetitions),
         _attempts_complete(public, run, repetitions),
         _attempts_isolated(design, run),
         _order_valid(bundle, canary_id, repetitions),
-        _temporal_pair_valid(bundle, canary_id, design, run),
-        _material_dimensions_controlled(bundle, evidence, design, run),
+        _temporal_pair_valid(bundle, canary_id, design, run, repetitions),
+        _material_dimensions_controlled(bundle, evidence, design, run, repetitions),
     )

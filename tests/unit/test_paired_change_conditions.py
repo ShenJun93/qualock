@@ -30,6 +30,23 @@ Mutation = Callable[[VerifiedEvidenceBundle, ProtocolEvidenceV1], Inputs]
 
 def _valid_inputs(tmp_path: Path) -> Inputs:
     run, bundle = _export_inputs(tmp_path)
+    if run.baseline_state.agent_name.lower() in {"codex", "gemini"}:
+        baseline_state = run.baseline_state.model_copy(update={"support_sha256": SHA_A})
+        candidate_state = run.candidate_state.model_copy(update={"support_sha256": SHA_B})
+        run = run.model_copy(
+            update={"baseline_state": baseline_state, "candidate_state": candidate_state}
+        )
+        manifest = bundle.manifest.model_copy(
+            update={
+                "baseline_identity": bundle.manifest.baseline_identity.model_copy(
+                    update={"support_sha256": SHA_A}
+                ),
+                "candidate_identity": bundle.manifest.candidate_identity.model_copy(
+                    update={"support_sha256": SHA_B}
+                ),
+            }
+        )
+        bundle = bundle.model_copy(update={"manifest": manifest})
     original = run.canaries[0]
     changed_pairs = []
     for pair in original.pairs:
@@ -227,6 +244,19 @@ def _isolation_unknown(bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenc
     return bundle, _replace_attempt(evidence, 1, isolation_instance_sha256=None)
 
 
+def _isolation_profile_mismatch(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
+) -> Inputs:
+    return bundle, _replace_attempt(evidence, 1, isolation_sha256=SHA_B)
+
+
+def _isolation_reuse_and_profile_mismatch(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
+) -> Inputs:
+    bundle, changed = _isolation_reuse(bundle, evidence)
+    return bundle, _replace_attempt(changed, 1, isolation_sha256=SHA_B)
+
+
 def _run_order(bundle: VerifiedEvidenceBundle, order: tuple[tuple[str, str, int], ...]) -> VerifiedEvidenceBundle:
     return bundle.model_copy(update={"report": bundle.report.model_copy(update={"run_order": order})})
 
@@ -322,6 +352,96 @@ def _material_opaque(bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV
     )(bundle, evidence)
 
 
+def _without_protocol_pairs(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
+) -> Inputs:
+    canary = evidence.canaries[0].model_copy(update={"pairs": ()})
+    return bundle, evidence.model_copy(update={"canaries": (canary,)})
+
+
+def _without_run_canary(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
+) -> Inputs:
+    return bundle, evidence.model_copy(update={"canaries": ()})
+
+
+def _wrong_run_repetition(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
+) -> Inputs:
+    pair = evidence.canaries[0].pairs[0]
+    repetition = evidence.protocol_design.repetitions + 1
+    attempts = tuple(
+        item.model_copy(update={"repetition": repetition}) for item in pair.attempts
+    )
+    changed_pair = pair.model_copy(
+        update={"repetition": repetition, "attempts": attempts}
+    )
+    canary = evidence.canaries[0].model_copy(update={"pairs": (changed_pair,)})
+    return bundle, evidence.model_copy(update={"canaries": (canary,)})
+
+
+def _support_missing_for(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1, adapter: str
+) -> Inputs:
+    baseline = evidence.baseline_state.model_copy(
+        update={"agent_name": adapter, "support_sha256": None}
+    )
+    candidate = evidence.candidate_state.model_copy(
+        update={"agent_name": adapter, "support_sha256": None}
+    )
+    manifest = bundle.manifest.model_copy(
+        update={
+            "baseline_identity": bundle.manifest.baseline_identity.model_copy(
+                update={"name": adapter, "support_sha256": None}
+            ),
+            "candidate_identity": bundle.manifest.candidate_identity.model_copy(
+                update={"name": adapter, "support_sha256": None}
+            ),
+        }
+    )
+    return (
+        bundle.model_copy(update={"manifest": manifest}),
+        evidence.model_copy(update={"baseline_state": baseline, "candidate_state": candidate}),
+    )
+
+
+def _required_codex_support_missing(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
+) -> Inputs:
+    return _support_missing_for(bundle, evidence, "codex")
+
+
+def _required_gemini_support_missing(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
+) -> Inputs:
+    return _support_missing_for(bundle, evidence, "gemini")
+
+
+def _optional_support_absent(
+    bundle: VerifiedEvidenceBundle, evidence: ProtocolEvidenceV1
+) -> Inputs:
+    baseline = evidence.baseline_state.model_copy(
+        update={"agent_name": "adapter-without-support", "support_sha256": None}
+    )
+    candidate = evidence.candidate_state.model_copy(
+        update={"agent_name": "adapter-without-support", "support_sha256": None}
+    )
+    manifest = bundle.manifest.model_copy(
+        update={
+            "baseline_identity": bundle.manifest.baseline_identity.model_copy(
+                update={"name": "adapter-without-support", "support_sha256": None}
+            ),
+            "candidate_identity": bundle.manifest.candidate_identity.model_copy(
+                update={"name": "adapter-without-support", "support_sha256": None}
+            ),
+        }
+    )
+    return (
+        bundle.model_copy(update={"manifest": manifest}),
+        evidence.model_copy(update={"baseline_state": baseline, "candidate_state": candidate}),
+    )
+
+
 QUALIFICATION_CASES = (
     (ConditionType.EVIDENCE_BOUND, lambda b, e: (b, e), ConditionStatus.TRUE, "EvidenceVerified"),
     (ConditionType.EVIDENCE_BOUND, _evidence_mismatch, ConditionStatus.FALSE, "EvidenceMismatch"),
@@ -332,6 +452,9 @@ QUALIFICATION_CASES = (
     (ConditionType.STATE_BOUND, lambda b, e: (b, e), ConditionStatus.TRUE, "StateVerified"),
     (ConditionType.STATE_BOUND, _identity_mutation("version", "9.9.9"), ConditionStatus.FALSE, "StateMismatch"),
     (ConditionType.STATE_BOUND, _identity_mutation("binary_sha256", None), ConditionStatus.UNKNOWN, "StateIdentityIncomplete"),
+    (ConditionType.STATE_BOUND, _required_codex_support_missing, ConditionStatus.UNKNOWN, "StateIdentityIncomplete"),
+    (ConditionType.STATE_BOUND, _required_gemini_support_missing, ConditionStatus.UNKNOWN, "StateIdentityIncomplete"),
+    (ConditionType.STATE_BOUND, _optional_support_absent, ConditionStatus.TRUE, "StateVerified"),
 )
 
 
@@ -368,6 +491,8 @@ CANARY_CASES = (
     (ConditionType.ATTEMPTS_ISOLATED, lambda b, e: (b, e), ConditionStatus.TRUE, "IsolationVerified"),
     (ConditionType.ATTEMPTS_ISOLATED, _isolation_reuse, ConditionStatus.FALSE, "IsolationReuseDetected"),
     (ConditionType.ATTEMPTS_ISOLATED, _isolation_unknown, ConditionStatus.UNKNOWN, "IsolationUnverified"),
+    (ConditionType.ATTEMPTS_ISOLATED, _isolation_profile_mismatch, ConditionStatus.FALSE, "IsolationProfileMismatch"),
+    (ConditionType.ATTEMPTS_ISOLATED, _isolation_reuse_and_profile_mismatch, ConditionStatus.FALSE, "IsolationProfileMismatch"),
     (ConditionType.ORDER_VALID, lambda b, e: (b, e), ConditionStatus.TRUE, "OrderVerified"),
     (ConditionType.ORDER_VALID, _order_invalid, ConditionStatus.FALSE, "PairLayoutInvalid"),
     (ConditionType.ORDER_VALID, _order_imbalanced, ConditionStatus.FALSE, "OrderImbalanced"),
@@ -404,3 +529,58 @@ def test_canary_condition_truth_tables(
         ConditionType.TEMPORAL_PAIR_VALID,
         ConditionType.MATERIAL_DIMENSIONS_CONTROLLED,
     )
+
+
+@pytest.mark.parametrize(
+    "mutation,condition_type,status,reason",
+    [
+        (_without_protocol_pairs, ConditionType.PREPARATION_EQUIVALENT, ConditionStatus.UNKNOWN, "PreparationUnverified"),
+        (_without_protocol_pairs, ConditionType.TEMPORAL_PAIR_VALID, ConditionStatus.UNKNOWN, "TemporalEvidenceMissing"),
+        (_without_protocol_pairs, ConditionType.MATERIAL_DIMENSIONS_CONTROLLED, ConditionStatus.UNKNOWN, "RequiredDimensionOpaque"),
+        (_wrong_run_repetition, ConditionType.TEMPORAL_PAIR_VALID, ConditionStatus.FALSE, "PairLayoutInvalid"),
+    ],
+)
+def test_conditions_cannot_be_vacuously_true_without_exact_attempt_slots(
+    tmp_path: Path,
+    mutation: Mutation,
+    condition_type: ConditionType,
+    status: ConditionStatus,
+    reason: str,
+) -> None:
+    bundle, evidence = mutation(*_valid_inputs(tmp_path))
+    selected = next(
+        item
+        for item in evaluate_canary_conditions(bundle, evidence, "sample")
+        if item.type is condition_type
+    )
+    assert (selected.status, selected.reason) == (status, reason)
+
+
+@pytest.mark.parametrize(
+    "mutation,status,reason",
+    [
+        (_without_run_canary, ConditionStatus.UNKNOWN, "DesignFreezeUnavailable"),
+        (_wrong_run_repetition, ConditionStatus.FALSE, "DesignChanged"),
+    ],
+)
+def test_design_frozen_binds_run_canary_set_and_expected_repetitions(
+    tmp_path: Path, mutation: Mutation, status: ConditionStatus, reason: str
+) -> None:
+    bundle, evidence = mutation(*_valid_inputs(tmp_path))
+    condition = evaluate_qualification_conditions(bundle, evidence)[1]
+    assert (condition.status, condition.reason) == (status, reason)
+
+
+def test_material_support_null_is_opaque_only_when_adapter_requires_support(
+    tmp_path: Path,
+) -> None:
+    for index, (mutation, expected) in enumerate((
+        (_required_codex_support_missing, ConditionStatus.UNKNOWN),
+        (_optional_support_absent, ConditionStatus.TRUE),
+    )):
+        bundle, evidence = mutation(*_valid_inputs(tmp_path / str(index)))
+        bundle, evidence = _canary_design_mutation(
+            material_dimensions=(MaterialDimension.AGENT_SUPPORT,)
+        )(bundle, evidence)
+        condition = evaluate_canary_conditions(bundle, evidence, "sample")[-1]
+        assert condition.status is expected
