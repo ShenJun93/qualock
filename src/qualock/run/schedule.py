@@ -18,11 +18,14 @@ def paired_schedule(canary_id: str, repetitions: int, qualification_id: str) -> 
     if repetitions < 1:
         raise ValueError("repetitions must be at least 1")
     slots: list[RunSlot] = []
+    digest = hashlib.sha256(f"{qualification_id}:{canary_id}".encode()).digest()
+    first_orientation = Side.BASELINE if digest[0] % 2 == 0 else Side.CANDIDATE
     for repetition in range(1, repetitions + 1):
-        digest = hashlib.sha256(
-            f"{qualification_id}:{canary_id}:{repetition}".encode("utf-8")
-        ).digest()
-        first = Side.BASELINE if digest[0] % 2 == 0 else Side.CANDIDATE
+        first = (
+            first_orientation
+            if repetition % 2 == 1
+            else Side.CANDIDATE if first_orientation is Side.BASELINE else Side.BASELINE
+        )
         second = Side.CANDIDATE if first is Side.BASELINE else Side.BASELINE
         slots.extend([RunSlot(first, repetition), RunSlot(second, repetition)])
     return tuple(slots)
