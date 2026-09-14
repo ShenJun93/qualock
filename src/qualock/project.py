@@ -29,6 +29,7 @@ def config_fingerprint(config: QualockConfig) -> str:
 
 def _canary_fingerprint_payload(canary: CanarySpec) -> dict[str, object]:
     item = canary.model_dump(mode="json")
+    item.pop("paired_change", None)
     grader = dict(item["grader"])
     patch = canary.grader.patch
     grader.pop("patch", None)
