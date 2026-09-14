@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -803,3 +804,84 @@ def test_attempt_copies_symlinks_without_following_them(tmp_path: Path) -> None:
     run_once(tmp_path, service, template=template)
 
     assert runner.workspace_symlinks == [("link",)]
+
+
+def test_control_profiles_and_context_bind_host_attempt(tmp_path: Path) -> None:
+    runner = FakeHostRunner()
+    service = backend(tmp_path, runner)
+    spec = canary(tmp_path)
+    profiles = service.control_profiles(spec)
+
+    assert profiles == service.control_profiles(spec)
+    assert profiles.preparation_sha256 is not None
+    assert profiles.isolation_sha256 is not None
+    assert profiles.resource_sha256 is not None
+    assert profiles.runtime_sha256 is None
+
+    prepared = service.prepare(spec, "q-context")
+    execution = service.run_attempt_with_context(
+        canary=spec,
+        prepared=prepared,
+        binary=binary(tmp_path),
+        side=Side.BASELINE,
+        repetition=1,
+    )
+    assert execution.result.valid is True
+    assert execution.context.profiles == profiles
+    assert execution.context.isolation_instance_sha256 is not None
+    assert len(execution.context.isolation_instance_sha256) == 64
+    assert all(str(tmp_path) not in digest for digest in (
+        profiles.preparation_sha256,
+        profiles.isolation_sha256,
+        profiles.resource_sha256,
+        execution.context.isolation_instance_sha256,
+    ))
+
+
+def test_legacy_host_run_attempt_does_not_compute_control_profiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = FakeHostRunner()
+    service = backend(tmp_path, runner)
+    spec = canary(tmp_path)
+    prepared = service.prepare(spec, "q-host-legacy-no-profiles")
+
+    def fail_profiles(_canary: CanarySpec) -> object:
+        raise AssertionError("legacy run_attempt must not compute control profiles")
+
+    monkeypatch.setattr(service, "control_profiles", fail_profiles)
+    result = service.run_attempt(
+        canary=spec,
+        prepared=prepared,
+        binary=binary(tmp_path),
+        side=Side.BASELINE,
+        repetition=1,
+    )
+    assert result.valid is True
+
+
+def test_host_isolation_instance_hash_uses_attempt_root_basename_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = FakeHostRunner()
+    service = backend(tmp_path, runner)
+    spec = canary(tmp_path)
+    prepared = service.prepare(spec, "q-host-basename")
+    attempt_root = tmp_path / "private-parent-path" / "attempt-token"
+    attempt_root.mkdir(parents=True)
+
+    def fixed_attempt_root(_canary: CanarySpec, _side: Side, _repetition: int) -> Path:
+        return attempt_root
+
+    monkeypatch.setattr(service, "_create_attempt_root", fixed_attempt_root)
+    execution = service.run_attempt_with_context(
+        canary=spec,
+        prepared=prepared,
+        binary=binary(tmp_path),
+        side=Side.BASELINE,
+        repetition=1,
+    )
+    assert execution.context.isolation_instance_sha256 == hashlib.sha256(b"attempt-token").hexdigest()
+    assert execution.context.isolation_instance_sha256 != hashlib.sha256(
+        str(attempt_root).encode()
+    ).hexdigest()

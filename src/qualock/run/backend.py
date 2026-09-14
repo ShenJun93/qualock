@@ -5,13 +5,14 @@ from pathlib import Path
 from qualock.agents.base import AgentAdapter, AgentBinary
 from qualock.agents.support_integrity import materialize_verified_supports
 from qualock.canary.models import CanarySpec
+from qualock.evidence.fingerprint import sha256_canonical
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
 from qualock.qualification.models import AttemptResult, Usage
 from qualock.source.git import GitSourceManager
 
 from .docker import DockerRunner
 from .integrity import IntegrityPathError, protected_path_violations
-from .models import PreparedTarget
+from .models import AttemptControlContext, AttemptControlProfiles, AttemptExecution, PreparedTarget
 from .schedule import Side
 
 
@@ -80,6 +81,55 @@ class DockerQualificationBackend:
             runtime_overlays=self.agent_adapter.runtime_overlays,
         )
 
+    def control_profiles(self, canary: CanarySpec) -> AttemptControlProfiles:
+        preparation_sha256 = sha256_canonical(
+            {
+                "procedure": "docker-prepare-v1",
+                "repository_url": canary.repository.url,
+                "base_sha": canary.repository.base_sha,
+                "setup": canary.setup,
+                "image": canary.runtime.image,
+                "runtime_dependencies": [
+                    {"command": item.command, "apt_package": item.apt_package}
+                    for item in self.agent_adapter.runtime_dependencies
+                ],
+                "runtime_overlays": [
+                    {
+                        "image": item.image,
+                        "source_path": item.source_path,
+                        "destination_path": item.destination_path,
+                        "validation_command": item.validation_command,
+                    }
+                    for item in self.agent_adapter.runtime_overlays
+                ],
+            }
+        )
+        isolation_sha256 = sha256_canonical(
+            {"procedure": "docker-fresh-container-v1", "lifecycle": "fresh-per-attempt"}
+        )
+        resource_sha256 = sha256_canonical(
+            {
+                "procedure": "docker-resource-policy-v1",
+                "timeout_seconds": canary.agent.timeout_seconds,
+                "cpu_limit": None,
+                "memory_limit": None,
+            }
+        )
+        runtime_sha256 = sha256_canonical(
+            {
+                "execution": "container",
+                "image": canary.runtime.image,
+                "model": self.model,
+                "reasoning_effort": self.reasoning_effort,
+            }
+        )
+        return AttemptControlProfiles(
+            preparation_sha256=preparation_sha256,
+            isolation_sha256=isolation_sha256,
+            resource_sha256=resource_sha256,
+            runtime_sha256=runtime_sha256,
+        )
+
     def run_attempt(
         self,
         *,
@@ -89,10 +139,76 @@ class DockerQualificationBackend:
         side: Side,
         repetition: int,
     ) -> AttemptResult:
-        safe_canary = "".join(ch if ch.isalnum() else "-" for ch in canary.id)[:32]
-        container_name = (
-            f"ub-{safe_canary}-{side.value[:1]}-{repetition}-{binary.version.replace('.', '-')}"
+        container_name = self._container_name(canary, binary, side, repetition)
+        return self._run_attempt_result(
+            canary=canary,
+            prepared=prepared,
+            binary=binary,
+            side=side,
+            repetition=repetition,
+            container_name=container_name,
         )
+
+    def run_attempt_with_context(
+        self,
+        *,
+        canary: CanarySpec,
+        prepared: PreparedTarget,
+        binary: AgentBinary,
+        side: Side,
+        repetition: int,
+    ) -> AttemptExecution:
+        return self._run_attempt_execution(
+            canary=canary,
+            prepared=prepared,
+            binary=binary,
+            side=side,
+            repetition=repetition,
+        )
+
+    def _run_attempt_execution(
+        self,
+        *,
+        canary: CanarySpec,
+        prepared: PreparedTarget,
+        binary: AgentBinary,
+        side: Side,
+        repetition: int,
+    ) -> AttemptExecution:
+        container_name = self._container_name(canary, binary, side, repetition)
+        result = self._run_attempt_result(
+            canary=canary,
+            prepared=prepared,
+            binary=binary,
+            side=side,
+            repetition=repetition,
+            container_name=container_name,
+        )
+        return AttemptExecution(
+            result=result,
+            context=AttemptControlContext(
+                profiles=self.control_profiles(canary),
+                isolation_instance_sha256=hashlib.sha256(container_name.encode()).hexdigest(),
+            ),
+        )
+
+    @staticmethod
+    def _container_name(
+        canary: CanarySpec, binary: AgentBinary, side: Side, repetition: int
+    ) -> str:
+        safe_canary = "".join(ch if ch.isalnum() else "-" for ch in canary.id)[:32]
+        return f"ub-{safe_canary}-{side.value[:1]}-{repetition}-{binary.version.replace('.', '-')}"
+
+    def _run_attempt_result(
+        self,
+        *,
+        canary: CanarySpec,
+        prepared: PreparedTarget,
+        binary: AgentBinary,
+        side: Side,
+        repetition: int,
+        container_name: str,
+    ) -> AttemptResult:
         frozen_tag = f"qualock-frozen-{hashlib.sha256(container_name.encode()).hexdigest()[:16]}"
         with self.agent_adapter.invocation(
             binary,

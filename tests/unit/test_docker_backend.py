@@ -606,3 +606,51 @@ def test_backend_snapshot_is_immune_to_post_verification_source_mutation(
         "bundle/gemini.js": b"entry",
         "nested.js": b"nested",
     }
+
+
+def test_control_profiles_and_context_bind_docker_attempt(tmp_path: Path) -> None:
+    docker = FakeDocker()
+    service = backend(tmp_path, docker)
+    spec = canary(tmp_path)
+    profiles = service.control_profiles(spec)
+
+    assert profiles == service.control_profiles(spec)
+    assert profiles.preparation_sha256 is not None
+    assert profiles.isolation_sha256 is not None
+    assert profiles.resource_sha256 is not None
+    assert profiles.runtime_sha256 is not None
+
+    prepared = service.prepare(spec, "q-context")
+    execution = service.run_attempt_with_context(
+        canary=spec,
+        prepared=prepared,
+        binary=binary(tmp_path),
+        side=Side.BASELINE,
+        repetition=1,
+    )
+    assert execution.result.valid is True
+    assert execution.context.profiles == profiles
+    assert execution.context.isolation_instance_sha256 is not None
+    assert len(execution.context.isolation_instance_sha256) == 64
+
+
+def test_legacy_run_attempt_does_not_compute_control_profiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docker = FakeDocker()
+    service = backend(tmp_path, docker)
+    spec = canary(tmp_path)
+    prepared = service.prepare(spec, "q-legacy-no-profiles")
+
+    def fail_profiles(_canary: CanarySpec) -> object:
+        raise AssertionError("legacy run_attempt must not compute control profiles")
+
+    monkeypatch.setattr(service, "control_profiles", fail_profiles)
+    result = service.run_attempt(
+        canary=spec,
+        prepared=prepared,
+        binary=binary(tmp_path),
+        side=Side.BASELINE,
+        repetition=1,
+    )
+    assert result.valid is True
