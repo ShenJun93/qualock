@@ -1,7 +1,9 @@
+import errno
 import hashlib
 import json
 import socket
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -332,14 +334,14 @@ def test_protocol_companion_publish_failure_rolls_back_new_bundle(
     _create_synthetic_qualification(project_root, qualification_id=qualification_id)
     dest = tmp_path / "bundle"
     companion = dest.with_name(dest.name + ".paired-change-v1")
-    real_replace = export_module.os.replace
+    real_rename_noreplace = export_module._rename_noreplace
 
     def fail_companion_publish(source: Path, target: Path) -> None:
         if Path(target) == companion:
             raise OSError("simulated companion publication failure")
-        real_replace(source, target)
+        real_rename_noreplace(source, target)
 
-    monkeypatch.setattr(export_module.os, "replace", fail_companion_publish)
+    monkeypatch.setattr(export_module, "_rename_noreplace", fail_companion_publish)
 
     with pytest.raises(EvidenceBundleError) as exc_info:
         export_evidence_bundle(project_root, qualification_id, dest)
@@ -347,6 +349,192 @@ def test_protocol_companion_publish_failure_rolls_back_new_bundle(
     assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
     assert not dest.exists()
     assert not companion.exists()
+
+
+def test_rename_noreplace_uses_windows_rename_without_libc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    rename_calls: list[tuple[Path, Path]] = []
+
+    def windows_rename(source_path: Path, destination_path: Path) -> None:
+        rename_calls.append((source_path, destination_path))
+        raise FileExistsError(errno.EEXIST, "destination exists", destination_path)
+
+    def forbid_libc(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("libc renameat2 must not be used on Windows")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(export_module.os, "rename", windows_rename)
+    monkeypatch.setattr(export_module.ctypes, "CDLL", forbid_libc)
+
+    with pytest.raises(FileExistsError):
+        export_module._rename_noreplace(source, destination)
+
+    assert rename_calls == [(source, destination)]
+
+
+def test_rename_noreplace_fails_closed_on_unsupported_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    with pytest.raises(OSError) as exc_info:
+        export_module._rename_noreplace(tmp_path / "source", tmp_path / "destination")
+
+    assert exc_info.value.errno == errno.ENOSYS
+
+
+def test_bundle_publication_does_not_replace_concurrently_created_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-bundle-publication-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    real_mkdtemp = export_module.tempfile.mkdtemp
+    competing_inode: int | None = None
+
+    def create_competing_destination(*args: object, **kwargs: object) -> str:
+        nonlocal competing_inode
+        temporary = real_mkdtemp(*args, **kwargs)
+        if kwargs.get("prefix") == ".export-tmp-":
+            dest.mkdir()
+            competing_inode = dest.stat().st_ino
+        return temporary
+
+    monkeypatch.setattr(export_module.tempfile, "mkdtemp", create_competing_destination)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert dest.is_dir()
+    assert dest.stat().st_ino == competing_inode
+    assert list(dest.iterdir()) == []
+
+
+def test_companion_publication_does_not_replace_concurrently_created_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-companion-publication-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    real_mkdtemp = export_module.tempfile.mkdtemp
+    competing_inode: int | None = None
+
+    def create_competing_companion(*args: object, **kwargs: object) -> str:
+        nonlocal competing_inode
+        temporary = real_mkdtemp(*args, **kwargs)
+        if kwargs.get("prefix") == ".paired-change-tmp-":
+            companion.mkdir()
+            competing_inode = companion.stat().st_ino
+        return temporary
+
+    monkeypatch.setattr(export_module.tempfile, "mkdtemp", create_competing_companion)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert not dest.exists()
+    assert companion.is_dir()
+    assert companion.stat().st_ino == competing_inode
+    assert list(companion.iterdir()) == []
+
+
+def test_bundle_rollback_does_not_delete_a_replacement_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-bundle-rollback-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    real_mkdtemp = export_module.tempfile.mkdtemp
+    real_rmtree = export_module.shutil.rmtree
+    displaced_bundle = tmp_path / "displaced-bundle"
+    marker = dest / "owned-by-other-process"
+    protocol_temporary: Path | None = None
+    replacement_created = False
+
+    def block_companion_publication(*args: object, **kwargs: object) -> str:
+        nonlocal protocol_temporary
+        temporary = real_mkdtemp(*args, **kwargs)
+        if kwargs.get("prefix") == ".paired-change-tmp-":
+            protocol_temporary = Path(temporary)
+            companion.mkdir()
+            (companion / "owned-by-other-process").write_text("keep", encoding="utf-8")
+        return temporary
+
+    def replace_bundle_before_rollback(path: Path, *args: object, **kwargs: object) -> None:
+        nonlocal replacement_created
+        if Path(path) == protocol_temporary and not replacement_created:
+            dest.rename(displaced_bundle)
+            dest.mkdir()
+            marker.write_text("keep", encoding="utf-8")
+            replacement_created = True
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(export_module.tempfile, "mkdtemp", block_companion_publication)
+    monkeypatch.setattr(export_module.shutil, "rmtree", replace_bundle_before_rollback)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert replacement_created
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_bundle_rollback_does_not_delete_replacement_after_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published = tmp_path / "bundle"
+    published.mkdir()
+    (published / "ours").write_text("ours", encoding="utf-8")
+    staging = tmp_path / ".export-tmp-owned"
+    published_identity = export_module._directory_identity(published)
+    real_identity = export_module._directory_identity
+    displaced = tmp_path / "displaced-owned-bundle"
+    marker = staging / "owned-by-other-process"
+
+    def replace_after_identity_check(path: Path) -> tuple[int, int]:
+        identity = real_identity(path)
+        if path == staging:
+            staging.rename(displaced)
+            staging.mkdir()
+            marker.write_text("keep", encoding="utf-8")
+        return identity
+
+    monkeypatch.setattr(export_module, "_directory_identity", replace_after_identity_check)
+
+    export_module._rollback_published_directory(published, staging, published_identity)
+
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_export_fails_closed_when_atomic_noreplace_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-no-atomic-publication"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+
+    def unavailable(_source: Path, _destination: Path) -> None:
+        raise OSError(errno.ENOSYS, "atomic no-replace rename is unavailable")
+
+    monkeypatch.setattr(export_module, "_rename_noreplace", unavailable)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert not dest.exists()
 
 
 def test_export_evidence_bundle_allows_equal_run_and_exporter_version(
