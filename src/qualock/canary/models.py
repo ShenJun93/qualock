@@ -3,6 +3,18 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+MaterialDimensionName = Literal[
+    "AGENT_BINARY",
+    "AGENT_SUPPORT",
+    "MODEL_DECLARATION",
+    "PROJECT_CONFIG",
+    "PREPARED_TARGET",
+    "RUNTIME_PROFILE",
+    "PREPARATION_PROFILE",
+    "ISOLATION_PROFILE",
+    "RESOURCE_POLICY",
+]
+
 
 class RepositorySpec(BaseModel):
     url: str = Field(min_length=1)
@@ -35,6 +47,17 @@ class ConstraintSpec(BaseModel):
     protected_paths: list[str] = Field(default_factory=list)
 
 
+class PairedChangeCanarySpec(BaseModel):
+    material_dimensions: tuple[MaterialDimensionName, ...] = Field(min_length=1)
+    max_pair_gap_ms: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_unique_material_dimensions(self) -> "PairedChangeCanarySpec":
+        if len(set(self.material_dimensions)) != len(self.material_dimensions):
+            raise ValueError("paired_change material_dimensions must be unique")
+        return self
+
+
 class CanarySpec(BaseModel):
     schema_version: Literal[1]
     id: str = Field(min_length=1)
@@ -47,3 +70,4 @@ class CanarySpec(BaseModel):
     grader: GraderSpec
     constraints: ConstraintSpec = Field(default_factory=ConstraintSpec)
     critical: bool = False
+    paired_change: PairedChangeCanarySpec | None = None
