@@ -337,28 +337,33 @@ def test_verify_paired_change_pins_companion_directory_across_receipt_read(
 
     from qualock.protocols.paired_change import io as paired_io
 
-    original_preflight = paired_io._preflight_protocol_payload
+    original_read_bounded = paired_io._PinnedProtocolDirectory.read_bounded
     swapped = False
 
-    def swap_after_protocol_read(value: object) -> None:
+    def swap_after_protocol_evidence_read(self, name, **kwargs):
         nonlocal swapped
-        original_preflight(value)
-        if swapped:
-            return
-        swapped = True
-        moved = protocol_path.with_name(protocol_path.name + ".moved")
-        protocol_path.rename(moved)
-        protocol_path.mkdir()
-        (protocol_path / PROTOCOL_EVIDENCE_FILENAME).write_bytes(
-            (moved / PROTOCOL_EVIDENCE_FILENAME).read_bytes()
-        )
-        (protocol_path / CLAIM_RECEIPT_FILENAME).write_bytes(
-            canonical_json_file_bytes(replacement_receipt.model_dump(mode="json"))
-        )
+        result = original_read_bounded(self, name, **kwargs)
+        if name == PROTOCOL_EVIDENCE_FILENAME and not swapped:
+            swapped = True
+            moved = protocol_path.with_name(protocol_path.name + ".moved")
+            protocol_path.rename(moved)
+            protocol_path.mkdir()
+            (protocol_path / PROTOCOL_EVIDENCE_FILENAME).write_bytes(
+                (moved / PROTOCOL_EVIDENCE_FILENAME).read_bytes()
+            )
+            (protocol_path / CLAIM_RECEIPT_FILENAME).write_bytes(
+                canonical_json_file_bytes(replacement_receipt.model_dump(mode="json"))
+            )
+        return result
 
-    monkeypatch.setattr(paired_io, "_preflight_protocol_payload", swap_after_protocol_read)
+    monkeypatch.setattr(
+        paired_io._PinnedProtocolDirectory,
+        "read_bounded",
+        swap_after_protocol_evidence_read,
+    )
 
     assert verify_paired_change(bundle_path, protocol_path) == expected
+    assert swapped, "companion directory swap never fired"
 
 
 def test_verify_paired_change_classifies_duplicate_canary_as_layout_mismatch(
