@@ -351,6 +351,68 @@ def test_protocol_companion_publish_failure_rolls_back_new_bundle(
     assert not companion.exists()
 
 
+def test_bundle_publish_failure_does_not_delete_replaced_staging_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-bundle-staging-cleanup-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    displaced = tmp_path / "displaced-bundle-staging"
+    marker: Path | None = None
+
+    def fail_after_replacing_staging(source: Path, target: Path) -> None:
+        nonlocal marker
+        assert target == dest
+        source.rename(displaced)
+        source.mkdir()
+        marker = source / "owned-by-other-process"
+        marker.write_text("keep", encoding="utf-8")
+        raise OSError("simulated bundle publication failure")
+
+    monkeypatch.setattr(export_module, "_rename_noreplace", fail_after_replacing_staging)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert marker is not None
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_companion_publish_failure_does_not_delete_replaced_staging_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-companion-staging-cleanup-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    displaced = tmp_path / "displaced-companion-staging"
+    real_rename_noreplace = export_module._rename_noreplace
+    marker: Path | None = None
+
+    def fail_after_replacing_staging(source: Path, target: Path) -> None:
+        nonlocal marker
+        if target != companion:
+            real_rename_noreplace(source, target)
+            return
+        source.rename(displaced)
+        source.mkdir()
+        marker = source / "owned-by-other-process"
+        marker.write_text("keep", encoding="utf-8")
+        raise OSError("simulated companion publication failure")
+
+    monkeypatch.setattr(export_module, "_rename_noreplace", fail_after_replacing_staging)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert marker is not None
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
 def test_rename_noreplace_uses_windows_rename_without_libc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -455,32 +517,35 @@ def test_bundle_rollback_does_not_delete_a_replacement_directory(
     dest = tmp_path / "bundle"
     companion = dest.with_name(dest.name + ".paired-change-v1")
     real_mkdtemp = export_module.tempfile.mkdtemp
-    real_rmtree = export_module.shutil.rmtree
+    real_rollback = export_module._rollback_published_directory
     displaced_bundle = tmp_path / "displaced-bundle"
     marker = dest / "owned-by-other-process"
-    protocol_temporary: Path | None = None
     replacement_created = False
 
     def block_companion_publication(*args: object, **kwargs: object) -> str:
-        nonlocal protocol_temporary
         temporary = real_mkdtemp(*args, **kwargs)
         if kwargs.get("prefix") == ".paired-change-tmp-":
-            protocol_temporary = Path(temporary)
             companion.mkdir()
             (companion / "owned-by-other-process").write_text("keep", encoding="utf-8")
         return temporary
 
-    def replace_bundle_before_rollback(path: Path, *args: object, **kwargs: object) -> None:
+    def replace_bundle_before_rollback(
+        published_path: Path,
+        staging_path: Path,
+        published_identity: tuple[int, int],
+    ) -> None:
         nonlocal replacement_created
-        if Path(path) == protocol_temporary and not replacement_created:
+        if not replacement_created:
             dest.rename(displaced_bundle)
             dest.mkdir()
             marker.write_text("keep", encoding="utf-8")
             replacement_created = True
-        real_rmtree(path, *args, **kwargs)
+        real_rollback(published_path, staging_path, published_identity)
 
     monkeypatch.setattr(export_module.tempfile, "mkdtemp", block_companion_publication)
-    monkeypatch.setattr(export_module.shutil, "rmtree", replace_bundle_before_rollback)
+    monkeypatch.setattr(
+        export_module, "_rollback_published_directory", replace_bundle_before_rollback
+    )
 
     with pytest.raises(EvidenceBundleError) as exc_info:
         export_evidence_bundle(project_root, qualification_id, dest)
@@ -974,7 +1039,7 @@ def test_export_evidence_bundle_without_created_at_captures_utc_timestamp(
     assert ts.tzinfo is not None
 
 
-def test_export_evidence_bundle_cleanup_on_verification_failure(
+def test_export_evidence_bundle_leaves_private_staging_on_verification_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project_root = tmp_path / "project"
@@ -994,9 +1059,9 @@ def test_export_evidence_bundle_cleanup_on_verification_failure(
     assert exc_info.value.reason is EvidenceBundleReason.VERDICT_MISMATCH
     assert not dest.exists()
 
-    # Confirm no sibling temp dirs left behind in destination's parent
-    remaining = list(tmp_path.glob(".export-*")) + list(tmp_path.glob(".*tmp*"))
-    assert not remaining
+    remaining = list(tmp_path.glob(".export-tmp-*"))
+    assert len(remaining) == 1
+    assert (remaining[0] / MANIFEST_FILENAME).is_file()
 
 
 def test_export_evidence_bundle_derives_policy_and_does_not_copy_arbitrary_reasons(
