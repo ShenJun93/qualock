@@ -11,7 +11,7 @@ from ctypes import wintypes
 from enum import Enum
 from pathlib import Path
 from types import TracebackType
-from typing import BinaryIO, Self, TypeVar
+from typing import Any, BinaryIO, Self, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -36,6 +36,12 @@ _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
 _INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+_SYNCHRONIZE = 0x00100000
+_FILE_ATTRIBUTE_NORMAL = 0x00000080
+_FILE_CREATE = 2
+_FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
+_FILE_NON_DIRECTORY_FILE = 0x00000040
+_OBJ_CASE_INSENSITIVE = 0x00000040
 
 
 class PairedChangeVerificationReason(str, Enum):
@@ -74,6 +80,86 @@ class _ByHandleFileInformation(ctypes.Structure):
     )
 
 
+class _UnicodeString(ctypes.Structure):
+    _fields_ = (
+        ("Length", wintypes.USHORT),
+        ("MaximumLength", wintypes.USHORT),
+        ("Buffer", wintypes.LPWSTR),
+    )
+
+
+class _ObjectAttributes(ctypes.Structure):
+    _fields_ = (
+        ("Length", wintypes.ULONG),
+        ("RootDirectory", wintypes.HANDLE),
+        ("ObjectName", ctypes.POINTER(_UnicodeString)),
+        ("Attributes", wintypes.ULONG),
+        ("SecurityDescriptor", wintypes.LPVOID),
+        ("SecurityQualityOfService", wintypes.LPVOID),
+    )
+
+
+class _IoStatusUnion(ctypes.Union):
+    _fields_ = (("Status", wintypes.LONG), ("Pointer", wintypes.LPVOID))
+
+
+class _IoStatusBlock(ctypes.Structure):
+    _anonymous_ = ("result",)
+    _fields_ = (("result", _IoStatusUnion), ("Information", ctypes.c_size_t))
+
+
+def _configure_windows_api(kernel32: Any, ntdll: Any) -> None:
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_ByHandleFileInformation),
+    ]
+    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.GetFinalPathNameByHandleW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    kernel32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    ntdll.NtCreateFile.argtypes = [
+        ctypes.POINTER(wintypes.HANDLE),
+        wintypes.DWORD,
+        ctypes.POINTER(_ObjectAttributes),
+        ctypes.POINTER(_IoStatusBlock),
+        wintypes.LPVOID,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.LPVOID,
+        wintypes.ULONG,
+    ]
+    ntdll.NtCreateFile.restype = wintypes.LONG
+    ntdll.RtlNtStatusToDosError.argtypes = [wintypes.LONG]
+    ntdll.RtlNtStatusToDosError.restype = wintypes.ULONG
+
+
+def _windows_apis() -> tuple[Any, Any]:
+    kernel32 = ctypes.WinDLL(  # type: ignore[attr-defined]
+        "kernel32", use_last_error=True
+    )
+    ntdll = ctypes.WinDLL("ntdll")  # type: ignore[attr-defined]
+    _configure_windows_api(kernel32, ntdll)
+    return kernel32, ntdll
+
+
 def _win_last_error() -> int:
     return ctypes.get_last_error()  # type: ignore[attr-defined,no-any-return]
 
@@ -86,28 +172,27 @@ def _win_create_handle(
     creation: int,
     flags: int,
 ) -> int:
-    handle = ctypes.windll.kernel32.CreateFileW(  # type: ignore[attr-defined]
-        ctypes.c_wchar_p(path), access, share, None, creation, flags, None
-    )
+    kernel32, _ntdll = _windows_apis()
+    handle = kernel32.CreateFileW(path, access, share, None, creation, flags, None)
     if handle in (0, _INVALID_HANDLE_VALUE):
         raise ctypes.WinError(_win_last_error())  # type: ignore[attr-defined]
     return int(handle)
 
 
 def _win_handle_info(handle: int) -> _ByHandleFileInformation:
+    kernel32, _ntdll = _windows_apis()
     info = _ByHandleFileInformation()
-    ok = ctypes.windll.kernel32.GetFileInformationByHandle(  # type: ignore[attr-defined]
-        handle, ctypes.byref(info)
-    )
+    ok = kernel32.GetFileInformationByHandle(wintypes.HANDLE(handle), ctypes.byref(info))
     if not ok:
         raise ctypes.WinError(_win_last_error())  # type: ignore[attr-defined]
     return info
 
 
 def _win_final_path(handle: int) -> str:
+    kernel32, _ntdll = _windows_apis()
     buffer = ctypes.create_unicode_buffer(32768)
-    length = ctypes.windll.kernel32.GetFinalPathNameByHandleW(  # type: ignore[attr-defined]
-        handle, buffer, len(buffer), 0
+    length = kernel32.GetFinalPathNameByHandleW(
+        wintypes.HANDLE(handle), buffer, len(buffer), 0
     )
     if length == 0 or length >= len(buffer):
         raise ctypes.WinError(_win_last_error())  # type: ignore[attr-defined]
@@ -115,7 +200,69 @@ def _win_final_path(handle: int) -> str:
 
 
 def _win_close_handle(handle: int) -> None:
-    ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+    kernel32, _ntdll = _windows_apis()
+    kernel32.CloseHandle(wintypes.HANDLE(handle))
+
+
+def _win_create_relative_file(root_handle: int, name: str) -> BinaryIO:
+    _kernel32, ntdll = _windows_apis()
+    name_buffer = ctypes.create_unicode_buffer(name)
+    name_bytes = len(name.encode("utf-16-le"))
+    unicode_name = _UnicodeString(
+        Length=name_bytes,
+        MaximumLength=name_bytes + ctypes.sizeof(ctypes.c_wchar),
+        Buffer=ctypes.cast(name_buffer, wintypes.LPWSTR),
+    )
+    object_attributes = _ObjectAttributes(
+        Length=ctypes.sizeof(_ObjectAttributes),
+        RootDirectory=wintypes.HANDLE(root_handle),
+        ObjectName=ctypes.pointer(unicode_name),
+        Attributes=_OBJ_CASE_INSENSITIVE,
+        SecurityDescriptor=None,
+        SecurityQualityOfService=None,
+    )
+    io_status = _IoStatusBlock()
+    raw_handle = wintypes.HANDLE()
+    status = int(
+        ntdll.NtCreateFile(
+            ctypes.byref(raw_handle),
+            _GENERIC_READ | _GENERIC_WRITE | _SYNCHRONIZE,
+            ctypes.byref(object_attributes),
+            ctypes.byref(io_status),
+            None,
+            _FILE_ATTRIBUTE_NORMAL,
+            _FILE_SHARE_READ,
+            _FILE_CREATE,
+            _FILE_SYNCHRONOUS_IO_NONALERT | _FILE_NON_DIRECTORY_FILE,
+            None,
+            0,
+        )
+    )
+    if status < 0:
+        win_error = int(ntdll.RtlNtStatusToDosError(status))
+        raise ctypes.WinError(win_error)  # type: ignore[attr-defined]
+    if raw_handle.value is None:
+        raise OSError(errno.EIO, "NtCreateFile returned no handle")
+    handle = int(raw_handle.value)
+    try:
+        win_info = _win_handle_info(handle)
+        if (
+            win_info.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT
+            or win_info.dwFileAttributes & _FILE_ATTRIBUTE_DIRECTORY
+        ):
+            raise OSError(errno.EINVAL, "unsafe receipt file")
+        root_final = _win_final_path(root_handle).rstrip("\\")
+        file_final = _win_final_path(handle)
+        if file_final.casefold() != (root_final + "\\" + name).casefold():
+            raise OSError(errno.EXDEV, "receipt escaped pinned directory")
+        import msvcrt
+
+        fd = msvcrt.open_osfhandle(handle, os.O_WRONLY)  # type: ignore[attr-defined]
+        handle = -1
+        return os.fdopen(fd, "wb")
+    finally:
+        if handle not in {-1, 0, _INVALID_HANDLE_VALUE}:
+            _win_close_handle(handle)
 
 
 def _is_missing_error(exc: OSError) -> bool:
@@ -345,49 +492,19 @@ class _PinnedProtocolDirectory:
     def create_receipt(self, payload: bytes) -> None:
         reason = PairedChangeVerificationReason.MALFORMED_RECEIPT
         if os.name == "nt":
+            if self._win_handle is None:
+                raise RuntimeError("Windows protocol directory is not open")
             try:
-                handle = _win_create_handle(
-                    str(self.path / CLAIM_RECEIPT_FILENAME),
-                    access=_GENERIC_READ | _GENERIC_WRITE,
-                    share=_FILE_SHARE_READ,
-                    creation=_CREATE_NEW,
-                    flags=_FILE_FLAG_OPEN_REPARSE_POINT,
+                stream = _win_create_relative_file(
+                    self._win_handle, CLAIM_RECEIPT_FILENAME
                 )
-            except OSError as exc:
-                raise _translate_io_error(
-                    reason, CLAIM_RECEIPT_FILENAME, exc
-                ) from exc
-            try:
-                win_receipt_info = _win_handle_info(handle)
-                if (
-                    win_receipt_info.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT
-                    or win_receipt_info.dwFileAttributes & _FILE_ATTRIBUTE_DIRECTORY
-                ):
-                    raise OSError(errno.EINVAL, "unsafe receipt file")
-                final_path = _win_final_path(handle)
-                if (
-                    final_path.casefold()
-                    != self._expected_win_child_path(
-                        CLAIM_RECEIPT_FILENAME
-                    ).casefold()
-                ):
-                    raise OSError(
-                        errno.EXDEV, "receipt escaped pinned directory"
-                    )
-                import msvcrt
-
-                win_receipt_fd = msvcrt.open_osfhandle(handle, os.O_WRONLY)  # type: ignore[attr-defined]
-                handle = -1
-                with os.fdopen(win_receipt_fd, "wb") as stream:
+                with stream:
                     stream.write(payload)
                     stream.flush()
             except OSError as exc:
                 raise _translate_io_error(
                     reason, CLAIM_RECEIPT_FILENAME, exc
                 ) from exc
-            finally:
-                if handle not in {-1, 0, _INVALID_HANDLE_VALUE}:
-                    _win_close_handle(handle)
             return
 
         if self._posix_fd is None:
