@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import stat
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
@@ -71,6 +74,11 @@ def build_paired_change_run(
     result: QualificationResult,
     trace: Sequence[AttemptRunTrace],
 ) -> PairedChangeRunV1:
+    if digest_model(protocol_design) != protocol_design_sha256:
+        raise PairedChangeRunError("protocol design digest does not match frozen design")
+    if qualification_id != result.qualification_id:
+        raise PairedChangeRunError("qualification ID does not match qualification result")
+
     fingerprints_by_canary_id = {
         canary.canary_id: canary.canary_fingerprint_sha256 for canary in protocol_design.canaries
     }
@@ -86,6 +94,48 @@ def build_paired_change_run(
                 "is not bound to the frozen protocol design digest"
             )
         traces_by_canary.setdefault(item.canary_id, []).append(item)
+
+    public_attempts_by_canary: dict[str, dict[tuple[str, int], str]] = {}
+    for execution in result.executions:
+        public_attempts: dict[tuple[str, int], str] = {}
+        for attempt in execution.attempts:
+            key = (attempt.side, attempt.repetition)
+            if key in public_attempts:
+                raise PairedChangeRunError(
+                    f"canary {execution.canary_id!r} has duplicate public attempt {key!r}"
+                )
+            public_attempts[key] = hashlib.sha256(attempt.events_jsonl.encode()).hexdigest()
+        public_attempts_by_canary[execution.canary_id] = public_attempts
+
+    for canary_id, canary_trace in traces_by_canary.items():
+        expected_public_attempts = public_attempts_by_canary.get(canary_id)
+        if expected_public_attempts is None:
+            raise PairedChangeRunError(
+                f"canary {canary_id!r} has attempt evidence but no qualification result execution"
+            )
+        trace_attempts = {
+            (item.side, item.repetition): item.events_sha256 for item in canary_trace
+        }
+        if (
+            len(trace_attempts) != len(canary_trace)
+            or trace_attempts != expected_public_attempts
+        ):
+            raise PairedChangeRunError(
+                f"canary {canary_id!r} trace does not match public qualification attempts"
+            )
+
+    expected_repetitions = set(range(1, protocol_design.repetitions + 1))
+    for execution in result.executions:
+        if not execution.attempts:
+            continue
+        actual_repetitions = {
+            item.repetition for item in traces_by_canary.get(execution.canary_id, ())
+        }
+        if actual_repetitions != expected_repetitions:
+            raise PairedChangeRunError(
+                f"canary {execution.canary_id!r} does not have exactly repetitions "
+                f"1..{protocol_design.repetitions}"
+            )
 
     canaries: list[CanaryRunEvidenceV1] = []
     for canary_id in sorted(traces_by_canary):
@@ -145,13 +195,15 @@ def build_paired_change_run(
 
 
 def write_paired_change_run(path: Path, value: PairedChangeRunV1) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = canonical_json(value.model_dump(mode="json")) + b"\n"
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("xb") as handle:
             handle.write(payload)
     except FileExistsError as exc:
         raise PairedChangeRunError("paired-change run artifact already exists") from exc
+    except OSError as exc:
+        raise PairedChangeRunError("paired-change run artifact could not be written") from exc
     return path
 
 
@@ -159,16 +211,36 @@ def read_paired_change_run(
     path: Path, *, max_bytes: int = _DEFAULT_MAX_BYTES
 ) -> PairedChangeRunV1:
     try:
-        size = path.stat().st_size
+        fd = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
     except OSError as exc:
         raise PairedChangeRunError("paired-change run artifact is unavailable") from exc
-    if size > max_bytes:
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise PairedChangeRunError("paired-change run artifact is unavailable")
+            if metadata.st_size > max_bytes:
+                raise PairedChangeRunError(
+                    "paired-change run artifact exceeds maximum size"
+                )
+            try:
+                raw = handle.read(max_bytes + 1)
+            except OSError as exc:
+                raise PairedChangeRunError(
+                    "paired-change run artifact is unavailable"
+                ) from exc
+    except OSError as exc:
+        raise PairedChangeRunError("paired-change run artifact is unavailable") from exc
+    if len(raw) > max_bytes:
         raise PairedChangeRunError("paired-change run artifact exceeds maximum size")
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise PairedChangeRunError("paired-change run artifact is unavailable") from exc
-    try:
+        text = raw.decode("utf-8")
         return PairedChangeRunV1.model_validate_json(text)
-    except ValidationError as exc:
+    except (UnicodeDecodeError, ValidationError) as exc:
         raise PairedChangeRunError("paired-change run artifact is invalid") from exc
