@@ -10,6 +10,7 @@ from qualock.protocols.paired_change.conditions import (
 from qualock.protocols.paired_change.models import (
     ClaimClass,
     ConditionStatus,
+    ConditionType,
     ProtocolConditionV1,
 )
 from tests.unit.test_paired_change_conditions import (
@@ -18,6 +19,59 @@ from tests.unit.test_paired_change_conditions import (
     _replace_public_attempt,
     _valid_inputs,
 )
+
+VALID_REASONS = {
+    ConditionType.EVIDENCE_BOUND: {
+        ConditionStatus.TRUE: "EvidenceVerified",
+        ConditionStatus.FALSE: "EvidenceMismatch",
+        ConditionStatus.UNKNOWN: "EvidenceUnavailable",
+    },
+    ConditionType.DESIGN_FROZEN: {
+        ConditionStatus.TRUE: "DesignVerified",
+        ConditionStatus.FALSE: "DesignChanged",
+        ConditionStatus.UNKNOWN: "DesignFreezeUnavailable",
+    },
+    ConditionType.STATE_BOUND: {
+        ConditionStatus.TRUE: "StateVerified",
+        ConditionStatus.FALSE: "StateMismatch",
+        ConditionStatus.UNKNOWN: "StateIdentityIncomplete",
+    },
+    ConditionType.PREPARATION_EQUIVALENT: {
+        ConditionStatus.TRUE: "PreparationVerified",
+        ConditionStatus.FALSE: "PreparationMismatch",
+        ConditionStatus.UNKNOWN: "PreparationUnverified",
+    },
+    ConditionType.BASELINE_STABLE: {
+        ConditionStatus.TRUE: "BaselineStable",
+        ConditionStatus.FALSE: "BaselineViolation",
+        ConditionStatus.UNKNOWN: "BaselineEvidenceIncomplete",
+    },
+    ConditionType.ATTEMPTS_COMPLETE: {
+        ConditionStatus.TRUE: "AttemptsComplete",
+        ConditionStatus.FALSE: "AttemptMissing",
+        ConditionStatus.UNKNOWN: "AttemptLayoutUnknown",
+    },
+    ConditionType.ATTEMPTS_ISOLATED: {
+        ConditionStatus.TRUE: "IsolationVerified",
+        ConditionStatus.FALSE: "IsolationReuseDetected",
+        ConditionStatus.UNKNOWN: "IsolationUnverified",
+    },
+    ConditionType.ORDER_VALID: {
+        ConditionStatus.TRUE: "OrderVerified",
+        ConditionStatus.FALSE: "PairLayoutInvalid",
+        ConditionStatus.UNKNOWN: "OrderUnknown",
+    },
+    ConditionType.TEMPORAL_PAIR_VALID: {
+        ConditionStatus.TRUE: "TemporalPairVerified",
+        ConditionStatus.FALSE: "TemporalGapExceeded",
+        ConditionStatus.UNKNOWN: "TemporalEvidenceMissing",
+    },
+    ConditionType.MATERIAL_DIMENSIONS_CONTROLLED: {
+        ConditionStatus.TRUE: "MaterialControlsVerified",
+        ConditionStatus.FALSE: "UnexpectedMaterialChange",
+        ConditionStatus.UNKNOWN: "RequiredDimensionOpaque",
+    },
+}
 
 
 def _derive(tmp_path: Path, *, candidate_success: bool = True):
@@ -37,7 +91,9 @@ def _with_status(
     status: ConditionStatus,
 ) -> tuple[ProtocolConditionV1, ...]:
     changed = list(conditions)
-    changed[index] = changed[index].model_copy(update={"status": status})
+    changed[index] = changed[index].model_copy(
+        update={"status": status, "reason": VALID_REASONS[changed[index].type][status]}
+    )
     return tuple(changed)
 
 
@@ -110,3 +166,30 @@ def test_unstable_or_incomplete_baseline_is_unresolved_even_if_passed_conditions
     )
 
     assert claim.claim is ClaimClass.UNRESOLVED
+
+
+@pytest.mark.parametrize("malformation", ["missing", "duplicate", "unexpected"])
+def test_malformed_condition_sets_are_rejected_instead_of_emitted(
+    tmp_path: Path, malformation: str
+) -> None:
+    bundle, evidence, qualification, canary = _derive(tmp_path)
+    if malformation == "missing":
+        changed = canary[:-1]
+    elif malformation == "duplicate":
+        changed = (*canary[:-1], canary[0])
+    else:
+        changed = (*canary[:-1], qualification[0])
+
+    with pytest.raises(ValueError, match="canonical canary conditions"):
+        derive_canary_claim(bundle, evidence, "sample", qualification, changed)
+
+
+def test_fabricated_true_reason_cannot_authorize_claim(
+    tmp_path: Path,
+) -> None:
+    bundle, evidence, qualification, canary = _derive(tmp_path, candidate_success=False)
+    fabricated = list(canary)
+    fabricated[0] = fabricated[0].model_copy(update={"reason": "FabricatedSuccess"})
+
+    with pytest.raises(ValueError, match="invalid condition status/reason"):
+        derive_canary_claim(bundle, evidence, "sample", qualification, tuple(fabricated))

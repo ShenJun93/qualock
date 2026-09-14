@@ -29,6 +29,61 @@ _CANARY_ORDER = (
     ConditionType.MATERIAL_DIMENSIONS_CONTROLLED,
 )
 
+_VALID_REASONS: dict[ConditionType, dict[ConditionStatus, frozenset[str]]] = {
+    ConditionType.EVIDENCE_BOUND: {
+        ConditionStatus.TRUE: frozenset({"EvidenceVerified"}),
+        ConditionStatus.FALSE: frozenset({"EvidenceMismatch"}),
+        ConditionStatus.UNKNOWN: frozenset({"EvidenceUnavailable"}),
+    },
+    ConditionType.DESIGN_FROZEN: {
+        ConditionStatus.TRUE: frozenset({"DesignVerified"}),
+        ConditionStatus.FALSE: frozenset({"DesignChanged"}),
+        ConditionStatus.UNKNOWN: frozenset({"DesignFreezeUnavailable"}),
+    },
+    ConditionType.STATE_BOUND: {
+        ConditionStatus.TRUE: frozenset({"StateVerified"}),
+        ConditionStatus.FALSE: frozenset({"StateMismatch"}),
+        ConditionStatus.UNKNOWN: frozenset({"StateIdentityIncomplete"}),
+    },
+    ConditionType.PREPARATION_EQUIVALENT: {
+        ConditionStatus.TRUE: frozenset({"PreparationVerified"}),
+        ConditionStatus.FALSE: frozenset({"PreparationMismatch"}),
+        ConditionStatus.UNKNOWN: frozenset({"PreparationUnverified"}),
+    },
+    ConditionType.BASELINE_STABLE: {
+        ConditionStatus.TRUE: frozenset({"BaselineStable"}),
+        ConditionStatus.FALSE: frozenset({"BaselineViolation"}),
+        ConditionStatus.UNKNOWN: frozenset({"BaselineEvidenceIncomplete"}),
+    },
+    ConditionType.ATTEMPTS_COMPLETE: {
+        ConditionStatus.TRUE: frozenset({"AttemptsComplete"}),
+        ConditionStatus.FALSE: frozenset({"AttemptMissing", "AttemptInvalid"}),
+        ConditionStatus.UNKNOWN: frozenset({"AttemptLayoutUnknown"}),
+    },
+    ConditionType.ATTEMPTS_ISOLATED: {
+        ConditionStatus.TRUE: frozenset({"IsolationVerified"}),
+        ConditionStatus.FALSE: frozenset(
+            {"IsolationReuseDetected", "IsolationProfileMismatch"}
+        ),
+        ConditionStatus.UNKNOWN: frozenset({"IsolationUnverified"}),
+    },
+    ConditionType.ORDER_VALID: {
+        ConditionStatus.TRUE: frozenset({"OrderVerified"}),
+        ConditionStatus.FALSE: frozenset({"PairLayoutInvalid", "OrderImbalanced"}),
+        ConditionStatus.UNKNOWN: frozenset({"OrderUnknown"}),
+    },
+    ConditionType.TEMPORAL_PAIR_VALID: {
+        ConditionStatus.TRUE: frozenset({"TemporalPairVerified"}),
+        ConditionStatus.FALSE: frozenset({"TemporalGapExceeded", "PairLayoutInvalid"}),
+        ConditionStatus.UNKNOWN: frozenset({"TemporalEvidenceMissing"}),
+    },
+    ConditionType.MATERIAL_DIMENSIONS_CONTROLLED: {
+        ConditionStatus.TRUE: frozenset({"MaterialControlsVerified"}),
+        ConditionStatus.FALSE: frozenset({"UnexpectedMaterialChange"}),
+        ConditionStatus.UNKNOWN: frozenset({"RequiredDimensionOpaque"}),
+    },
+}
+
 
 def _canonical_conditions(
     conditions: tuple[ProtocolConditionV1, ...],
@@ -37,7 +92,10 @@ def _canonical_conditions(
     by_type = {item.type: item for item in conditions}
     if len(by_type) != len(conditions) or set(by_type) != set(order):
         return None
-    return tuple(by_type[item] for item in order)
+    canonical = tuple(by_type[item] for item in order)
+    if any(item.reason not in _VALID_REASONS[item.type][item.status] for item in canonical):
+        raise ValueError("invalid condition status/reason")
+    return canonical
 
 
 def derive_canary_claim(
@@ -53,14 +111,15 @@ def derive_canary_claim(
         qualification_conditions, _QUALIFICATION_ORDER
     )
     canonical_canary = _canonical_conditions(canary_conditions, _CANARY_ORDER)
-    stored_conditions = canary_conditions if canonical_canary is None else canonical_canary
+    if canonical_qualification is None:
+        raise ValueError("expected canonical qualification conditions")
+    if canonical_canary is None:
+        raise ValueError("expected canonical canary conditions")
     unresolved = CanaryClaimV1(
         canary_id=canary_id,
-        conditions=stored_conditions,
+        conditions=canonical_canary,
         claim=ClaimClass.UNRESOLVED,
     )
-    if canonical_qualification is None or canonical_canary is None:
-        return unresolved
     if any(
         item.status is not ConditionStatus.TRUE
         for item in (*canonical_qualification, *canonical_canary)
