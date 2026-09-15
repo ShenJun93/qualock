@@ -68,6 +68,7 @@ CheckExecutor = Callable[[Path, str], QualificationResult]
 EvidenceExporter = Callable[[Path, str, Path], ExportedEvidenceBundle]
 
 _STABLE_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_FIRST_BAD_ID_RE = re.compile(r"^first-bad-\d{8}T\d{6}Z-[0-9a-f]{8}$")
 
 
 @dataclass(frozen=True)
@@ -307,6 +308,13 @@ def _first_bad_id() -> str:
     return f"first-bad-{stamp}-{uuid.uuid4().hex[:8]}"
 
 
+def _resolve_first_bad_id(first_bad_id: str | None) -> str:
+    resolved = first_bad_id or _first_bad_id()
+    if _FIRST_BAD_ID_RE.fullmatch(resolved) is None:
+        raise CommandError("invalid first-bad id")
+    return resolved
+
+
 def _edge_dirname(index: int) -> str:
     return f"{index:0{EDGE_INDEX_WIDTH}d}"
 
@@ -391,6 +399,7 @@ def execute_first_bad(
     on_start: OnStart | None = None,
     on_edge: OnEdge | None = None,
 ) -> FirstBadOrchestrationOutcome:
+    resolved_id = _resolve_first_bad_id(first_bad_id)
     preflight = first_bad_preflight(root, upper_spec, catalog=catalog)
     if on_start is not None:
         on_start(preflight)
@@ -399,9 +408,9 @@ def execute_first_bad(
     results_dir = project_dir(root) / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     staging_root = results_dir / f".first-bad-tmp-{uuid.uuid4().hex}"
-    staging_root.mkdir()
+    staging_root.mkdir(mode=0o700)
     edges_dir = staging_root / EDGES_DIRNAME
-    edges_dir.mkdir()
+    edges_dir.mkdir(mode=0o700)
 
     verified_edges = _run_edges(preflight, root, edges_dir, deps, on_edge)
     evidence = _build_chain_evidence(preflight, verified_edges)
@@ -415,7 +424,6 @@ def execute_first_bad(
     write_first_bad_receipt(staging_root, receipt)
     receipt = verify_first_bad(staging_root)
 
-    resolved_id = first_bad_id or _first_bad_id()
     final_path = results_dir / resolved_id
     _rename_noreplace(staging_root, final_path)
 
