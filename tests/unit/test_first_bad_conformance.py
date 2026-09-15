@@ -1,6 +1,7 @@
 """Portable golden-vector conformance for first-bad/v1."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -57,6 +58,24 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_bytes(_canonical_file_bytes(payload))
 
 
+def _chain_sha256(payload: dict[str, object]) -> str:
+    body = {key: value for key, value in payload.items() if key != "chain_sha256"}
+    canonical = json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _apply_chain_field_drift(
+    package: Path, field: str, value: object
+) -> None:
+    path = package / "chain-evidence.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[field] = value
+    payload["chain_sha256"] = _chain_sha256(payload)
+    _write_json(path, payload)
+
+
 def _apply_mutation(package: Path, tmp_path: Path, mutation: dict[str, object]) -> None:
     op = mutation["op"]
     if op == "protocol-preparation-unknown":
@@ -110,6 +129,17 @@ def _assemble_vector(tmp_path: Path, vector: dict[str, object]) -> Path:
     return package
 
 
+def test_suite_config_design_drift_vector_exercises_each_dimension() -> None:
+    vector = _vectors()["suite-config-design-drift"]
+    cases = vector["drift_cases"]
+    assert [item["field"] for item in cases] == [
+        "suite_sha256",
+        "config_sha256",
+        "protocol_design_sha256",
+    ]
+    assert all(item["expected_error_reason"] == "edge_binding_mismatch" for item in cases)
+
+
 def test_first_bad_vector_set_and_fixture_portability() -> None:
     vectors = _vectors()
     assert tuple(vectors) == VECTOR_NAMES
@@ -127,6 +157,21 @@ def test_first_bad_vector_set_and_fixture_portability() -> None:
 @pytest.mark.parametrize("vector_name", VECTOR_NAMES)
 def test_first_bad_golden_vector(tmp_path: Path, vector_name: str) -> None:
     vector = _vectors()[vector_name]
+    if "drift_cases" in vector:
+        for case in vector["drift_cases"]:
+            case_tmp = tmp_path / str(case["field"])
+            case_tmp.mkdir()
+            package = _assemble_vector(case_tmp, vector)
+            _apply_chain_field_drift(package, str(case["field"]), case["value"])
+            before = _snapshot_regular_files(package)
+            with pytest.raises(FirstBadVerificationError) as exc_info:
+                verify_first_bad(package)
+            assert exc_info.value.reason is FirstBadVerificationReason(
+                case["expected_error_reason"]
+            )
+            assert _snapshot_regular_files(package) == before
+        return
+
     package = _assemble_vector(tmp_path, vector)
     before = _snapshot_regular_files(package)
     expected = vector["expected"]
