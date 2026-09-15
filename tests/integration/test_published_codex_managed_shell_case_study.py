@@ -3,10 +3,25 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parents[2]
 CASE_STUDY = REPO_ROOT / "docs/evidence/2026-09-16-codex-managed-shell-first-bad"
+
+
+def _git_index_mode(path: Path) -> str:
+    relative = path.relative_to(REPO_ROOT).as_posix()
+    result = subprocess.run(
+        ["git", "ls-files", "--stage", "--", relative],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    line = result.stdout.strip()
+    assert line, relative
+    return line.split(maxsplit=1)[0]
 
 
 def test_case_study_records_first_bad_tool_registration_vector() -> None:
@@ -72,7 +87,7 @@ def test_case_study_bundle_is_portable_and_self_checked() -> None:
     for name, digest in checksum_entries.items():
         assert hashlib.sha256((CASE_STUDY / name).read_bytes()).hexdigest() == digest
 
-    assert (CASE_STUDY / "run_probe.sh").stat().st_mode & 0o111
+    assert _git_index_mode(CASE_STUDY / "run_probe.sh") == "100755"
 
 
 def test_portable_runner_materializes_ephemeral_codex_home() -> None:
@@ -158,3 +173,7 @@ def test_portable_runner_bridges_to_loopback_without_host_network() -> None:
     assert 'CAPTURE_HOST="${CAPTURE_HOST:-host.docker.internal}"' in runner
     assert '--network "$PROBE_NETWORK"' not in runner
     assert '/bin/busybox wget -qO- "http://${CAPTURE_HOST}:${MOCK_PORT}/health"' in runner
+
+
+def test_git_index_mode_reports_runner_executable() -> None:
+    assert _git_index_mode(CASE_STUDY / "run_probe.sh") == "100755"
