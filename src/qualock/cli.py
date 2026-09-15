@@ -82,8 +82,15 @@ from qualock.project_watch.models import WatchEvent, WatchEventKind
 from qualock.project_watch.render import render_watch_event
 from qualock.project_watch.snapshot import ProjectWatchSnapshotError
 from qualock.protocols.first_bad.io import FirstBadVerificationError, write_first_bad_receipt
-from qualock.protocols.first_bad.models import FirstBadClaimClass
-from qualock.protocols.first_bad.render import render_first_bad_receipt
+from qualock.protocols.first_bad.models import FirstBadClaimClass, FirstBadEdgeSummaryV1
+from qualock.protocols.first_bad.orchestrate import FirstBadPreflight, execute_first_bad
+from qualock.protocols.first_bad.render import (
+    render_first_bad_edge_line,
+    render_first_bad_range,
+    render_first_bad_receipt,
+    render_first_bad_terminal,
+    render_first_bad_title,
+)
 from qualock.protocols.first_bad.verify import verify_first_bad
 from qualock.protocols.paired_change.io import (
     PairedChangeVerificationError,
@@ -497,6 +504,60 @@ def bisect_command(upper: str) -> None:
         raise typer.Exit(1) from exc
 
     _render_bisect_terminal(outcome, display_name)
+
+
+def _print_first_bad_start(preflight: FirstBadPreflight, staging_path: Path) -> None:
+    del staging_path
+    display_name = agent_display_name(preflight.agent_name)
+    console.print(render_first_bad_title(), end="", markup=False)
+    console.print(
+        render_first_bad_range(display_name, preflight.catalog[0], preflight.upper_version),
+        end="",
+        markup=False,
+    )
+
+
+def _print_first_bad_edge(summary: FirstBadEdgeSummaryV1) -> None:
+    console.print(render_first_bad_edge_line(summary), end="", markup=False)
+
+
+@app.command("first-bad")
+def first_bad_command(upper: str) -> None:
+    root = Path.cwd()
+    try:
+        outcome = execute_first_bad(
+            root,
+            upper,
+            on_start=_print_first_bad_start,
+            on_edge=_print_first_bad_edge,
+        )
+    except (
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        BaselineStaleError,
+    ) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except ReleaseDiscoveryError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+    except FirstBadVerificationError as exc:
+        del exc
+        console.print("first-bad package verification failed", markup=False)
+        raise typer.Exit(1) from None
+    except Exception as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
+    console.print(render_first_bad_terminal(outcome.receipt), end="", markup=False)
+    console.print(f"Package: {outcome.package_path}", markup=False)
+
+    if outcome.receipt.claim is FirstBadClaimClass.FIRST_ATTRIBUTABLE_BAD:
+        raise typer.Exit(2)
+    if outcome.receipt.claim is FirstBadClaimClass.UNRESOLVED:
+        raise typer.Exit(4)
 
 
 def _render_schedule_outcome(

@@ -299,8 +299,8 @@ class FirstBadOrchestrationOutcome:
     receipt: FirstBadReceiptV1
 
 
-OnStart = Callable[[FirstBadPreflight], None]
-OnEdge = Callable[[VerifiedFirstBadEdge], None]
+OnStart = Callable[[FirstBadPreflight, Path], None]
+OnEdge = Callable[[FirstBadEdgeSummaryV1], None]
 
 
 def _first_bad_id() -> str:
@@ -349,7 +349,7 @@ def _run_edges(
 
         verified_edges.append(edge)
         if on_edge is not None:
-            on_edge(edge)
+            on_edge(edge.summary)
         if edge.summary.classification is not EdgeClassification.NO_REGRESSION_OBSERVED:
             break
         expected_state = edge.record.candidate_runtime_identity
@@ -401,8 +401,6 @@ def execute_first_bad(
 ) -> FirstBadOrchestrationOutcome:
     resolved_id = _resolve_first_bad_id(first_bad_id)
     preflight = first_bad_preflight(root, upper_spec, catalog=catalog)
-    if on_start is not None:
-        on_start(preflight)
     deps = deps or FirstBadExecutionDependencies()
 
     results_dir = project_dir(root) / "results"
@@ -411,6 +409,9 @@ def execute_first_bad(
     staging_root.mkdir(mode=0o700)
     edges_dir = staging_root / EDGES_DIRNAME
     edges_dir.mkdir(mode=0o700)
+
+    if on_start is not None:
+        on_start(preflight, staging_root)
 
     verified_edges = _run_edges(preflight, root, edges_dir, deps, on_edge)
     evidence = _build_chain_evidence(preflight, verified_edges)
