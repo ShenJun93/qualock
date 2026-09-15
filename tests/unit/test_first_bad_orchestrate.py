@@ -225,15 +225,34 @@ def test_malformed_catalog_entry_rejected(
         first_bad_preflight(tmp_path, "codex@0.153.0", catalog=catalog)
 
 
-def test_frozen_range_is_sorted_deduplicated_and_fetched_once(
+@pytest.mark.parametrize(
+    "versions",
+    [
+        ("0.151.0", "0.152.0", "0.152.0", "0.153.0"),
+        ("0.151.0", "0.153.0", "0.152.0"),
+    ],
+    ids=["duplicate", "out-of-order"],
+)
+def test_frozen_catalog_rejects_non_unique_or_unordered_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, versions: tuple[str, ...]
+) -> None:
+    patch_project_loading(monkeypatch, agent_name="codex")
+    patch_lock(monkeypatch, baseline_lock(agent="codex", version="0.151.0"))
+    catalog = FakeCatalog(versions)
+
+    with pytest.raises(CommandError, match="strictly increasing"):
+        first_bad_preflight(tmp_path, "codex@0.153.0", catalog=catalog)
+
+    assert catalog.calls == 1
+
+
+def test_frozen_range_preserves_fetched_order_and_is_fetched_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     patch_project_loading(monkeypatch, agent_name="codex")
     lock = baseline_lock(agent="codex", version="0.151.0")
     patch_lock(monkeypatch, lock)
-    catalog = FakeCatalog(
-        ("0.153.0", "0.150.0", "0.152.0", "0.151.0", "0.152.0", "0.154.0", "0.153.0")
-    )
+    catalog = FakeCatalog(("0.150.0", "0.151.0", "0.152.0", "0.153.0", "0.154.0"))
 
     result = first_bad_preflight(tmp_path, "codex@0.153.0", catalog=catalog)
 
