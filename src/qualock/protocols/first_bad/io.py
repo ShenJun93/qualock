@@ -119,9 +119,6 @@ class FirstBadPackageSnapshot:
     edges: tuple[EdgePackageSnapshot, ...]
 
 
-ModelT = FirstBadReceiptV1
-
-
 # --- Windows ctypes plumbing -----------------------------------------------------
 
 
@@ -535,10 +532,14 @@ class _PinnedTree:
             raise FirstBadVerificationError(reason, field)
         try:
             fd = os.open(name, os.O_RDONLY | directory | nofollow, dir_fd=parent_fd)
+        except OSError as exc:
+            raise _translate_io_error(reason, field, exc) from exc
+        try:
             info = os.fstat(fd)
             if not stat.S_ISDIR(info.st_mode):
                 raise OSError(errno.ENOTDIR, "nested entry is not a directory")
         except OSError as exc:
+            os.close(fd)
             raise _translate_io_error(reason, field, exc) from exc
         self._posix_fds.append(fd)
         return fd
