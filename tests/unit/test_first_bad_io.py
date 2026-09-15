@@ -800,6 +800,30 @@ def test_windows_directory_names_never_use_scandir(monkeypatch: pytest.MonkeyPat
     assert tree.names(999) == ("chain-evidence.json", "edges")
 
 
+@_POSIX_ONLY
+def test_open_dir_closes_rejected_descriptor(monkeypatch: pytest.MonkeyPatch) -> None:
+    from qualock.protocols.first_bad import io as io_module
+
+    rejected_fd = os.open("/dev/null", os.O_RDONLY)
+    monkeypatch.setattr(io_module.os, "open", lambda *args, **kwargs: rejected_fd)
+    tree = io_module._PinnedTree()
+    try:
+        with pytest.raises(FirstBadVerificationError):
+            tree.open_dir(
+                999,
+                "child",
+                reason=FirstBadVerificationReason.MALFORMED_CHAIN_EVIDENCE,
+                field="child",
+            )
+        with pytest.raises(OSError):
+            os.fstat(rejected_fd)
+    finally:
+        try:
+            os.close(rejected_fd)
+        except OSError:
+            pass
+
+
 # --- native-Windows-only real semantics --------------------------------------------
 
 
