@@ -559,11 +559,11 @@ Review must confirm exact exit mapping, verify-before-write ordering, no overwri
 
 - [ ] **Step 1: Write RED capability/preflight tests**
 
-Cover agent mismatch, unsupported Antigravity before catalog call, non-exact/non-stable upper, upper absent from catalog, upper <= baseline, trusted baseline absent from catalog, malformed release entries, and sorted/deduplicated range selection. For causal adjacency, unlike legacy bisect, first-bad requires the trusted baseline version to be present in the fetched stable catalog.
+Cover agent mismatch, unsupported Antigravity before catalog call, non-exact/non-stable upper, upper absent from catalog, upper <= baseline, trusted baseline absent from catalog, malformed release entries, duplicate/out-of-order fetched catalogs, and fetched-order range selection. For causal adjacency, unlike legacy bisect, first-bad requires the trusted baseline version to be present in the fetched stable catalog.
 
 - [ ] **Step 2: Implement explicit capability and frozen-catalog preflight**
 
-Use keyword construction for `OrchestrationCapabilities` so adding the field cannot silently reorder positional meaning. Parse stable versions with exact `^(\d+)\.(\d+)\.(\d+)$`; freeze `baseline..upper` from the fetched snapshot only once and never refetch during the run.
+Use keyword construction for `OrchestrationCapabilities` so adding the field cannot silently reorder positional meaning. Parse stable versions with exact `^(\d+)\.(\d+)\.(\d+)$`; reject duplicate or non-increasing fetched snapshots, then freeze `baseline..upper` in fetched order exactly once without sorting/deduplicating or refetching during the run.
 
 - [ ] **Step 3: Write RED workspace-snapshot tests**
 

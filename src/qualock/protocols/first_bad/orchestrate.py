@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 from qualock.agents.orchestration import orchestration_capabilities
@@ -122,8 +123,9 @@ def first_bad_preflight(
 
     catalog_source = catalog or default_stable_release_catalog(agent_name)
     frozen_snapshot = tuple(catalog_source.stable_versions())
-    for entry in frozen_snapshot:
-        _version_key(entry)
+    frozen_keys = tuple(_version_key(entry) for entry in frozen_snapshot)
+    if any(left >= right for left, right in pairwise(frozen_keys)):
+        raise CommandError("stable release catalog must be strictly increasing without duplicates")
 
     if upper_version not in frozen_snapshot:
         raise CommandError(f"{agent_name}@{upper_version} is not a published stable release")
@@ -136,7 +138,7 @@ def first_bad_preflight(
 
     frozen_range = tuple(
         version
-        for version in sorted(set(frozen_snapshot), key=_version_key)
+        for version in frozen_snapshot
         if _version_key(baseline_version) <= _version_key(version) <= _version_key(upper_version)
     )
 
