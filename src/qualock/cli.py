@@ -81,6 +81,10 @@ from qualock.project_watch.engine import run_watch as run_project_watch
 from qualock.project_watch.models import WatchEvent, WatchEventKind
 from qualock.project_watch.render import render_watch_event
 from qualock.project_watch.snapshot import ProjectWatchSnapshotError
+from qualock.protocols.first_bad.io import FirstBadVerificationError, write_first_bad_receipt
+from qualock.protocols.first_bad.models import FirstBadClaimClass
+from qualock.protocols.first_bad.render import render_first_bad_receipt
+from qualock.protocols.first_bad.verify import verify_first_bad
 from qualock.protocols.paired_change.io import (
     PairedChangeVerificationError,
     write_claim_receipt,
@@ -131,6 +135,12 @@ _EVIDENCE_WRITE_RECEIPT_OPTION = typer.Option(
     False,
     "--write-receipt",
     help="Write claim-receipt.json after successful verification.",
+)
+_FIRST_BAD_CHAIN_DIR_ARGUMENT = typer.Argument(..., metavar="CHAIN_DIR")
+_FIRST_BAD_WRITE_RECEIPT_OPTION = typer.Option(
+    False,
+    "--write-receipt",
+    help="Write chain-receipt.json after successful verification.",
 )
 console = Console()
 
@@ -1104,6 +1114,40 @@ def evidence_verify_claim_command(
         raise typer.Exit(1) from None
 
     console.print(render_claim_receipt(receipt), end="", markup=False)
+
+
+@evidence_app.command("verify-first-bad")
+def evidence_verify_first_bad_command(
+    chain_dir: Path = _FIRST_BAD_CHAIN_DIR_ARGUMENT,
+    write_receipt: bool = _FIRST_BAD_WRITE_RECEIPT_OPTION,
+) -> None:
+    try:
+        receipt = verify_first_bad(chain_dir)
+        if write_receipt:
+            write_first_bad_receipt(chain_dir, receipt)
+    except (
+        FirstBadVerificationError,
+        EvidenceBundleError,
+        PairedChangeVerificationError,
+        EvidenceProvenanceError,
+        BaselineStaleError,
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        ValueError,
+    ) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception:  # noqa: BLE001 - unexpected first-bad failures map to stable exit 1
+        console.print("first-bad verification failed", markup=False)
+        raise typer.Exit(1) from None
+
+    console.print(render_first_bad_receipt(receipt), end="", markup=False)
+    if receipt.claim is FirstBadClaimClass.FIRST_ATTRIBUTABLE_BAD:
+        raise typer.Exit(2)
+    if receipt.claim is FirstBadClaimClass.UNRESOLVED:
+        raise typer.Exit(4)
 
 
 if __name__ == "__main__":
