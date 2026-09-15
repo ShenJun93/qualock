@@ -309,6 +309,7 @@ def test_real_unresolved_child_remains_causal_unresolved() -> None:
     assert receipt.edges[0].classification is EdgeClassification.UNRESOLVED
     assert receipt.conditions[7].status is ConditionStatus.TRUE
     assert receipt.conditions[8].status is ConditionStatus.UNKNOWN
+    assert receipt.conditions[8].reason == "causal prefix contains an unresolved edge"
     assert receipt.conditions[9].status is ConditionStatus.UNKNOWN
     assert receipt.conditions[9].reason == "carried prefix does not justify an attributable boundary"
 
@@ -382,10 +383,25 @@ def test_invalid_catalog_order_or_stability_is_catalog_binding_error(
     )
 
 
-def test_catalog_endpoint_disagreement_is_catalog_binding_error() -> None:
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("baseline_version", "0.149.0"), ("upper_version", "0.199.0")],
+)
+def test_catalog_endpoint_disagreement_is_catalog_binding_error(field: str, value: str) -> None:
     snapshot, _ = _single_fixture_snapshot("no-regression-clean")
-    bad = _mutate_evidence(snapshot, upper_version="0.199.0")
+    bad = _mutate_evidence(snapshot, **{field: value})
     _assert_reason(bad, FirstBadVerificationReason.CATALOG_BINDING_MISMATCH)
+
+
+@pytest.mark.parametrize("bad_index", [0, 2])
+def test_multi_edge_duplicate_or_skipped_index_is_layout_error(bad_index: int) -> None:
+    snapshot, _ = _fake_chain(
+        (ClaimClass.NO_REGRESSION_OBSERVED, ClaimClass.NO_REGRESSION_OBSERVED)
+    )
+    first, second = snapshot.evidence.edges
+    bad_second = second.model_copy(update={"index": bad_index})
+    bad = _mutate_evidence(snapshot, edges=(first, bad_second))
+    _assert_reason(bad, FirstBadVerificationReason.EDGE_LAYOUT_MISMATCH)
 
 
 @pytest.mark.parametrize(

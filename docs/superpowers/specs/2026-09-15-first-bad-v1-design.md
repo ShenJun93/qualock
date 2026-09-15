@@ -252,6 +252,8 @@ BoundaryAttributable
 
 Condition status reuses `TRUE`, `FALSE`, and `UNKNOWN`. Structural corruption that prevents safe evaluation remains a verifier error rather than a condition status.
 
+For a structurally verified carried edge whose causal classification is `UNRESOLVED`, `PrefixNoRegression` is `UNKNOWN` with the canonical reason `causal prefix contains an unresolved edge`. This prevents an unresolved edge from being represented as a proven no-regression prefix. A clean truncated prefix containing only verified no-regression edges keeps `PrefixNoRegression=TRUE` and uses `BoundaryAttributable=UNKNOWN`.
+
 `EdgesContiguous=TRUE` means the carried edges form a gap-free catalog prefix. For `FIRST_ATTRIBUTABLE_BAD`, that prefix must end at the attributable boundary. For `NO_ATTRIBUTABLE_BAD_FOUND`, it must cover the full catalog through the declared upper bound. A missing internal edge, duplicate edge index, or skipped catalog release is `EDGE_LAYOUT_MISMATCH`; a cleanly truncated prefix may remain structurally valid but can yield only `UNRESOLVED`.
 
 ## Claim model
