@@ -1,5 +1,6 @@
 """CLI contract for offline first-bad/v1 chain verification."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,11 @@ from qualock.protocols.first_bad.render import (
 from qualock.protocols.paired_change.models import ClaimClass
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
 
 SHA = "0" * 64
 
@@ -144,11 +150,13 @@ def test_render_does_not_leak_raw_json_or_child_event_content() -> None:
 # --- CLI --------------------------------------------------------------------------
 
 
-def test_verify_first_bad_help_exposes_write_flag() -> None:
+def test_verify_first_bad_help_exposes_write_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FORCE_COLOR", "1")
     result = runner.invoke(app, ["evidence", "verify-first-bad", "--help"])
     assert result.exit_code == 0
-    assert "--write-receipt" in result.stdout
-    assert "--protocol" not in result.stdout
+    stdout = _strip_ansi(result.stdout)
+    assert "--write-receipt" in stdout
+    assert "--protocol" not in stdout
 
 
 def test_verify_first_bad_requires_chain_dir() -> None:
