@@ -438,7 +438,7 @@ Assert ordered condition names exactly match the spec. Required outputs:
 - attributable first edge: all ten `TRUE`, boundary index `0`;
 - no-regression prefix then attributable edge: all ten `TRUE`, earliest boundary returned;
 - clean truncated all-no-regression prefix: structural conditions `TRUE`, `PrefixNoRegression=TRUE`, `BoundaryAttributable=UNKNOWN`, claim `UNRESOLVED`;
-- unresolved carried edge: `EveryEdgeVerified=TRUE`, causal boundary condition `UNKNOWN`, claim `UNRESOLVED`.
+- unresolved carried edge: `EveryEdgeVerified=TRUE`, `PrefixNoRegression=UNKNOWN`, causal boundary condition `UNKNOWN`, claim `UNRESOLVED`.
 
 Condition reason text is protocol output and therefore binding for golden vectors. Use exactly:
 
@@ -452,6 +452,7 @@ ConfigFrozen TRUE: config identity is frozen across carried edges
 DesignFrozen TRUE: model and paired-change design are frozen across carried edges
 EveryEdgeVerified TRUE: all carried edges passed structural paired-change verification
 PrefixNoRegression TRUE: all edges before any attributable boundary are verified no-regression
+PrefixNoRegression UNKNOWN: causal prefix contains an unresolved edge
 BoundaryAttributable TRUE: terminal edge is an attributable boundary
 BoundaryAttributable FALSE: complete range contains no attributable boundary
 BoundaryAttributable UNKNOWN: carried prefix does not justify an attributable boundary
