@@ -11,12 +11,22 @@ import qualock.protocols.first_bad.orchestrate as first_bad_orchestrate
 from qualock.agents.support_integrity import agent_support_fingerprint
 from qualock.baseline.io import read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import AgentPin, BaselineLock, ModelPin
-from qualock.commands import CommandError, execute_baseline, execute_check
+from qualock.commands import BaselineUnstableError, CommandError, execute_baseline, execute_check
 from qualock.config.models import AgentConfig, QualockConfig
 from qualock.evidence.export import ExportedEvidenceBundle, export_evidence_bundle
+from qualock.history.loader import scan_results
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
-from qualock.protocols.first_bad.claims import derive_edge_classification
-from qualock.protocols.first_bad.models import EdgeClassification
+from qualock.protocols.first_bad.claims import (
+    derive_chain_claim,
+    derive_edge_classification,
+    derive_edge_summary,
+)
+from qualock.protocols.first_bad.models import (
+    EdgeClassification,
+    FirstBadClaimClass,
+    FirstBadEdgeEvidenceV1,
+    FirstBadReceiptV1,
+)
 from qualock.protocols.first_bad.orchestrate import (
     FirstBadBaselineUnresolved,
     FirstBadExecutionDependencies,
@@ -25,8 +35,10 @@ from qualock.protocols.first_bad.orchestrate import (
     _agent_dependency_state_from_lock,
     _execute_edge,
     _snapshot_project_inputs,
+    execute_first_bad,
     first_bad_preflight,
 )
+from qualock.protocols.first_bad.verify import verify_first_bad
 from qualock.protocols.paired_change.models import (
     AgentDependencyStateV1,
     CanaryClaimV1,
@@ -1040,3 +1052,393 @@ def test_two_edge_chain_continuity_with_real_executors(tmp_path: Path) -> None:
     assert edge1.record.baseline_version == "0.151.0"
     assert edge1.record.candidate_version == "0.152.0"
     assert edge1.summary.classification is EdgeClassification.NO_REGRESSION_OBSERVED
+
+
+# --- Task 8: scan-stop orchestration (scripted _execute_edge) --------------
+
+
+class _ScriptedEdgeExecutor:
+    def __init__(self, script: list) -> None:
+        self.script = script
+        self.calls: list[int] = []
+
+    def __call__(
+        self,
+        preflight: FirstBadPreflight,
+        index: int,
+        workspace: Path,
+        edge_dir: Path,
+        expected_state: AgentDependencyStateV1 | None,
+        deps: FirstBadExecutionDependencies,
+    ) -> VerifiedFirstBadEdge:
+        self.calls.append(index)
+        outcome = self.script[index]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        (edge_dir / "bundle").mkdir(parents=True, exist_ok=True)
+        (edge_dir / "bundle" / "marker.json").write_text("{}", encoding="utf-8")
+        (edge_dir / "protocol").mkdir(parents=True, exist_ok=True)
+        (edge_dir / "protocol" / "marker.json").write_text("{}", encoding="utf-8")
+        return outcome
+
+
+def _fake_edge(
+    index: int,
+    baseline_version: str,
+    candidate_version: str,
+    classification: EdgeClassification,
+) -> VerifiedFirstBadEdge:
+    baseline_state = _state(version=baseline_version)
+    candidate_state = _state(version=candidate_version)
+    record = FirstBadEdgeEvidenceV1(
+        index=index,
+        baseline_version=baseline_version,
+        candidate_version=candidate_version,
+        baseline_runtime_identity=baseline_state,
+        candidate_runtime_identity=candidate_state,
+        bundle_manifest_sha256="b" * 64,
+        protocol_evidence_sha256="c" * 64,
+    )
+    claim = {
+        EdgeClassification.NO_REGRESSION_OBSERVED: ClaimClass.NO_REGRESSION_OBSERVED,
+        EdgeClassification.ATTRIBUTABLE_CHANGESET: ClaimClass.ATTRIBUTABLE_CHANGESET,
+        EdgeClassification.UNRESOLVED: ClaimClass.UNRESOLVED,
+    }[classification]
+    receipt = _fake_receipt((claim,), qualification_id=f"edge-{index}")
+    summary = derive_edge_summary(index, baseline_version, candidate_version, receipt)
+    details = SimpleNamespace(evidence=SimpleNamespace(protocol_design_sha256="d" * 64))
+    return VerifiedFirstBadEdge(record=record, summary=summary, details=details)
+
+
+def _receipt_from_edges(
+    edges: tuple[VerifiedFirstBadEdge, ...], catalog_versions: tuple[str, ...]
+) -> FirstBadReceiptV1:
+    summaries = tuple(edge.summary for edge in edges)
+    claim, boundary_version, boundary_index = derive_chain_claim(catalog_versions, summaries)
+    return FirstBadReceiptV1(
+        schema_version=1,
+        protocol_id="first-bad/v1",
+        chain_sha256="0" * 64,
+        catalog_sha256="0" * 64,
+        conditions=(),
+        edges=summaries,
+        claim=claim,
+        boundary_version=boundary_version,
+        boundary_edge_index=boundary_index,
+    )
+
+
+def _setup_scripted_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    versions: tuple[str, ...],
+    script: list,
+) -> tuple[Path, FakeCatalog, _ScriptedEdgeExecutor]:
+    root = tmp_path / "project"
+    _write_real_project(root, agent="codex", baseline_version=versions[0])
+    catalog = FakeCatalog(versions)
+    executor = _ScriptedEdgeExecutor(script)
+    monkeypatch.setattr(first_bad_orchestrate, "_execute_edge", executor)
+    return root, catalog, executor
+
+
+def test_full_scan_no_regression_runs_every_edge_and_finds_no_attributable_bad(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    versions = ("0.150.0", "0.151.0", "0.152.0", "0.153.0")
+    script = [
+        _fake_edge(i, versions[i], versions[i + 1], EdgeClassification.NO_REGRESSION_OBSERVED)
+        for i in range(3)
+    ]
+    root, catalog, executor = _setup_scripted_scan(tmp_path, monkeypatch, versions, script)
+    monkeypatch.setattr(
+        first_bad_orchestrate,
+        "verify_first_bad",
+        lambda staging: _receipt_from_edges(tuple(script), catalog.versions),
+    )
+
+    outcome = execute_first_bad(root, f"codex@{versions[-1]}", catalog=catalog)
+
+    assert executor.calls == [0, 1, 2]
+    assert catalog.calls == 1
+    assert outcome.receipt.claim is FirstBadClaimClass.NO_ATTRIBUTABLE_BAD_FOUND
+    assert len(outcome.receipt.edges) == 3
+
+
+def test_scan_stops_immediately_after_first_attributable_edge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    versions = ("0.150.0", "0.151.0", "0.152.0", "0.153.0")
+    script = [
+        _fake_edge(0, versions[0], versions[1], EdgeClassification.NO_REGRESSION_OBSERVED),
+        _fake_edge(1, versions[1], versions[2], EdgeClassification.ATTRIBUTABLE_CHANGESET),
+    ]
+    root, catalog, executor = _setup_scripted_scan(tmp_path, monkeypatch, versions, script)
+    monkeypatch.setattr(
+        first_bad_orchestrate,
+        "verify_first_bad",
+        lambda staging: _receipt_from_edges(tuple(script), catalog.versions),
+    )
+
+    outcome = execute_first_bad(root, f"codex@{versions[-1]}", catalog=catalog)
+
+    assert executor.calls == [0, 1]
+    assert outcome.receipt.claim is FirstBadClaimClass.FIRST_ATTRIBUTABLE_BAD
+    assert outcome.receipt.boundary_version == versions[2]
+    assert outcome.receipt.boundary_edge_index == 1
+
+
+def test_scan_includes_and_stops_at_unresolved_edge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    versions = ("0.150.0", "0.151.0", "0.152.0", "0.153.0")
+    script = [
+        _fake_edge(0, versions[0], versions[1], EdgeClassification.NO_REGRESSION_OBSERVED),
+        _fake_edge(1, versions[1], versions[2], EdgeClassification.UNRESOLVED),
+    ]
+    root, catalog, executor = _setup_scripted_scan(tmp_path, monkeypatch, versions, script)
+    monkeypatch.setattr(
+        first_bad_orchestrate,
+        "verify_first_bad",
+        lambda staging: _receipt_from_edges(tuple(script), catalog.versions),
+    )
+
+    outcome = execute_first_bad(root, f"codex@{versions[-1]}", catalog=catalog)
+
+    assert executor.calls == [0, 1]
+    assert outcome.receipt.claim is FirstBadClaimClass.UNRESOLVED
+    assert len(outcome.receipt.edges) == 2
+
+
+def test_later_baseline_unstable_truncates_clean_prefix_to_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    versions = ("0.150.0", "0.151.0", "0.152.0", "0.153.0")
+    script = [
+        _fake_edge(0, versions[0], versions[1], EdgeClassification.NO_REGRESSION_OBSERVED),
+        BaselineUnstableError("critical canary unstable while re-verifying baseline"),
+    ]
+    root, catalog, executor = _setup_scripted_scan(tmp_path, monkeypatch, versions, script)
+    monkeypatch.setattr(
+        first_bad_orchestrate,
+        "verify_first_bad",
+        lambda staging: _receipt_from_edges((script[0],), catalog.versions),
+    )
+
+    outcome = execute_first_bad(root, f"codex@{versions[-1]}", catalog=catalog)
+
+    assert executor.calls == [0, 1]
+    assert outcome.receipt.claim is FirstBadClaimClass.UNRESOLVED
+    assert len(outcome.receipt.edges) == 1
+
+
+def test_later_baseline_unresolved_truncates_clean_prefix_to_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    versions = ("0.150.0", "0.151.0", "0.152.0", "0.153.0")
+    script = [
+        _fake_edge(0, versions[0], versions[1], EdgeClassification.NO_REGRESSION_OBSERVED),
+        FirstBadBaselineUnresolved("re-verified baseline diverges from prior candidate"),
+    ]
+    root, catalog, executor = _setup_scripted_scan(tmp_path, monkeypatch, versions, script)
+    monkeypatch.setattr(
+        first_bad_orchestrate,
+        "verify_first_bad",
+        lambda staging: _receipt_from_edges((script[0],), catalog.versions),
+    )
+
+    outcome = execute_first_bad(root, f"codex@{versions[-1]}", catalog=catalog)
+
+    assert executor.calls == [0, 1]
+    assert outcome.receipt.claim is FirstBadClaimClass.UNRESOLVED
+    assert len(outcome.receipt.edges) == 1
+
+
+def test_unexpected_edge_error_propagates_and_publishes_no_final_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    versions = ("0.150.0", "0.151.0", "0.152.0", "0.153.0")
+    script = [
+        _fake_edge(0, versions[0], versions[1], EdgeClassification.NO_REGRESSION_OBSERVED),
+        CommandError("export backend exploded"),
+    ]
+    root, catalog, executor = _setup_scripted_scan(tmp_path, monkeypatch, versions, script)
+
+    with pytest.raises(CommandError):
+        execute_first_bad(root, f"codex@{versions[-1]}", catalog=catalog)
+
+    assert executor.calls == [0, 1]
+    results_dir = project_dir(root) / "results"
+    published = [p.name for p in results_dir.iterdir() if p.name.startswith("first-bad-")]
+    assert published == []
+
+
+# --- Task 8: real filesystem publication, verification, immutability -------
+
+
+def _versioned_check_executor(resolver: FakeResolver, backend: DeterministicProtocolBackend):
+    def run(workspace: Path, spec: str) -> QualificationResult:
+        return execute_check(
+            workspace, spec, resolver=resolver, backend=backend, qualification_id=f"chk-{spec}"
+        )
+
+    return run
+
+
+def _versioned_baseline_executor(resolver: FakeResolver, backend: DeterministicProtocolBackend):
+    def run(workspace: Path, spec: str) -> BaselineLock:
+        return execute_baseline(
+            workspace, spec, resolver=resolver, backend=backend, qualification_id=f"base-{spec}"
+        )
+
+    return run
+
+
+def _write_real_scan_project(
+    root: Path, *, baseline_version: str
+) -> tuple[FakeResolver, Path]:
+    _write_paired_change_project(root)
+    resolver = FakeResolver(with_support_binary=True)
+    trusted_binary = resolver.resolve(baseline_version)
+    config, canaries = load_project(root)
+    real_lock = BaselineLock(
+        schema_version=1,
+        created_at="2026-09-02T00:00:00+00:00",
+        agent=AgentPin(
+            name="codex",
+            version=baseline_version,
+            binary_sha256=trusted_binary.sha256,
+            support_sha256=agent_support_fingerprint(trusted_binary),
+        ),
+        model=ModelPin(
+            id=config.model.effective_model,
+            snapshot=None,
+            reasoning_effort=config.model.reasoning_effort,
+        ),
+        qualock_version="0.1.1",
+        suite_sha256=suite_fingerprint(canaries),
+        config_sha256=config_fingerprint(config),
+        canaries={},
+    )
+    resolver.calls.clear()
+    baseline_path = project_dir(root) / "baseline.lock"
+    write_baseline_lock(baseline_path, real_lock)
+    return resolver, baseline_path
+
+
+def test_real_full_scan_publishes_self_contained_verifiable_package(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    resolver, baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    before = baseline_path.read_bytes()
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+    catalog = FakeCatalog(("0.150.0", "0.151.0"))
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=_versioned_check_executor(resolver, backend),
+        evidence_exporter=export_evidence_bundle,
+    )
+
+    outcome = execute_first_bad(root, "codex@0.151.0", catalog=catalog, deps=deps)
+
+    assert outcome.receipt.claim is FirstBadClaimClass.NO_ATTRIBUTABLE_BAD_FOUND
+    assert outcome.package_path == project_dir(root) / "results" / outcome.first_bad_id
+    assert sorted(p.name for p in outcome.package_path.iterdir()) == [
+        "chain-evidence.json",
+        "chain-receipt.json",
+        "edges",
+    ]
+    edges = sorted(p.name for p in (outcome.package_path / "edges").iterdir())
+    assert edges == ["000000"]
+    edge_dir = outcome.package_path / "edges" / "000000"
+    assert sorted(p.name for p in edge_dir.iterdir()) == ["bundle", "protocol"]
+
+    for json_path in outcome.package_path.rglob("*.json"):
+        text = json_path.read_text(encoding="utf-8")
+        assert str(tmp_path) not in text
+        assert "qualock-first-bad-edge-" not in text
+        assert ".first-bad-tmp-" not in text
+
+    assert baseline_path.read_bytes() == before
+    assert verify_first_bad(outcome.package_path) == outcome.receipt
+
+
+def test_real_scan_stops_after_attributable_boundary_and_skips_later_edge(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    resolver, _baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+    catalog = FakeCatalog(("0.150.0", "0.151.0", "0.152.0", "0.153.0"))
+    check_calls: list[str] = []
+
+    def counting_check(workspace: Path, spec: str) -> QualificationResult:
+        check_calls.append(spec)
+        return execute_check(
+            workspace, spec, resolver=resolver, backend=backend, qualification_id=f"chk-{spec}"
+        )
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=counting_check,
+        evidence_exporter=export_evidence_bundle,
+    )
+
+    outcome = execute_first_bad(root, "codex@0.153.0", catalog=catalog, deps=deps)
+
+    assert check_calls == ["codex@0.151.0", "codex@0.152.0"]
+    assert outcome.receipt.claim is FirstBadClaimClass.FIRST_ATTRIBUTABLE_BAD
+    assert outcome.receipt.boundary_version == "0.152.0"
+    assert len(outcome.receipt.edges) == 2
+    assert verify_first_bad(outcome.package_path) == outcome.receipt
+
+
+def test_real_publish_collision_preserves_prior_package_and_leaves_staging(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    resolver, _baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+    catalog = FakeCatalog(("0.150.0", "0.151.0"))
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=_versioned_check_executor(resolver, backend),
+        evidence_exporter=export_evidence_bundle,
+    )
+
+    first = execute_first_bad(
+        root, "codex@0.151.0", catalog=catalog, deps=deps, first_bad_id="dup-first-bad"
+    )
+    before_contents = (first.package_path / "chain-evidence.json").read_bytes()
+    results_dir = project_dir(root) / "results"
+    before_tmp_dirs = {p.name for p in results_dir.iterdir() if p.name.startswith(".first-bad-tmp-")}
+
+    catalog2 = FakeCatalog(("0.150.0", "0.151.0"))
+    with pytest.raises(OSError):
+        execute_first_bad(
+            root, "codex@0.151.0", catalog=catalog2, deps=deps, first_bad_id="dup-first-bad"
+        )
+
+    assert (first.package_path / "chain-evidence.json").read_bytes() == before_contents
+    after_tmp_dirs = {p.name for p in results_dir.iterdir() if p.name.startswith(".first-bad-tmp-")}
+    assert after_tmp_dirs - before_tmp_dirs
+
+
+def test_history_scan_ignores_first_bad_result_directories(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    resolver, _baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+    catalog = FakeCatalog(("0.150.0", "0.151.0"))
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=_versioned_check_executor(resolver, backend),
+        evidence_exporter=export_evidence_bundle,
+    )
+
+    execute_first_bad(root, "codex@0.151.0", catalog=catalog, deps=deps)
+    results_dir = project_dir(root) / "results"
+    (results_dir / ".first-bad-tmp-orphan").mkdir()
+
+    summary = scan_results(results_dir)
+
+    assert summary.loaded == ()
+    assert summary.ignored == ()

@@ -1,23 +1,51 @@
-"""First-bad/v1 preflight, isolated project-input snapshotting, and edge execution."""
+"""First-bad/v1 preflight, isolated project-input snapshotting, and full-scan orchestration."""
 
 from __future__ import annotations
 
 import os
 import re
 import shutil
+import tempfile
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from qualock.agents.orchestration import orchestration_capabilities
 from qualock.agents.releases import StableReleaseCatalog, default_stable_release_catalog
 from qualock.baseline.io import assert_suite_fresh, read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import BaselineLock, ModelPin
-from qualock.commands import CommandError, execute_baseline, execute_check, parse_agent_spec
-from qualock.evidence.export import ExportedEvidenceBundle, export_evidence_bundle
+from qualock.commands import (
+    BaselineUnstableError,
+    CommandError,
+    execute_baseline,
+    execute_check,
+    parse_agent_spec,
+)
+from qualock.evidence.bundle_io import canonical_json_file_bytes
+from qualock.evidence.export import (
+    ExportedEvidenceBundle,
+    _rename_noreplace,
+    export_evidence_bundle,
+)
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
 from qualock.protocols.first_bad.claims import derive_edge_summary
-from qualock.protocols.first_bad.models import FirstBadEdgeEvidenceV1, FirstBadEdgeSummaryV1
+from qualock.protocols.first_bad.fingerprint import digest_catalog, digest_chain_evidence
+from qualock.protocols.first_bad.io import (
+    CHAIN_EVIDENCE_FILENAME,
+    EDGE_INDEX_WIDTH,
+    EDGES_DIRNAME,
+    write_first_bad_receipt,
+)
+from qualock.protocols.first_bad.models import (
+    EdgeClassification,
+    FirstBadChainEvidenceV1,
+    FirstBadEdgeEvidenceV1,
+    FirstBadEdgeSummaryV1,
+    FirstBadReceiptV1,
+)
+from qualock.protocols.first_bad.verify import verify_first_bad
 from qualock.protocols.paired_change.models import AgentDependencyStateV1, ModelDeclarationV1
 from qualock.protocols.paired_change.verify import (
     VerifiedPairedChangeV1,
@@ -28,8 +56,10 @@ from qualock.qualification.models import QualificationResult
 __all__ = [
     "FirstBadBaselineUnresolved",
     "FirstBadExecutionDependencies",
+    "FirstBadOrchestrationOutcome",
     "FirstBadPreflight",
     "VerifiedFirstBadEdge",
+    "execute_first_bad",
     "first_bad_preflight",
 ]
 
@@ -256,3 +286,144 @@ def _execute_edge(
     )
 
     return VerifiedFirstBadEdge(record=record, summary=summary, details=details)
+
+
+@dataclass(frozen=True)
+class FirstBadOrchestrationOutcome:
+    first_bad_id: str
+    agent_name: str
+    baseline_version: str
+    upper_version: str
+    package_path: Path
+    receipt: FirstBadReceiptV1
+
+
+OnStart = Callable[[FirstBadPreflight], None]
+OnEdge = Callable[[VerifiedFirstBadEdge], None]
+
+
+def _first_bad_id() -> str:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"first-bad-{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _edge_dirname(index: int) -> str:
+    return f"{index:0{EDGE_INDEX_WIDTH}d}"
+
+
+def _create_new_file(path: Path, payload: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(payload)
+
+
+def _run_edges(
+    preflight: FirstBadPreflight,
+    root: Path,
+    edges_dir: Path,
+    deps: FirstBadExecutionDependencies,
+    on_edge: OnEdge | None,
+) -> tuple[VerifiedFirstBadEdge, ...]:
+    verified_edges: list[VerifiedFirstBadEdge] = []
+    expected_state: AgentDependencyStateV1 | None = None
+
+    for index in range(len(preflight.catalog) - 1):
+        with tempfile.TemporaryDirectory(prefix="qualock-first-bad-edge-") as tmp:
+            tmp_path = Path(tmp)
+            workspace = tmp_path / "workspace"
+            edge_scratch = tmp_path / "edge"
+            _snapshot_project_inputs(root, workspace)
+            try:
+                edge = _execute_edge(preflight, index, workspace, edge_scratch, expected_state, deps)
+            except (BaselineUnstableError, FirstBadBaselineUnresolved):
+                return tuple(verified_edges)
+            shutil.copytree(edge_scratch, edges_dir / _edge_dirname(index))
+
+        verified_edges.append(edge)
+        if on_edge is not None:
+            on_edge(edge)
+        if edge.summary.classification is not EdgeClassification.NO_REGRESSION_OBSERVED:
+            break
+        expected_state = edge.record.candidate_runtime_identity
+
+    return tuple(verified_edges)
+
+
+def _build_chain_evidence(
+    preflight: FirstBadPreflight, verified_edges: tuple[VerifiedFirstBadEdge, ...]
+) -> FirstBadChainEvidenceV1:
+    first_edge = verified_edges[0]
+    protocol_design_sha256 = first_edge.details.evidence.protocol_design_sha256
+    for edge in verified_edges[1:]:
+        if edge.details.evidence.protocol_design_sha256 != protocol_design_sha256:
+            raise CommandError("protocol design drifted across verified edges")
+
+    temp = FirstBadChainEvidenceV1(
+        schema_version=1,
+        protocol_id="first-bad/v1",
+        agent_name=preflight.agent_name,
+        baseline_version=preflight.catalog[0],
+        baseline_runtime_identity=first_edge.record.baseline_runtime_identity,
+        upper_version=preflight.upper_version,
+        catalog_versions=preflight.catalog,
+        catalog_sha256=digest_catalog(preflight.catalog),
+        suite_sha256=preflight.suite_sha256,
+        config_sha256=preflight.config_sha256,
+        model_pin=ModelDeclarationV1(
+            id=preflight.model_pin.id,
+            snapshot=preflight.model_pin.snapshot,
+            reasoning_effort=preflight.model_pin.reasoning_effort,
+        ),
+        protocol_design_sha256=protocol_design_sha256,
+        edges=tuple(edge.record for edge in verified_edges),
+        chain_sha256="0" * 64,
+    )
+    return temp.model_copy(update={"chain_sha256": digest_chain_evidence(temp)})
+
+
+def execute_first_bad(
+    root: Path,
+    upper_spec: str,
+    *,
+    catalog: StableReleaseCatalog | None = None,
+    deps: FirstBadExecutionDependencies | None = None,
+    first_bad_id: str | None = None,
+    on_start: OnStart | None = None,
+    on_edge: OnEdge | None = None,
+) -> FirstBadOrchestrationOutcome:
+    preflight = first_bad_preflight(root, upper_spec, catalog=catalog)
+    if on_start is not None:
+        on_start(preflight)
+    deps = deps or FirstBadExecutionDependencies()
+
+    results_dir = project_dir(root) / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    staging_root = results_dir / f".first-bad-tmp-{uuid.uuid4().hex}"
+    staging_root.mkdir()
+    edges_dir = staging_root / EDGES_DIRNAME
+    edges_dir.mkdir()
+
+    verified_edges = _run_edges(preflight, root, edges_dir, deps, on_edge)
+    evidence = _build_chain_evidence(preflight, verified_edges)
+
+    _create_new_file(
+        staging_root / CHAIN_EVIDENCE_FILENAME,
+        canonical_json_file_bytes(evidence.model_dump(mode="json")),
+    )
+
+    receipt = verify_first_bad(staging_root)
+    write_first_bad_receipt(staging_root, receipt)
+    receipt = verify_first_bad(staging_root)
+
+    resolved_id = first_bad_id or _first_bad_id()
+    final_path = results_dir / resolved_id
+    _rename_noreplace(staging_root, final_path)
+
+    return FirstBadOrchestrationOutcome(
+        first_bad_id=resolved_id,
+        agent_name=preflight.agent_name,
+        baseline_version=preflight.catalog[0],
+        upper_version=preflight.upper_version,
+        package_path=final_path,
+        receipt=receipt,
+    )
