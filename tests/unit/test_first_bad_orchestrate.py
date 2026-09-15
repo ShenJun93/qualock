@@ -1533,3 +1533,104 @@ def test_history_scan_ignores_first_bad_result_directories(tmp_path: Path) -> No
 
     assert summary.loaded == ()
     assert summary.ignored == ()
+
+
+def test_real_callbacks_run_only_after_staging_and_verified_edge(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    resolver, _baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+    catalog = FakeCatalog(("0.150.0", "0.151.0"))
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=_versioned_check_executor(resolver, backend),
+        evidence_exporter=export_evidence_bundle,
+    )
+    callback_order: list[str] = []
+    staging: Path | None = None
+
+    def on_start(preflight: FirstBadPreflight, staging_path: Path) -> None:
+        nonlocal staging
+        staging = staging_path
+        callback_order.append("start")
+        assert preflight.catalog == ("0.150.0", "0.151.0")
+        assert staging_path.is_dir()
+        assert (staging_path / "edges").is_dir()
+        assert list((staging_path / "edges").iterdir()) == []
+
+    def on_edge(summary) -> None:
+        callback_order.append("edge")
+        assert staging is not None
+        edge_dir = staging / "edges" / f"{summary.index:06d}"
+        assert sorted(path.name for path in edge_dir.iterdir()) == ["bundle", "protocol"]
+        details = first_bad_orchestrate.verify_paired_change_details(
+            edge_dir / "bundle", edge_dir / "protocol"
+        )
+        recomputed = derive_edge_summary(
+            summary.index,
+            summary.baseline_version,
+            summary.candidate_version,
+            details.receipt,
+        )
+        assert recomputed == summary
+
+    outcome = execute_first_bad(
+        root,
+        "codex@0.151.0",
+        catalog=catalog,
+        deps=deps,
+        on_start=on_start,
+        on_edge=on_edge,
+    )
+
+    assert callback_order == ["start", "edge"]
+    assert outcome.receipt.claim is FirstBadClaimClass.NO_ATTRIBUTABLE_BAD_FOUND
+
+
+@pytest.mark.parametrize("failure_point", ["start", "edge"])
+def test_real_callback_failure_propagates_without_publication(
+    tmp_path: Path, failure_point: str
+) -> None:
+    root = tmp_path / "project"
+    resolver, _baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+    catalog = FakeCatalog(("0.150.0", "0.151.0"))
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=_versioned_check_executor(resolver, backend),
+        evidence_exporter=export_evidence_bundle,
+    )
+    staging: Path | None = None
+
+    def on_start(_preflight: FirstBadPreflight, staging_path: Path) -> None:
+        nonlocal staging
+        staging = staging_path
+        if failure_point == "start":
+            raise RuntimeError("callback failed")
+
+    def on_edge(summary) -> None:
+        assert staging is not None
+        edge_dir = staging / "edges" / f"{summary.index:06d}"
+        assert (edge_dir / "bundle").is_dir()
+        assert (edge_dir / "protocol").is_dir()
+        raise RuntimeError("callback failed")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        execute_first_bad(
+            root,
+            "codex@0.151.0",
+            catalog=catalog,
+            deps=deps,
+            on_start=on_start,
+            on_edge=on_edge,
+        )
+
+    results_dir = project_dir(root) / "results"
+    assert staging is not None and staging.is_dir()
+    assert [path for path in results_dir.iterdir() if path.name.startswith("first-bad-")] == []
+    if failure_point == "start":
+        assert list((staging / "edges").iterdir()) == []
+    else:
+        assert sorted(path.name for path in (staging / "edges" / "000000").iterdir()) == [
+            "bundle",
+            "protocol",
+        ]
