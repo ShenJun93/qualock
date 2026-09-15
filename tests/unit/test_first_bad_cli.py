@@ -109,8 +109,8 @@ def test_render_no_bad_receipt_core_text() -> None:
         "0.150.0 -> 0.151.0  NO REGRESSION\n"
         "0.151.0 -> 0.152.0  NO REGRESSION\n"
         "NO ATTRIBUTABLE BAD FOUND\n"
+        "Within this exact frozen release-catalog snapshot.\n"
     )
-
 
 def test_render_first_attributable_bad_core_text() -> None:
     text = render_first_bad_receipt(_first_bad_receipt())
@@ -120,8 +120,8 @@ def test_render_first_attributable_bad_core_text() -> None:
         "0.150.0 -> 0.151.0  NO REGRESSION\n"
         "0.151.0 -> 0.152.0  ATTRIBUTABLE CHANGE\n"
         "FIRST ATTRIBUTABLE BAD: 0.152.0\n"
+        "Within this exact frozen release-catalog snapshot.\n"
     )
-
 
 def test_render_unresolved_core_text() -> None:
     text = render_first_bad_receipt(_unresolved_receipt())
@@ -186,6 +186,7 @@ def test_verify_first_bad_first_attributable_bad_exits_two(
     result = runner.invoke(app, ["evidence", "verify-first-bad", str(tmp_path / "chain")])
     assert result.exit_code == 2
     assert "FIRST ATTRIBUTABLE BAD: 0.152.0" in result.stdout
+    assert "Within this exact frozen release-catalog snapshot." in result.stdout
 
 
 def test_verify_first_bad_unresolved_exits_four(
@@ -296,12 +297,14 @@ def test_render_first_bad_edge_line_attributable_change() -> None:
 
 def test_render_first_bad_terminal_first_attributable_bad() -> None:
     text = render_first_bad_terminal(_first_bad_receipt())
-    assert text == "FIRST ATTRIBUTABLE BAD: 0.152.0\n"
-
+    assert text == (
+        "FIRST ATTRIBUTABLE BAD: 0.152.0\n"
+        "Within this exact frozen release-catalog snapshot.\n"
+    )
 
 def test_render_first_bad_terminal_no_bad_found_does_not_overclaim() -> None:
     text = render_first_bad_terminal(_no_bad_receipt())
-    assert text == "No attributable bad found\n"
+    assert text == "No attributable bad found within this exact frozen release-catalog snapshot.\n"
 
 
 def test_render_first_bad_terminal_unresolved_scoped_to_frozen_range() -> None:
@@ -369,7 +372,7 @@ def test_first_bad_cli_no_bad_prints_progress_and_package_path_and_exits_zero(
     assert "Codex baseline 0.150.0 -> upper 0.152.0" in result.stdout
     assert "0.150.0 -> 0.151.0  NO REGRESSION" in result.stdout
     assert "0.151.0 -> 0.152.0  NO REGRESSION" in result.stdout
-    assert "No attributable bad found" in result.stdout
+    assert "No attributable bad found within this exact frozen release-catalog snapshot." in result.stdout
     assert str(outcome.package_path) in result.stdout
     assert result.exit_code == 0
 
@@ -384,6 +387,7 @@ def test_first_bad_cli_first_attributable_bad_exits_two(
     result = _invoke_first_bad(tmp_path, monkeypatch, outcome, receipt.edges, "codex@0.152.0")
 
     assert "FIRST ATTRIBUTABLE BAD: 0.152.0" in result.stdout
+    assert "Within this exact frozen release-catalog snapshot." in result.stdout
     assert str(outcome.package_path) in result.stdout
     assert result.exit_code == 2
 

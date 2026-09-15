@@ -20,7 +20,7 @@ _CLAIM_LABELS = {
     FirstBadClaimClass.UNRESOLVED: "UNRESOLVED",
 }
 
-
+_FROZEN_SCOPE_LINE = "Within this exact frozen release-catalog snapshot."
 _TERMINAL_UNRESOLVED_COPY = "No first-attributable-bad claim can be made beyond this edge.\n"
 
 
@@ -41,11 +41,13 @@ def render_first_bad_edge_line(summary: FirstBadEdgeSummaryV1) -> str:
 
 def render_first_bad_terminal(receipt: FirstBadReceiptV1) -> str:
     if receipt.claim is FirstBadClaimClass.FIRST_ATTRIBUTABLE_BAD:
-        return f"FIRST ATTRIBUTABLE BAD: {receipt.boundary_version}\n"
+        return (
+            f"FIRST ATTRIBUTABLE BAD: {receipt.boundary_version}\n"
+            f"{_FROZEN_SCOPE_LINE}\n"
+        )
     if receipt.claim is FirstBadClaimClass.NO_ATTRIBUTABLE_BAD_FOUND:
-        return "No attributable bad found\n"
+        return "No attributable bad found within this exact frozen release-catalog snapshot.\n"
     return _TERMINAL_UNRESOLVED_COPY
-
 
 def render_first_bad_receipt(receipt: FirstBadReceiptV1) -> str:
     lines = ["QuaLock First-Bad Verification"]
@@ -60,6 +62,9 @@ def render_first_bad_receipt(receipt: FirstBadReceiptV1) -> str:
         )
     if receipt.claim is FirstBadClaimClass.FIRST_ATTRIBUTABLE_BAD:
         lines.append(f"FIRST ATTRIBUTABLE BAD: {receipt.boundary_version}")
+        lines.append(_FROZEN_SCOPE_LINE)
     else:
         lines.append(_CLAIM_LABELS[receipt.claim])
+        if receipt.claim is FirstBadClaimClass.NO_ATTRIBUTABLE_BAD_FOUND:
+            lines.append(_FROZEN_SCOPE_LINE)
     return "\n".join(lines) + "\n"
