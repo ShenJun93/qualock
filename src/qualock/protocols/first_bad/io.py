@@ -713,6 +713,11 @@ def _preflight_chain_payload(value: object) -> None:
         raise FirstBadVerificationError(
             FirstBadVerificationReason.UNSUPPORTED_CHAIN_PROTOCOL, "protocol"
         )
+    catalog_versions = value.get("catalog_versions")
+    if isinstance(catalog_versions, list) and len(catalog_versions) > MAX_CATALOG_VERSIONS:
+        raise FirstBadVerificationError(
+            FirstBadVerificationReason.CATALOG_BINDING_MISMATCH, "catalog_versions"
+        )
 
 
 def _read_edge_package(tree: _PinnedTree, edges_fd: int, index: int) -> EdgePackageSnapshot:
