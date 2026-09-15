@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
+import stat
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,7 +55,7 @@ from qualock.protocols.paired_change.models import (
 from qualock.protocols.paired_change.verify import VerifiedPairedChangeV1
 from qualock.qualification.models import QualificationResult, Verdict
 from tests.integration.test_paired_change_e2e import DeterministicProtocolBackend
-from tests.unit.test_evidence_export import FakeResolver, _setup_project
+from tests.unit.test_evidence_export import FakeBackend, FakeResolver, _setup_project
 
 
 class FakeCatalog:
@@ -1392,6 +1395,94 @@ def test_real_scan_stops_after_attributable_boundary_and_skips_later_edge(
     assert verify_first_bad(outcome.package_path) == outcome.receipt
 
 
+class _LaterBaselineUnstableBackend(DeterministicProtocolBackend):
+    def __init__(self, *, success_versions: set[str], unstable_baselines: set[str]) -> None:
+        super().__init__(success_versions=success_versions)
+        self.unstable_baselines = unstable_baselines
+
+    def run_attempt(self, **kwargs: object):
+        result = FakeBackend.run_attempt(self, **kwargs)
+        binary = kwargs["binary"]
+        side = kwargs["side"]
+        if side.value == "baseline" and binary.version in self.unstable_baselines:
+            return replace(result, success=False)
+        return result
+
+
+def test_real_later_baseline_instability_publishes_verifiable_truncated_unresolved(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    resolver, baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    before = baseline_path.read_bytes()
+    backend = _LaterBaselineUnstableBackend(
+        success_versions={"0.150.0", "0.151.0", "0.152.0"},
+        unstable_baselines={"0.151.0"},
+    )
+    catalog = FakeCatalog(("0.150.0", "0.151.0", "0.152.0"))
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=_versioned_check_executor(resolver, backend),
+        evidence_exporter=export_evidence_bundle,
+    )
+
+    outcome = execute_first_bad(root, "codex@0.152.0", catalog=catalog, deps=deps)
+
+    assert outcome.receipt.claim is FirstBadClaimClass.UNRESOLVED
+    assert len(outcome.receipt.edges) == 1
+    assert outcome.receipt.edges[0].classification is EdgeClassification.NO_REGRESSION_OBSERVED
+    assert verify_first_bad(outcome.package_path) == outcome.receipt
+    assert baseline_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../escaped-first-bad", "nested/first-bad", "/tmp/absolute-first-bad"],
+)
+def test_first_bad_id_cannot_escape_results_directory(
+    tmp_path: Path, bad_id: str
+) -> None:
+    root = tmp_path / "project"
+    resolver, _baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+    catalog = FakeCatalog(("0.150.0", "0.151.0"))
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=_versioned_check_executor(resolver, backend),
+        evidence_exporter=export_evidence_bundle,
+    )
+
+    with pytest.raises(CommandError, match="invalid first-bad id"):
+        execute_first_bad(
+            root,
+            "codex@0.151.0",
+            catalog=catalog,
+            deps=deps,
+            first_bad_id=bad_id,
+        )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_first_bad_staging_is_private_even_with_permissive_umask(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    resolver, _baseline_path = _write_real_scan_project(root, baseline_version="0.150.0")
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+    catalog = FakeCatalog(("0.150.0", "0.151.0"))
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_versioned_baseline_executor(resolver, backend),
+        check_executor=_versioned_check_executor(resolver, backend),
+        evidence_exporter=export_evidence_bundle,
+    )
+    prior_umask = os.umask(0o022)
+    try:
+        outcome = execute_first_bad(root, "codex@0.151.0", catalog=catalog, deps=deps)
+    finally:
+        os.umask(prior_umask)
+
+    assert stat.S_IMODE(outcome.package_path.stat().st_mode) == 0o700
+    assert stat.S_IMODE((outcome.package_path / "edges").stat().st_mode) == 0o700
+
+
 def test_real_publish_collision_preserves_prior_package_and_leaves_staging(
     tmp_path: Path,
 ) -> None:
@@ -1406,7 +1497,7 @@ def test_real_publish_collision_preserves_prior_package_and_leaves_staging(
     )
 
     first = execute_first_bad(
-        root, "codex@0.151.0", catalog=catalog, deps=deps, first_bad_id="dup-first-bad"
+        root, "codex@0.151.0", catalog=catalog, deps=deps, first_bad_id="first-bad-20260915T000000Z-deadbeef"
     )
     before_contents = (first.package_path / "chain-evidence.json").read_bytes()
     results_dir = project_dir(root) / "results"
@@ -1415,7 +1506,7 @@ def test_real_publish_collision_preserves_prior_package_and_leaves_staging(
     catalog2 = FakeCatalog(("0.150.0", "0.151.0"))
     with pytest.raises(OSError):
         execute_first_bad(
-            root, "codex@0.151.0", catalog=catalog2, deps=deps, first_bad_id="dup-first-bad"
+            root, "codex@0.151.0", catalog=catalog2, deps=deps, first_bad_id="first-bad-20260915T000000Z-deadbeef"
         )
 
     assert (first.package_path / "chain-evidence.json").read_bytes() == before_contents
