@@ -336,6 +336,23 @@ def test_read_first_bad_package_rejects_wrong_protocol_id(tmp_path: Path) -> Non
     assert exc_info.value.reason is FirstBadVerificationReason.UNSUPPORTED_CHAIN_PROTOCOL
 
 
+def test_read_first_bad_package_rejects_oversized_catalog_versions(tmp_path: Path) -> None:
+    # A raw catalog_versions list beyond MAX_CATALOG_VERSIONS must fail the
+    # dedicated security-bound check with CATALOG_BINDING_MISMATCH before
+    # Pydantic ever sees the payload, not the model's own generic
+    # MALFORMED_CHAIN_EVIDENCE max_length rejection.
+    from qualock.protocols.first_bad.io import MAX_CATALOG_VERSIONS
+
+    chain_path, evidence = _build_chain(tmp_path, edge_count=1)
+    raw = evidence.model_dump(mode="json")
+    raw["catalog_versions"] = [f"1.{i}.0" for i in range(MAX_CATALOG_VERSIONS + 1)]
+    (chain_path / CHAIN_EVIDENCE_FILENAME).write_bytes(canonical_json_file_bytes(raw))
+
+    with pytest.raises(FirstBadVerificationError) as exc_info:
+        read_first_bad_package(chain_path)
+    assert exc_info.value.reason is FirstBadVerificationReason.CATALOG_BINDING_MISMATCH
+
+
 def test_read_first_bad_package_rejects_wrong_shape_valid_schema(tmp_path: Path) -> None:
     # Correct schema/protocol markers but otherwise malformed shape must still
     # fail closed as a malformed-evidence error, not crash the preflight.
@@ -857,6 +874,96 @@ def test_windows_pinned_root_blocks_ancestor_rename(tmp_path: Path) -> None:
             )
             == b"original"
         )
+
+
+@_NATIVE_WINDOWS_ONLY
+def test_windows_pinned_tree_rejects_directory_junction(tmp_path: Path) -> None:
+    # Real NTFS directory junction (mklink /J), not a monkeypatched Win32
+    # call: the pinned-tree open of a nested edge directory must refuse a
+    # reparse point exactly like it refuses a symlink on POSIX.
+    import subprocess
+
+    chain_path, _evidence = _build_chain(tmp_path, edge_count=1)
+    edge_dirname = _edge_dirname(0)
+    edge_path = chain_path / EDGES_DIRNAME / edge_dirname
+    decoy_target = tmp_path / "decoy-edge-target"
+    decoy_target.mkdir()
+    _write_edge_files(decoy_target, 0, marker="attacker")
+
+    import shutil
+
+    shutil.rmtree(edge_path)
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(edge_path), str(decoy_target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip(
+            "directory junction creation unavailable in this environment: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+
+    with pytest.raises(FirstBadVerificationError) as exc_info:
+        read_first_bad_package(chain_path)
+    assert exc_info.value.reason is FirstBadVerificationReason.EDGE_LAYOUT_MISMATCH
+
+
+@_NATIVE_WINDOWS_ONLY
+def test_windows_nested_edge_directory_replacement_blocked_while_pinned(
+    tmp_path: Path,
+) -> None:
+    # Real OS sharing semantics, not a monkeypatched call: while the chain
+    # root, edges/, and the numeric edge directory each have a pinned handle
+    # open (FILE_SHARE_READ only, no FILE_SHARE_DELETE), Windows must refuse
+    # to rename the pinned edge directory out from under the transaction,
+    # and the pinned handle must keep resolving to the original content.
+    from qualock.protocols.first_bad import io as io_module
+
+    chain_path, _evidence = _build_chain(tmp_path, edge_count=1)
+    edge_dirname = _edge_dirname(0)
+    edge_field = f"{EDGES_DIRNAME}/{edge_dirname}"
+    edge_path = chain_path / EDGES_DIRNAME / edge_dirname
+
+    tree = io_module._PinnedTree()
+    with tree:
+        root_fd = tree.open_root(
+            chain_path,
+            reason=FirstBadVerificationReason.EDGE_LAYOUT_MISMATCH,
+            field="chain root",
+        )
+        edges_fd = tree.open_dir(
+            root_fd,
+            EDGES_DIRNAME,
+            reason=FirstBadVerificationReason.EDGE_LAYOUT_MISMATCH,
+            field=EDGES_DIRNAME,
+        )
+        edge_fd = tree.open_dir(
+            edges_fd,
+            edge_dirname,
+            reason=FirstBadVerificationReason.EDGE_LAYOUT_MISMATCH,
+            field=edge_field,
+        )
+
+        moved = tmp_path / "moved-edge"
+        with pytest.raises(PermissionError):
+            edge_path.rename(moved)
+
+        bundle_fd = tree.open_dir(
+            edge_fd,
+            "bundle",
+            reason=FirstBadVerificationReason.EDGE_LAYOUT_MISMATCH,
+            field=f"{edge_field}/bundle",
+        )
+        data = tree.read_file(
+            bundle_fd,
+            "manifest.json",
+            max_bytes=4096,
+            reason=FirstBadVerificationReason.EDGE_LAYOUT_MISMATCH,
+            field=f"{edge_field}/bundle/manifest.json",
+        )
+        assert data == _manifest_bytes(0)
 
 
 @_NATIVE_WINDOWS_ONLY
