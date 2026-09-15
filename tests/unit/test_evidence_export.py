@@ -1,7 +1,9 @@
+import errno
 import hashlib
 import json
 import socket
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,11 +12,13 @@ import pytest
 import yaml
 
 import qualock
+import qualock.evidence.export as export_module
 from qualock.agents.base import AgentBinary, AgentSupportBinary, AgentSupportTree
 from qualock.canary.models import CanarySpec
 from qualock.commands import execute_baseline, execute_check
 from qualock.config.io import write_default_config
 from qualock.evidence.bundle_models import (
+    BUNDLE_FILENAMES,
     CANARIES_FILENAME,
     MANIFEST_FILENAME,
     PRICING_FILENAME,
@@ -28,6 +32,7 @@ from qualock.evidence.export import ExportedEvidenceBundle, export_evidence_bund
 from qualock.evidence.fingerprint import sha256_canonical
 from qualock.evidence.verify import verify_evidence_bundle
 from qualock.pricing.sidecar import write_pricing_sidecar
+from qualock.protocols.paired_change.models import ProtocolEvidenceV1
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.models import PreparedTarget
 from qualock.run.schedule import Side
@@ -238,6 +243,7 @@ def test_export_evidence_bundle_happy_path(tmp_path: Path) -> None:
     assert bundle.path == dest
     assert bundle.qualification_id == "check-happy"
     assert len(bundle.manifest_sha256) == 64
+    assert bundle.protocol_path == dest.with_name(dest.name + ".paired-change-v1")
     assert dest.is_dir()
 
     manifest_bytes = (dest / MANIFEST_FILENAME).read_bytes()
@@ -255,6 +261,345 @@ def test_export_evidence_bundle_happy_path(tmp_path: Path) -> None:
 
     verified = verify_evidence_bundle(dest)
     assert verified.manifest.qualification_id == "check-happy"
+
+
+def test_legacy_export_creates_no_protocol_companion(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-legacy"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    sidecar = (
+        project_root
+        / ".qualock"
+        / "results"
+        / qualification_id
+        / "paired-change-run-v1.json"
+    )
+    sidecar.unlink()
+    dest = tmp_path / "legacy-bundle"
+
+    exported = export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exported.path == dest
+    assert exported.protocol_path is None
+    assert not dest.with_name(dest.name + ".paired-change-v1").exists()
+
+
+def test_paired_change_export_preserves_bundle_inventory_and_writes_companion(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-protocol"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "protocol-bundle"
+
+    exported = export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert {path.name for path in dest.iterdir()} <= BUNDLE_FILENAMES
+    assert {path.name for path in dest.iterdir()} == set(BUNDLE_FILENAMES)
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    assert exported.protocol_path == companion
+    assert [path.name for path in companion.iterdir()] == ["protocol-evidence.json"]
+    protocol = ProtocolEvidenceV1.model_validate_json(
+        (companion / "protocol-evidence.json").read_bytes()
+    )
+    assert protocol.evidence_manifest_sha256 == exported.manifest_sha256
+    assert verify_evidence_bundle(dest).manifest_sha256 == exported.manifest_sha256
+
+
+def test_export_rejects_preexisting_protocol_companion_without_publishing_bundle(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-existing-companion"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    companion.mkdir()
+    marker = companion / "owned-by-user"
+    marker.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert not dest.exists()
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_protocol_companion_publish_failure_rolls_back_new_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-companion-failure"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    real_rename_noreplace = export_module._rename_noreplace
+
+    def fail_companion_publish(source: Path, target: Path) -> None:
+        if Path(target) == companion:
+            raise OSError("simulated companion publication failure")
+        real_rename_noreplace(source, target)
+
+    monkeypatch.setattr(export_module, "_rename_noreplace", fail_companion_publish)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert not dest.exists()
+    assert not companion.exists()
+
+
+def test_bundle_publish_failure_does_not_delete_replaced_staging_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-bundle-staging-cleanup-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    displaced = tmp_path / "displaced-bundle-staging"
+    marker: Path | None = None
+
+    def fail_after_replacing_staging(source: Path, target: Path) -> None:
+        nonlocal marker
+        assert target == dest
+        source.rename(displaced)
+        source.mkdir()
+        marker = source / "owned-by-other-process"
+        marker.write_text("keep", encoding="utf-8")
+        raise OSError("simulated bundle publication failure")
+
+    monkeypatch.setattr(export_module, "_rename_noreplace", fail_after_replacing_staging)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert marker is not None
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_companion_publish_failure_does_not_delete_replaced_staging_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-companion-staging-cleanup-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    displaced = tmp_path / "displaced-companion-staging"
+    real_rename_noreplace = export_module._rename_noreplace
+    marker: Path | None = None
+
+    def fail_after_replacing_staging(source: Path, target: Path) -> None:
+        nonlocal marker
+        if target != companion:
+            real_rename_noreplace(source, target)
+            return
+        source.rename(displaced)
+        source.mkdir()
+        marker = source / "owned-by-other-process"
+        marker.write_text("keep", encoding="utf-8")
+        raise OSError("simulated companion publication failure")
+
+    monkeypatch.setattr(export_module, "_rename_noreplace", fail_after_replacing_staging)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert marker is not None
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_rename_noreplace_uses_windows_rename_without_libc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    rename_calls: list[tuple[Path, Path]] = []
+
+    def windows_rename(source_path: Path, destination_path: Path) -> None:
+        rename_calls.append((source_path, destination_path))
+        raise FileExistsError(errno.EEXIST, "destination exists", destination_path)
+
+    def forbid_libc(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("libc renameat2 must not be used on Windows")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(export_module.os, "rename", windows_rename)
+    monkeypatch.setattr(export_module.ctypes, "CDLL", forbid_libc)
+
+    with pytest.raises(FileExistsError):
+        export_module._rename_noreplace(source, destination)
+
+    assert rename_calls == [(source, destination)]
+
+
+def test_rename_noreplace_fails_closed_on_unsupported_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    with pytest.raises(OSError) as exc_info:
+        export_module._rename_noreplace(tmp_path / "source", tmp_path / "destination")
+
+    assert exc_info.value.errno == errno.ENOSYS
+
+
+def test_bundle_publication_does_not_replace_concurrently_created_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-bundle-publication-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    real_mkdtemp = export_module.tempfile.mkdtemp
+    competing_inode: int | None = None
+
+    def create_competing_destination(*args: object, **kwargs: object) -> str:
+        nonlocal competing_inode
+        temporary = real_mkdtemp(*args, **kwargs)
+        if kwargs.get("prefix") == ".export-tmp-":
+            dest.mkdir()
+            competing_inode = dest.stat().st_ino
+        return temporary
+
+    monkeypatch.setattr(export_module.tempfile, "mkdtemp", create_competing_destination)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert dest.is_dir()
+    assert dest.stat().st_ino == competing_inode
+    assert list(dest.iterdir()) == []
+
+
+def test_companion_publication_does_not_replace_concurrently_created_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-companion-publication-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    real_mkdtemp = export_module.tempfile.mkdtemp
+    competing_inode: int | None = None
+
+    def create_competing_companion(*args: object, **kwargs: object) -> str:
+        nonlocal competing_inode
+        temporary = real_mkdtemp(*args, **kwargs)
+        if kwargs.get("prefix") == ".paired-change-tmp-":
+            companion.mkdir()
+            competing_inode = companion.stat().st_ino
+        return temporary
+
+    monkeypatch.setattr(export_module.tempfile, "mkdtemp", create_competing_companion)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert not dest.exists()
+    assert companion.is_dir()
+    assert companion.stat().st_ino == competing_inode
+    assert list(companion.iterdir()) == []
+
+
+def test_bundle_rollback_does_not_delete_a_replacement_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-bundle-rollback-race"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+    companion = dest.with_name(dest.name + ".paired-change-v1")
+    real_mkdtemp = export_module.tempfile.mkdtemp
+    real_rollback = export_module._rollback_published_directory
+    displaced_bundle = tmp_path / "displaced-bundle"
+    marker = dest / "owned-by-other-process"
+    replacement_created = False
+
+    def block_companion_publication(*args: object, **kwargs: object) -> str:
+        temporary = real_mkdtemp(*args, **kwargs)
+        if kwargs.get("prefix") == ".paired-change-tmp-":
+            companion.mkdir()
+            (companion / "owned-by-other-process").write_text("keep", encoding="utf-8")
+        return temporary
+
+    def replace_bundle_before_rollback(
+        published_path: Path,
+        staging_path: Path,
+        published_identity: tuple[int, int],
+    ) -> None:
+        nonlocal replacement_created
+        if not replacement_created:
+            dest.rename(displaced_bundle)
+            dest.mkdir()
+            marker.write_text("keep", encoding="utf-8")
+            replacement_created = True
+        real_rollback(published_path, staging_path, published_identity)
+
+    monkeypatch.setattr(export_module.tempfile, "mkdtemp", block_companion_publication)
+    monkeypatch.setattr(
+        export_module, "_rollback_published_directory", replace_bundle_before_rollback
+    )
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert replacement_created
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_bundle_rollback_does_not_delete_replacement_after_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published = tmp_path / "bundle"
+    published.mkdir()
+    (published / "ours").write_text("ours", encoding="utf-8")
+    staging = tmp_path / ".export-tmp-owned"
+    published_identity = export_module._directory_identity(published)
+    real_identity = export_module._directory_identity
+    displaced = tmp_path / "displaced-owned-bundle"
+    marker = staging / "owned-by-other-process"
+
+    def replace_after_identity_check(path: Path) -> tuple[int, int]:
+        identity = real_identity(path)
+        if path == staging:
+            staging.rename(displaced)
+            staging.mkdir()
+            marker.write_text("keep", encoding="utf-8")
+        return identity
+
+    monkeypatch.setattr(export_module, "_directory_identity", replace_after_identity_check)
+
+    export_module._rollback_published_directory(published, staging, published_identity)
+
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_export_fails_closed_when_atomic_noreplace_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    qualification_id = "check-no-atomic-publication"
+    _create_synthetic_qualification(project_root, qualification_id=qualification_id)
+    dest = tmp_path / "bundle"
+
+    def unavailable(_source: Path, _destination: Path) -> None:
+        raise OSError(errno.ENOSYS, "atomic no-replace rename is unavailable")
+
+    monkeypatch.setattr(export_module, "_rename_noreplace", unavailable)
+
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, qualification_id, dest)
+
+    assert exc_info.value.reason is EvidenceBundleReason.UNSAFE_PATH
+    assert not dest.exists()
 
 
 def test_export_evidence_bundle_allows_equal_run_and_exporter_version(
@@ -694,7 +1039,7 @@ def test_export_evidence_bundle_without_created_at_captures_utc_timestamp(
     assert ts.tzinfo is not None
 
 
-def test_export_evidence_bundle_cleanup_on_verification_failure(
+def test_export_evidence_bundle_leaves_private_staging_on_verification_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project_root = tmp_path / "project"
@@ -714,9 +1059,9 @@ def test_export_evidence_bundle_cleanup_on_verification_failure(
     assert exc_info.value.reason is EvidenceBundleReason.VERDICT_MISMATCH
     assert not dest.exists()
 
-    # Confirm no sibling temp dirs left behind in destination's parent
-    remaining = list(tmp_path.glob(".export-*")) + list(tmp_path.glob(".*tmp*"))
-    assert not remaining
+    remaining = list(tmp_path.glob(".export-tmp-*"))
+    assert len(remaining) == 1
+    assert (remaining[0] / MANIFEST_FILENAME).is_file()
 
 
 def test_export_evidence_bundle_derives_policy_and_does_not_copy_arbitrary_reasons(
@@ -763,7 +1108,7 @@ def test_export_evidence_bundle_budget_stopped_incomplete(
     assert verified.manifest.verdict == Verdict.INCOMPLETE
 
 
-def test_export_evidence_bundle_accepts_non_gemini_runtime_support_with_legacy_null_lock(
+def test_export_evidence_bundle_rejects_non_gemini_runtime_support_with_legacy_null_lock(
     tmp_path: Path,
 ) -> None:
     project_root = tmp_path / "project"
@@ -773,31 +1118,25 @@ def test_export_evidence_bundle_accepts_non_gemini_runtime_support_with_legacy_n
         with_support_binary=True,
     )
 
-    lock = json.loads((project_root / ".qualock/baseline.lock").read_text())
-    assert lock["agent"]["support_sha256"] is None
+    lock_path = project_root / ".qualock/baseline.lock"
+    lock = json.loads(lock_path.read_text())
+    lock["agent"]["support_sha256"] = None
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
 
-    provenance = json.loads(
-        (
-            project_root
-            / ".qualock/results/check-codex-support/evidence-provenance.json"
-        ).read_text()
+    provenance_path = (
+        project_root / ".qualock/results/check-codex-support/evidence-provenance.json"
     )
+    provenance = json.loads(provenance_path.read_text())
     assert provenance["baseline_identity"]["support_sha256"] is not None
-    assert provenance["candidate_identity"]["support_sha256"] is not None
+    provenance["baseline_lock_sha256"] = sha256_canonical(lock)
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
 
     dest = tmp_path / "bundle-codex-support"
-    export_evidence_bundle(project_root, "check-codex-support", dest)
+    with pytest.raises(EvidenceBundleError) as exc_info:
+        export_evidence_bundle(project_root, "check-codex-support", dest)
 
-    manifest = EvidenceManifest.model_validate_json((dest / MANIFEST_FILENAME).read_bytes())
-    assert (
-        manifest.baseline_identity.support_sha256
-        == provenance["baseline_identity"]["support_sha256"]
-    )
-    verified = verify_evidence_bundle(dest)
-    assert (
-        verified.manifest.baseline_identity.support_sha256
-        == provenance["baseline_identity"]["support_sha256"]
-    )
+    assert exc_info.value.reason is EvidenceBundleReason.IDENTITY_MISMATCH
+    assert not dest.exists()
 
 
 def test_export_evidence_bundle_rejects_gemini_legacy_null_lock_support(tmp_path: Path) -> None:

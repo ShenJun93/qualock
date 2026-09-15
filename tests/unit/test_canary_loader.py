@@ -66,3 +66,15 @@ def test_load_suite_rejects_duplicate_ids(tmp_path: Path) -> None:
     write_canary(second, canary_id="same")
     with pytest.raises(CanaryLoadError, match="duplicate"):
         load_suite([first, second])
+
+
+def test_load_canary_parses_paired_change_metadata(tmp_path: Path) -> None:
+    grader = tmp_path / 'grader.patch'
+    grader.write_text('patch', encoding='utf-8')
+    yaml_path = tmp_path / 'canary.yaml'
+    write_canary(yaml_path)
+    yaml_path.write_text(yaml_path.read_text(encoding='utf-8') + '\npaired_change:\n  material_dimensions:\n    - AGENT_BINARY\n    - AGENT_SUPPORT\n  max_pair_gap_ms: 5000\n', encoding='utf-8')
+    canary = load_canary(yaml_path)
+    assert canary.paired_change is not None
+    assert canary.paired_change.material_dimensions == ('AGENT_BINARY', 'AGENT_SUPPORT')
+    assert canary.paired_change.max_pair_gap_ms == 5000

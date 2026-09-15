@@ -127,3 +127,20 @@ def test_suite_fingerprint_hashes_sorted_full_canary_payloads_not_a_digest_list(
         sorted([canary_fingerprint(one), canary_fingerprint(two)])
     )
     assert suite_fingerprint([two, one]) != digest_list_hash
+
+
+def test_paired_change_metadata_does_not_change_legacy_canary_or_suite_fingerprint(tmp_path: Path) -> None:
+    left_dir = tmp_path / 'left-paired'
+    right_dir = tmp_path / 'right-paired'
+    left_dir.mkdir(); right_dir.mkdir()
+    legacy = make_canary(left_dir, 'same')
+    paired = make_canary(
+        right_dir,
+        'same',
+        paired_change={
+            'material_dimensions': ['AGENT_BINARY', 'AGENT_SUPPORT'],
+            'max_pair_gap_ms': 5000,
+        },
+    )
+    assert canary_fingerprint(legacy) == canary_fingerprint(paired)
+    assert suite_fingerprint([legacy]) == suite_fingerprint([paired])

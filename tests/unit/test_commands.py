@@ -10,7 +10,7 @@ import yaml
 import qualock.commands as commands_module
 from qualock.agents.antigravity import AntigravityAdapter
 from qualock.agents.antigravity_resolver import AntigravityResolver
-from qualock.agents.base import AgentBinary, AgentSupportTree
+from qualock.agents.base import AgentBinary, AgentSupportBinary, AgentSupportTree
 from qualock.agents.gemini import GeminiAdapter
 from qualock.agents.gemini_resolver import GeminiResolver
 from qualock.agents.support_integrity import agent_support_fingerprint
@@ -33,21 +33,39 @@ from qualock.evidence.provenance import EvidenceProvenanceError, read_evidence_p
 from qualock.history.models import HistoryAnalysis, HistorySummary, SuiteEstimate
 from qualock.pricing.models import CostAnalysis, PricingHistory, SuiteCostEstimate
 from qualock.project import load_project
+from qualock.protocols.paired_change.fingerprint import digest_model
+from qualock.protocols.paired_change.run_sidecar import read_paired_change_run
 from qualock.qualification.models import AttemptResult, Usage, Verdict
 from qualock.run.host import LinuxHostRunner
 from qualock.run.host_backend import LinuxHostQualificationBackend
-from qualock.run.models import PreparedTarget
+from qualock.run.models import (
+    AttemptControlContext,
+    AttemptControlProfiles,
+    AttemptExecution,
+    PreparedTarget,
+)
 from qualock.run.schedule import Side
 
 
 class FakeResolver:
-    def __init__(self, agent_name: str = "codex") -> None:
+    def __init__(self, agent_name: str = "codex", *, with_support_binary: bool = False) -> None:
         self.agent_name = agent_name
+        self.with_support_binary = with_support_binary
         self.calls: list[str] = []
 
     def resolve(self, version: str) -> AgentBinary:
         self.calls.append(version)
         exact = "0.151.0" if version == "latest" else version
+        support_binaries = ()
+        if self.agent_name == "codex" and self.with_support_binary:
+            support_binaries = (
+                AgentSupportBinary(
+                    name="codex-code-mode-host",
+                    path=Path(f"/fake/{self.agent_name}/{exact}/codex-code-mode-host"),
+                    sha256=hashlib.sha256(f"support-binary-{exact}".encode()).hexdigest(),
+                    container_path="/opt/qualock/codex-code-mode-host",
+                ),
+            )
         support_trees = ()
         if self.agent_name == "gemini":
             support_trees = (
@@ -62,6 +80,7 @@ class FakeResolver:
             exact,
             Path(f"/fake/{self.agent_name}/{exact}/agent"),
             hashlib.sha256(f"{self.agent_name}-{exact}".encode()).hexdigest(),
+            support_binaries=support_binaries,
             support_trees=support_trees,
         )
 
@@ -86,6 +105,30 @@ class FakeBackend:
             valid=True,
             duration_ms=100,
             usage=Usage(input_tokens=10, output_tokens=1, observed=True),
+        )
+
+
+class ProtocolAwareFakeBackend(FakeBackend):
+    def control_profiles(self, canary) -> AttemptControlProfiles:
+        return AttemptControlProfiles(
+            preparation_sha256="1" * 64,
+            isolation_sha256="2" * 64,
+            resource_sha256="3" * 64,
+            runtime_sha256="4" * 64,
+        )
+
+    def run_attempt_with_context(
+        self, *, canary, prepared, binary, side: Side, repetition: int
+    ) -> AttemptExecution:
+        result = self.run_attempt(
+            canary=canary, prepared=prepared, binary=binary, side=side, repetition=repetition
+        )
+        return AttemptExecution(
+            result=result,
+            context=AttemptControlContext(
+                profiles=self.control_profiles(canary),
+                isolation_instance_sha256="5" * 64,
+            ),
         )
 
 
@@ -402,32 +445,54 @@ def test_gemini_check_rejects_changed_support_fingerprint_before_candidate_resol
     assert resolver.calls == ["0.58.0"]
 
 
-def test_codex_check_accepts_legacy_missing_support_fingerprint(tmp_path: Path) -> None:
+def test_codex_baseline_writes_support_fingerprint(tmp_path: Path) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver(with_support_binary=True)
+
+    lock = execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=FakeBackend(),
+        qualification_id="codex-support-baseline",
+        created_at="2026-08-31T00:00:00Z",
+    )
+
+    resolved = FakeResolver(with_support_binary=True).resolve("0.150.0")
+    assert lock.agent.support_sha256 == agent_support_fingerprint(resolved)
+    assert lock.agent.support_sha256 is not None
+
+
+def test_codex_check_rejects_legacy_missing_support_fingerprint_before_candidate_resolution(
+    tmp_path: Path,
+) -> None:
     setup_project(tmp_path)
     execute_baseline(
         tmp_path,
         "codex@0.150.0",
-        resolver=FakeResolver(),
+        resolver=FakeResolver(with_support_binary=True),
         backend=FakeBackend(),
         qualification_id="codex-legacy-support",
         created_at="2026-08-31T00:00:00Z",
     )
     lock_path = tmp_path / ".qualock/baseline.lock"
     lock = read_baseline_lock(lock_path)
-    payload = lock.model_dump(mode="json")
-    payload["agent"].pop("support_sha256", None)
-    write_baseline_lock(lock_path, type(lock).model_validate(payload))
-
-    result = execute_check(
-        tmp_path,
-        "codex@0.151.0",
-        resolver=FakeResolver(),
-        backend=FakeBackend(),
-        qualification_id="codex-legacy-support-check",
+    write_baseline_lock(
+        lock_path,
+        lock.model_copy(update={"agent": lock.agent.model_copy(update={"support_sha256": None})}),
     )
+    resolver = FakeResolver(with_support_binary=True)
 
-    assert result.baseline_version == "0.150.0"
-    assert result.candidate_version == "0.151.0"
+    with pytest.raises(BaselineStaleError, match="support fingerprint"):
+        execute_check(
+            tmp_path,
+            "codex@0.151.0",
+            resolver=resolver,
+            backend=FakeBackend(),
+            qualification_id="codex-legacy-support-check",
+        )
+
+    assert resolver.calls == ["0.150.0"]
 
 
 def test_gemini_check_rejects_baseline_sha_before_candidate_resolution(
@@ -559,6 +624,88 @@ def test_check_reruns_pinned_baseline_and_candidate_and_writes_report(tmp_path: 
     assert result.baseline_version == "0.150.0"
     assert result.candidate_version == "0.151.0"
     assert (tmp_path / ".qualock/results/check-q/report.json").is_file()
+
+
+def test_check_writes_paired_change_run_sidecar_with_legacy_backend(tmp_path: Path) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-sidecar",
+        created_at="2026-09-10T00:00:00Z",
+    )
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-sidecar",
+    )
+
+    sidecar_path = tmp_path / ".qualock/results/check-sidecar/paired-change-run-v1.json"
+    assert sidecar_path.is_file()
+    run = read_paired_change_run(sidecar_path)
+
+    assert run.qualification_id == "check-sidecar"
+    assert run.qualification_id == result.qualification_id
+    assert run.protocol_design_sha256 == digest_model(run.protocol_design)
+    assert run.baseline_state.version == "0.150.0"
+    assert run.candidate_state.version == "0.151.0"
+    assert len(run.canaries) == 1
+    canary_evidence = run.canaries[0]
+    assert canary_evidence.canary_id == "sample"
+    assert len(canary_evidence.pairs) == 3
+    for attempt in (item for pair in canary_evidence.pairs for item in pair.attempts):
+        assert attempt.protocol_design_sha256 == run.protocol_design_sha256
+
+    design_canary = run.protocol_design.canaries[0]
+    assert design_canary.material_dimensions is None
+    assert design_canary.preparation_sha256 is None
+    assert design_canary.isolation_sha256 is None
+    assert design_canary.resource_sha256 is None
+    assert design_canary.runtime_sha256 is None
+
+
+def test_check_writes_paired_change_run_sidecar_with_protocol_aware_backend(
+    tmp_path: Path,
+) -> None:
+    setup_project(tmp_path)
+    resolver = FakeResolver()
+    backend = ProtocolAwareFakeBackend()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="baseline-sidecar-aware",
+        created_at="2026-09-10T00:00:00Z",
+    )
+    execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-sidecar-aware",
+    )
+
+    sidecar_path = (
+        tmp_path / ".qualock/results/check-sidecar-aware/paired-change-run-v1.json"
+    )
+    run = read_paired_change_run(sidecar_path)
+
+    design_canary = run.protocol_design.canaries[0]
+    assert design_canary.preparation_sha256 == "1" * 64
+    assert design_canary.isolation_sha256 == "2" * 64
+    assert design_canary.resource_sha256 == "3" * 64
+    assert design_canary.runtime_sha256 == "4" * 64
+
+    pair_attempt = run.canaries[0].pairs[0].attempts[0]
+    assert pair_attempt.isolation_instance_sha256 == "5" * 64
+    assert pair_attempt.preparation_sha256 == "1" * 64
 
 
 def test_check_forwards_attempt_budget_and_writes_incomplete_report(tmp_path: Path) -> None:
@@ -811,6 +958,7 @@ def test_check_pricing_writer_failure_is_advisory(
         "report.json",
         "qualification.json",
         "evidence-provenance.json",
+        "paired-change-run-v1.json",
     }
 
 

@@ -1,5 +1,7 @@
+import hashlib
+import time
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from qualock.agents.base import AgentBinary
 from qualock.canary.models import CanarySpec
@@ -13,7 +15,13 @@ from qualock.qualification.models import (
 )
 from qualock.qualification.policy import qualify_canary, qualify_suite
 
-from .models import PreparedTarget
+from .models import (
+    AttemptControlContext,
+    AttemptControlProfiles,
+    AttemptExecution,
+    AttemptRunTrace,
+    PreparedTarget,
+)
 from .schedule import Side, paired_schedule
 
 
@@ -29,6 +37,21 @@ class QualificationBackend(Protocol):
         side: Side,
         repetition: int,
     ) -> AttemptResult: ...
+
+
+@runtime_checkable
+class ProtocolAwareQualificationBackend(QualificationBackend, Protocol):
+    def control_profiles(self, canary: CanarySpec) -> AttemptControlProfiles: ...
+
+    def run_attempt_with_context(
+        self,
+        *,
+        canary: CanarySpec,
+        prepared: PreparedTarget,
+        binary: AgentBinary,
+        side: Side,
+        repetition: int,
+    ) -> AttemptExecution: ...
 
 
 class QualificationExecutor:
@@ -47,12 +70,17 @@ class QualificationExecutor:
         qualification_id: str,
         max_attempts: int | None = None,
         max_tokens: int | None = None,
+        trace_sink: list[AttemptRunTrace] | None = None,
+        trace_design_sha256: str | None = None,
     ) -> QualificationResult:
         if max_attempts is not None and max_attempts < 1:
             raise ValueError("max_attempts must be greater than zero")
         if max_tokens is not None and max_tokens < 1:
             raise ValueError("max_tokens must be greater than zero")
+        if trace_sink is not None and trace_design_sha256 is None:
+            raise ValueError("trace_design_sha256 is required when trace_sink is provided")
 
+        trace_epoch_ns = time.monotonic_ns() if trace_sink is not None else None
         indexed_suite = tuple(enumerate(suite))
         attempts_per_canary = self.repetitions * 2
         full_suite_attempts = len(indexed_suite) * attempts_per_canary
@@ -112,13 +140,52 @@ class QualificationExecutor:
             attempts: list[AttemptResult] = []
             for slot in paired_schedule(canary.id, self.repetitions, qualification_id):
                 binary = baseline_binary if slot.side is Side.BASELINE else candidate_binary
-                attempt = self.backend.run_attempt(
-                    canary=canary,
-                    prepared=prepared,
-                    binary=binary,
-                    side=slot.side,
-                    repetition=slot.repetition,
-                )
+                started_ns = time.monotonic_ns() if trace_sink is not None else None
+                if trace_sink is not None and isinstance(
+                    self.backend, ProtocolAwareQualificationBackend
+                ):
+                    attempt_execution = self.backend.run_attempt_with_context(
+                        canary=canary,
+                        prepared=prepared,
+                        binary=binary,
+                        side=slot.side,
+                        repetition=slot.repetition,
+                    )
+                    attempt = attempt_execution.result
+                    context = attempt_execution.context
+                else:
+                    attempt = self.backend.run_attempt(
+                        canary=canary,
+                        prepared=prepared,
+                        binary=binary,
+                        side=slot.side,
+                        repetition=slot.repetition,
+                    )
+                    context = AttemptControlContext(
+                        profiles=AttemptControlProfiles(
+                            preparation_sha256=None,
+                            isolation_sha256=None,
+                            resource_sha256=None,
+                            runtime_sha256=None,
+                        ),
+                        isolation_instance_sha256=None,
+                    )
+                finished_ns = time.monotonic_ns() if trace_sink is not None else None
+                if trace_sink is not None:
+                    if trace_epoch_ns is None or started_ns is None or finished_ns is None:
+                        raise RuntimeError("trace clock invariant violated")
+                    trace_sink.append(
+                        AttemptRunTrace(
+                            canary_id=canary.id,
+                            side=slot.side.value,
+                            repetition=slot.repetition,
+                            trace_design_sha256=trace_design_sha256,
+                            started_offset_ms=(started_ns - trace_epoch_ns) // 1_000_000,
+                            finished_offset_ms=(finished_ns - trace_epoch_ns) // 1_000_000,
+                            events_sha256=hashlib.sha256(attempt.events_jsonl.encode()).hexdigest(),
+                            context=context,
+                        )
+                    )
                 attempts.append(attempt)
                 run_order.append((canary.id, slot.side.value, slot.repetition))
 

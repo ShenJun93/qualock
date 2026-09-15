@@ -7,10 +7,12 @@ to the source project.
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
-import shutil
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -59,8 +61,79 @@ from qualock.project import (
     project_dir,
     suite_fingerprint,
 )
+from qualock.protocols.paired_change.materialize import materialize_protocol_evidence
+from qualock.protocols.paired_change.run_sidecar import read_paired_change_run
 from qualock.qualification.models import CanaryAggregate, CanaryComparison
 from qualock.qualification.policy import qualify_canary, qualify_suite
+
+_PAIRED_CHANGE_RUN_FILENAME = "paired-change-run-v1.json"
+_PROTOCOL_EVIDENCE_FILENAME = "protocol-evidence.json"
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    """Atomically rename *source* only when *destination* does not exist.
+
+    Windows os.rename provides no-replace semantics. Linux requires renameat2
+    with RENAME_NOREPLACE. No check-then-rename fallback is permitted.
+    """
+    if sys.platform == "win32":
+        os.rename(source, destination)
+        return
+    if sys.platform != "linux":
+        raise OSError(errno.ENOSYS, "atomic no-replace rename is unavailable")
+
+    try:
+        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+    except AttributeError as exc:
+        raise OSError(errno.ENOSYS, "atomic no-replace rename is unavailable") from exc
+
+    result = renameat2(
+        ctypes.c_int(_AT_FDCWD),
+        ctypes.c_char_p(os.fsencode(source)),
+        ctypes.c_int(_AT_FDCWD),
+        ctypes.c_char_p(os.fsencode(destination)),
+        ctypes.c_uint(_RENAME_NOREPLACE),
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), destination)
+
+
+def _directory_identity(path: Path) -> tuple[int, int]:
+    stat_result = path.stat(follow_symlinks=False)
+    return stat_result.st_dev, stat_result.st_ino
+
+
+def _rollback_published_directory(
+    published_path: Path,
+    staging_path: Path,
+    published_identity: tuple[int, int],
+) -> None:
+    """Claim a published name atomically without deleting an unverified pathname."""
+    try:
+        _rename_noreplace(published_path, staging_path)
+    except OSError:
+        return
+
+    try:
+        claimed_identity = _directory_identity(staging_path)
+    except OSError:
+        return
+    if claimed_identity == published_identity:
+        # There is no portable pathname operation that conditionally removes a
+        # directory by inode. Keep the claimed object at the private staging
+        # name: deleting it after this check would open another check/delete
+        # race in which a replacement could be removed.
+        return
+
+    # A replacement won the race.  Put it back if the original name remains
+    # free; otherwise preserve it at the staging path rather than deleting it.
+    try:
+        _rename_noreplace(staging_path, published_path)
+    except OSError:
+        pass
 
 
 @dataclass(frozen=True)
@@ -68,6 +141,7 @@ class ExportedEvidenceBundle:
     path: Path
     qualification_id: str
     manifest_sha256: str
+    protocol_path: Path | None = None
 
 
 def _budget_skip_reasons(
@@ -123,6 +197,12 @@ def export_evidence_bundle(
     dest = destination.resolve()
     if dest.exists():
         raise EvidenceBundleError(EvidenceBundleReason.UNSAFE_PATH, "destination")
+
+    sidecar_path = source_dir / _PAIRED_CHANGE_RUN_FILENAME
+    has_protocol_sidecar = os.path.lexists(sidecar_path)
+    protocol_dest = dest.with_name(dest.name + ".paired-change-v1")
+    if has_protocol_sidecar and os.path.lexists(protocol_dest):
+        raise EvidenceBundleError(EvidenceBundleReason.UNSAFE_PATH, "protocol_path")
 
     try:
         dest.relative_to(source_dir)
@@ -194,14 +274,15 @@ def export_evidence_bundle(
         raise EvidenceBundleError(
             EvidenceBundleReason.IDENTITY_MISMATCH, "baseline_lock_sha256"
         )
+    if lock.agent.name == "gemini" and lock.agent.support_sha256 is None:
+        raise EvidenceBundleError(
+            EvidenceBundleReason.INVALID_GEMINI_SUPPORT, "baseline_lock.agent"
+        )
     if (
         provenance.baseline_identity.name != lock.agent.name
         or provenance.baseline_identity.version != lock.agent.version
         or provenance.baseline_identity.binary_sha256 != lock.agent.binary_sha256
-        or (
-            lock.agent.support_sha256 is not None
-            and provenance.baseline_identity.support_sha256 != lock.agent.support_sha256
-        )
+        or provenance.baseline_identity.support_sha256 != lock.agent.support_sha256
     ):
         raise EvidenceBundleError(
             EvidenceBundleReason.IDENTITY_MISMATCH, "baseline_identity"
@@ -550,6 +631,11 @@ def export_evidence_bundle(
     # 9. Write payload files to a sibling temporary directory
     dest.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix=".export-tmp-", dir=dest.parent))
+    protocol_temp_dir: Path | None = None
+    bundle_published = False
+    protocol_published = False
+    bundle_identity: tuple[int, int] | None = None
+    protocol_identity: tuple[int, int] | None = None
 
     try:
         files: dict[str, dict[str, Any]] = {}
@@ -611,19 +697,66 @@ def export_evidence_bundle(
         (temp_dir / MANIFEST_FILENAME).write_bytes(manifest_bytes)
         manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
-        # 11. Self-verify temporary bundle BEFORE publication
-        verify_evidence_bundle(temp_dir)
+        # 11. Self-verify and materialize all companion bytes BEFORE publication
+        verified_bundle = verify_evidence_bundle(temp_dir)
+        if has_protocol_sidecar:
+            paired_change_run = read_paired_change_run(sidecar_path)
+            protocol_evidence = materialize_protocol_evidence(
+                paired_change_run, verified_bundle
+            )
+            protocol_bytes = canonical_json_file_bytes(
+                protocol_evidence.model_dump(mode="json")
+            )
+            # Validate the exact bytes that will be published.
+            type(protocol_evidence).model_validate_json(protocol_bytes)
+            protocol_temp_dir = Path(
+                tempfile.mkdtemp(prefix=".paired-change-tmp-", dir=dest.parent)
+            )
+            (protocol_temp_dir / _PROTOCOL_EVIDENCE_FILENAME).write_bytes(
+                protocol_bytes
+            )
 
-        # 12. Atomic same-filesystem publish
-        os.replace(temp_dir, dest)
+        # 12. Publish the unchanged V1 bundle, then its separate companion.
+        bundle_identity = _directory_identity(temp_dir)
+        try:
+            _rename_noreplace(temp_dir, dest)
+            bundle_published = True
+        except OSError as exc:
+            raise EvidenceBundleError(
+                EvidenceBundleReason.UNSAFE_PATH, "destination"
+            ) from exc
+        if protocol_temp_dir is not None:
+            protocol_identity = _directory_identity(protocol_temp_dir)
+            try:
+                _rename_noreplace(protocol_temp_dir, protocol_dest)
+                protocol_published = True
+            except OSError as exc:
+                raise EvidenceBundleError(
+                    EvidenceBundleReason.UNSAFE_PATH, "protocol_path"
+                ) from exc
 
         return ExportedEvidenceBundle(
             path=dest,
             qualification_id=qualification_id,
             manifest_sha256=manifest_sha256,
+            protocol_path=protocol_dest if protocol_published else None,
         )
 
     except Exception:
-        # Cleanup owned temporary directory on any failure; leave destination absent
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        # Best-effort rollback. Published names are atomically claimed back to
+        # their private staging names; ownership is checked before deciding
+        # whether a claimed replacement should be restored.
+        if (
+            protocol_temp_dir is not None
+            and protocol_published
+            and protocol_identity is not None
+        ):
+            _rollback_published_directory(
+                protocol_dest, protocol_temp_dir, protocol_identity
+            )
+        if bundle_published and bundle_identity is not None:
+            _rollback_published_directory(dest, temp_dir, bundle_identity)
+        # Unpublished staging pathnames may have been renamed away and replaced
+        # by another process. Leave them untouched: pathname-based recursive
+        # deletion cannot guarantee ownership without a check/delete race.
         raise

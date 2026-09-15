@@ -81,6 +81,23 @@ from qualock.project_watch.engine import run_watch as run_project_watch
 from qualock.project_watch.models import WatchEvent, WatchEventKind
 from qualock.project_watch.render import render_watch_event
 from qualock.project_watch.snapshot import ProjectWatchSnapshotError
+from qualock.protocols.first_bad.io import FirstBadVerificationError, write_first_bad_receipt
+from qualock.protocols.first_bad.models import FirstBadClaimClass, FirstBadEdgeSummaryV1
+from qualock.protocols.first_bad.orchestrate import FirstBadPreflight, execute_first_bad
+from qualock.protocols.first_bad.render import (
+    render_first_bad_edge_line,
+    render_first_bad_range,
+    render_first_bad_receipt,
+    render_first_bad_terminal,
+    render_first_bad_title,
+)
+from qualock.protocols.first_bad.verify import verify_first_bad
+from qualock.protocols.paired_change.io import (
+    PairedChangeVerificationError,
+    write_claim_receipt,
+)
+from qualock.protocols.paired_change.render import render_claim_receipt
+from qualock.protocols.paired_change.verify import verify_paired_change
 from qualock.qualification.models import QualificationResult, Verdict
 from qualock.release_monitor.commands import execute_monitor
 from qualock.release_monitor.models import MonitorAction
@@ -116,6 +133,22 @@ _EVIDENCE_OUT_OPTION = typer.Option(
     help="Directory where the evidence bundle will be written.",
 )
 _EVIDENCE_BUNDLE_ARGUMENT = typer.Argument(..., metavar="DIRECTORY")
+_EVIDENCE_PROTOCOL_OPTION = typer.Option(
+    ...,
+    "--protocol",
+    help="Paired-change companion directory to verify.",
+)
+_EVIDENCE_WRITE_RECEIPT_OPTION = typer.Option(
+    False,
+    "--write-receipt",
+    help="Write claim-receipt.json after successful verification.",
+)
+_FIRST_BAD_CHAIN_DIR_ARGUMENT = typer.Argument(..., metavar="CHAIN_DIR")
+_FIRST_BAD_WRITE_RECEIPT_OPTION = typer.Option(
+    False,
+    "--write-receipt",
+    help="Write chain-receipt.json after successful verification.",
+)
 console = Console()
 
 
@@ -471,6 +504,60 @@ def bisect_command(upper: str) -> None:
         raise typer.Exit(1) from exc
 
     _render_bisect_terminal(outcome, display_name)
+
+
+def _print_first_bad_start(preflight: FirstBadPreflight, staging_path: Path) -> None:
+    del staging_path
+    display_name = agent_display_name(preflight.agent_name)
+    console.print(render_first_bad_title(), end="", markup=False)
+    console.print(
+        render_first_bad_range(display_name, preflight.catalog[0], preflight.upper_version),
+        end="",
+        markup=False,
+    )
+
+
+def _print_first_bad_edge(summary: FirstBadEdgeSummaryV1) -> None:
+    console.print(render_first_bad_edge_line(summary), end="", markup=False)
+
+
+@app.command("first-bad")
+def first_bad_command(upper: str) -> None:
+    root = Path.cwd()
+    try:
+        outcome = execute_first_bad(
+            root,
+            upper,
+            on_start=_print_first_bad_start,
+            on_edge=_print_first_bad_edge,
+        )
+    except (
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        BaselineStaleError,
+    ) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except ReleaseDiscoveryError as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+    except FirstBadVerificationError as exc:
+        del exc
+        console.print("first-bad package verification failed", markup=False)
+        raise typer.Exit(1) from None
+    except Exception as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(1) from exc
+
+    console.print(render_first_bad_terminal(outcome.receipt), end="", markup=False)
+    console.print(f"Package: {outcome.package_path}", markup=False)
+
+    if outcome.receipt.claim is FirstBadClaimClass.FIRST_ATTRIBUTABLE_BAD:
+        raise typer.Exit(2)
+    if outcome.receipt.claim is FirstBadClaimClass.UNRESOLVED:
+        raise typer.Exit(4)
 
 
 def _render_schedule_outcome(
@@ -1058,6 +1145,70 @@ def evidence_verify_command(
         raise typer.Exit(1) from None
 
     console.print(render_evidence_verify(verified), end="", markup=False)
+
+
+@evidence_app.command("verify-claim")
+def evidence_verify_claim_command(
+    bundle: Path = _EVIDENCE_BUNDLE_ARGUMENT,
+    protocol: Path = _EVIDENCE_PROTOCOL_OPTION,
+    write_receipt: bool = _EVIDENCE_WRITE_RECEIPT_OPTION,
+) -> None:
+    try:
+        receipt = verify_paired_change(bundle, protocol)
+        if write_receipt:
+            write_claim_receipt(protocol, receipt)
+    except (
+        PairedChangeVerificationError,
+        EvidenceBundleError,
+        EvidenceProvenanceError,
+        BaselineStaleError,
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        ValueError,
+    ) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception:  # noqa: BLE001 - unexpected claim verification failures map to 1
+        console.print("claim verification failed", markup=False)
+        raise typer.Exit(1) from None
+
+    console.print(render_claim_receipt(receipt), end="", markup=False)
+
+
+@evidence_app.command("verify-first-bad")
+def evidence_verify_first_bad_command(
+    chain_dir: Path = _FIRST_BAD_CHAIN_DIR_ARGUMENT,
+    write_receipt: bool = _FIRST_BAD_WRITE_RECEIPT_OPTION,
+) -> None:
+    try:
+        receipt = verify_first_bad(chain_dir)
+        if write_receipt:
+            write_first_bad_receipt(chain_dir, receipt)
+    except (
+        FirstBadVerificationError,
+        EvidenceBundleError,
+        PairedChangeVerificationError,
+        EvidenceProvenanceError,
+        BaselineStaleError,
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        FileNotFoundError,
+        ValueError,
+    ) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception:  # noqa: BLE001 - unexpected first-bad failures map to stable exit 1
+        console.print("first-bad verification failed", markup=False)
+        raise typer.Exit(1) from None
+
+    console.print(render_first_bad_receipt(receipt), end="", markup=False)
+    if receipt.claim is FirstBadClaimClass.FIRST_ATTRIBUTABLE_BAD:
+        raise typer.Exit(2)
+    if receipt.claim is FirstBadClaimClass.UNRESOLVED:
+        raise typer.Exit(4)
 
 
 if __name__ == "__main__":

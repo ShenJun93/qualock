@@ -8,6 +8,7 @@ from pathlib import Path
 from qualock.agents.antigravity import AntigravityAdapter
 from qualock.agents.base import AgentBinary
 from qualock.canary.models import CanarySpec
+from qualock.evidence.fingerprint import sha256_canonical
 from qualock.evidence.models import AgentEvidence, AgentEvidenceError
 from qualock.qualification.models import AttemptResult, Usage
 from qualock.source.git import GitSourceManager
@@ -15,7 +16,7 @@ from qualock.source.git import GitSourceManager
 from .backend import IntegrityPolicy, UnsupportedRuntimeError
 from .host import HostAgentState, HostCommandError, LinuxHostRunner
 from .integrity import IntegrityPathError, protected_path_violations
-from .models import PreparedTarget
+from .models import AttemptControlContext, AttemptControlProfiles, AttemptExecution, PreparedTarget
 from .schedule import Side
 
 
@@ -95,6 +96,33 @@ class LinuxHostQualificationBackend:
             ),
         )
 
+    def control_profiles(self, canary: CanarySpec) -> AttemptControlProfiles:
+        preparation_sha256 = sha256_canonical(
+            {
+                "procedure": "host-prepare-v1",
+                "repository_url": canary.repository.url,
+                "base_sha": canary.repository.base_sha,
+                "setup": canary.setup,
+            }
+        )
+        isolation_sha256 = sha256_canonical(
+            {"procedure": "host-fresh-copy-v1", "lifecycle": "fresh-per-attempt"}
+        )
+        resource_sha256 = sha256_canonical(
+            {
+                "procedure": "host-resource-policy-v1",
+                "timeout_seconds": canary.agent.timeout_seconds,
+                "cpu_limit": None,
+                "memory_limit": None,
+            }
+        )
+        return AttemptControlProfiles(
+            preparation_sha256=preparation_sha256,
+            isolation_sha256=isolation_sha256,
+            resource_sha256=resource_sha256,
+            runtime_sha256=None,
+        )
+
     def run_attempt(
         self,
         *,
@@ -104,9 +132,60 @@ class LinuxHostQualificationBackend:
         side: Side,
         repetition: int,
     ) -> AttemptResult:
+        return self._run_attempt_execution(
+            canary=canary,
+            prepared=prepared,
+            binary=binary,
+            side=side,
+            repetition=repetition,
+            capture_context=False,
+        ).result
+
+    def run_attempt_with_context(
+        self,
+        *,
+        canary: CanarySpec,
+        prepared: PreparedTarget,
+        binary: AgentBinary,
+        side: Side,
+        repetition: int,
+    ) -> AttemptExecution:
+        return self._run_attempt_execution(
+            canary=canary,
+            prepared=prepared,
+            binary=binary,
+            side=side,
+            repetition=repetition,
+        )
+
+    def _run_attempt_execution(
+        self,
+        *,
+        canary: CanarySpec,
+        prepared: PreparedTarget,
+        binary: AgentBinary,
+        side: Side,
+        repetition: int,
+        capture_context: bool = True,
+    ) -> AttemptExecution:
         self._require_linux_platform()
         self._require_host_runtime(canary)
         attempt_root = self._create_attempt_root(canary, side, repetition)
+        if capture_context:
+            context = AttemptControlContext(
+                profiles=self.control_profiles(canary),
+                isolation_instance_sha256=hashlib.sha256(attempt_root.name.encode()).hexdigest(),
+            )
+        else:
+            context = AttemptControlContext(
+                profiles=AttemptControlProfiles(
+                    preparation_sha256=None,
+                    isolation_sha256=None,
+                    resource_sha256=None,
+                    runtime_sha256=None,
+                ),
+                isolation_instance_sha256=None,
+            )
         try:
             workspace = attempt_root / _WORKSPACE_DIRNAME
             shutil.copytree(Path(prepared.reference), workspace, symlinks=True)
@@ -125,15 +204,17 @@ class LinuxHostQualificationBackend:
                         canary.agent.timeout_seconds,
                     )
             except _LAUNCH_FAILURES as exc:
-                return self._invalid_attempt(
+                result = self._invalid_attempt(
                     side, repetition, 0, f"agent launch failed: {exc}", ""
                 )
-            return self._judge_attempt(
-                canary=canary,
-                state=state,
-                side=side,
-                repetition=repetition,
-            )
+            else:
+                result = self._judge_attempt(
+                    canary=canary,
+                    state=state,
+                    side=side,
+                    repetition=repetition,
+                )
+            return AttemptExecution(result=result, context=context)
         finally:
             shutil.rmtree(attempt_root, ignore_errors=True)
 

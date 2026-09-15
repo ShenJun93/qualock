@@ -8,7 +8,7 @@ clock, or current-project-state access, and it never writes to the bundle.
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TypeVar
 
@@ -54,16 +54,42 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 def verify_evidence_bundle(root: Path) -> VerifiedEvidenceBundle:
-    names = inspect_bundle_files(root)
+    return verify_evidence_bundle_payloads(_read_evidence_bundle_payloads(root))
 
-    manifest_bytes = read_bounded_regular_file(root, MANIFEST_FILENAME, max_bytes=MANIFEST_MAX_BYTES)
+
+def _read_evidence_bundle_payloads(root: Path) -> dict[str, bytes]:
+    names = inspect_bundle_files(root)
+    manifest_bytes = read_bounded_regular_file(
+        root, MANIFEST_FILENAME, max_bytes=MANIFEST_MAX_BYTES
+    )
+    manifest = _parse_model(
+        EvidenceManifest,
+        manifest_bytes,
+        MANIFEST_FILENAME,
+        EvidenceBundleReason.MALFORMED_MANIFEST,
+    )
+    _verify_inventory(names, manifest)
+    files = {MANIFEST_FILENAME: manifest_bytes}
+    for name in manifest.files:
+        files[name] = read_bounded_regular_file(
+            root, name, max_bytes=FILE_MAX_BYTES[name]
+        )
+    return files
+
+
+def verify_evidence_bundle_payloads(
+    files: Mapping[str, bytes],
+) -> VerifiedEvidenceBundle:
+    manifest_bytes = files.get(MANIFEST_FILENAME)
+    if manifest_bytes is None:
+        raise EvidenceBundleError(EvidenceBundleReason.INVENTORY_MISMATCH, "files")
     manifest = _parse_model(
         EvidenceManifest, manifest_bytes, MANIFEST_FILENAME, EvidenceBundleReason.MALFORMED_MANIFEST
     )
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
-    _verify_inventory(names, manifest)
-    payload_buffers = _verify_payload_hashes(root, manifest)
+    _verify_inventory(tuple(files), manifest)
+    payload_buffers = _verify_payload_hashes(files, manifest)
 
     report = _parse_model(
         PublicReport,
@@ -110,7 +136,7 @@ def verify_evidence_bundle(root: Path) -> VerifiedEvidenceBundle:
     _verify_completeness(report, canaries_by_id)
 
     if PRICING_FILENAME in manifest.files:
-        _verify_pricing(payload_buffers[PRICING_FILENAME], root, report)
+        _verify_pricing(payload_buffers[PRICING_FILENAME], Path("."), report)
 
     return VerifiedEvidenceBundle(
         manifest=manifest,
@@ -149,13 +175,15 @@ def _verify_inventory(names: tuple[str, ...], manifest: EvidenceManifest) -> Non
         raise EvidenceBundleError(EvidenceBundleReason.INVENTORY_MISMATCH, "files")
 
 
-def _verify_payload_hashes(root: Path, manifest: EvidenceManifest) -> dict[str, bytes]:
+def _verify_payload_hashes(
+    files: Mapping[str, bytes], manifest: EvidenceManifest
+) -> dict[str, bytes]:
     buffers: dict[str, bytes] = {}
     for name, record in manifest.files.items():
         max_bytes = FILE_MAX_BYTES.get(name)
         if max_bytes is None:
             raise EvidenceBundleError(EvidenceBundleReason.INVENTORY_MISMATCH, "files")
-        data = read_bounded_regular_file(root, name, max_bytes=max_bytes)
+        data = files[name]
         digest = hashlib.sha256(data).hexdigest()
         if digest != record.sha256 or len(data) != record.size_bytes:
             raise EvidenceBundleError(EvidenceBundleReason.DIGEST_MISMATCH, name)
@@ -242,10 +270,7 @@ def _verify_global_identities(
         manifest.baseline_identity.name != baseline_lock.agent.name
         or manifest.baseline_identity.version != baseline_lock.agent.version
         or manifest.baseline_identity.binary_sha256 != baseline_lock.agent.binary_sha256
-        or (
-            baseline_lock.agent.support_sha256 is not None
-            and manifest.baseline_identity.support_sha256 != baseline_lock.agent.support_sha256
-        )
+        or manifest.baseline_identity.support_sha256 != baseline_lock.agent.support_sha256
     ):
         raise EvidenceBundleError(EvidenceBundleReason.IDENTITY_MISMATCH, "baseline_identity")
 

@@ -71,3 +71,36 @@ def test_linux_host_runtime_rejects_container_image() -> None:
 
 def test_linux_host_runtime_allows_no_image() -> None:
     assert RuntimeSpec(execution="linux-host").image is None
+
+
+def test_paired_change_metadata_is_optional_for_legacy_canary(tmp_path: Path) -> None:
+    canary = CanarySpec.model_validate(valid_data(tmp_path))
+    assert canary.paired_change is None
+
+
+def test_paired_change_metadata_parses_material_dimensions_and_gap(tmp_path: Path) -> None:
+    data = valid_data(tmp_path)
+    data["paired_change"] = {
+        "material_dimensions": ["AGENT_BINARY", "AGENT_SUPPORT"],
+        "max_pair_gap_ms": 5000,
+    }
+    canary = CanarySpec.model_validate(data)
+    assert canary.paired_change is not None
+    assert canary.paired_change.material_dimensions == ("AGENT_BINARY", "AGENT_SUPPORT")
+    assert canary.paired_change.max_pair_gap_ms == 5000
+
+
+@pytest.mark.parametrize(
+    'paired_change',
+    [
+        {'material_dimensions': [], 'max_pair_gap_ms': 5000},
+        {'material_dimensions': ['AGENT_BINARY', 'AGENT_BINARY'], 'max_pair_gap_ms': 5000},
+        {'material_dimensions': ['UNKNOWN_DIMENSION'], 'max_pair_gap_ms': 5000},
+        {'material_dimensions': ['AGENT_BINARY'], 'max_pair_gap_ms': 0},
+    ],
+)
+def test_paired_change_metadata_rejects_invalid_values(tmp_path: Path, paired_change: dict[str, object]) -> None:
+    data = valid_data(tmp_path)
+    data['paired_change'] = paired_change
+    with pytest.raises(ValidationError):
+        CanarySpec.model_validate(data)
