@@ -494,8 +494,8 @@ class _PinnedTree:
         fd: int | None = None
         try:
             fd = os.open(path, os.O_RDONLY | directory | nofollow)
-            info = os.fstat(fd)
-            if not stat.S_ISDIR(info.st_mode):
+            posix_info = os.fstat(fd)
+            if not stat.S_ISDIR(posix_info.st_mode):
                 raise OSError(errno.ENOTDIR, "chain root is not a directory")
         except OSError as exc:
             if fd is not None:
