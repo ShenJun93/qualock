@@ -1,21 +1,41 @@
-"""First-bad/v1 preflight and isolated project-input snapshotting."""
+"""First-bad/v1 preflight, isolated project-input snapshotting, and edge execution."""
 
 from __future__ import annotations
 
 import os
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from qualock.agents.orchestration import orchestration_capabilities
 from qualock.agents.releases import StableReleaseCatalog, default_stable_release_catalog
-from qualock.baseline.io import assert_suite_fresh, read_baseline_lock
+from qualock.baseline.io import assert_suite_fresh, read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import BaselineLock, ModelPin
-from qualock.commands import CommandError, parse_agent_spec
+from qualock.commands import CommandError, execute_baseline, execute_check, parse_agent_spec
+from qualock.evidence.export import ExportedEvidenceBundle, export_evidence_bundle
 from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
+from qualock.protocols.first_bad.claims import derive_edge_summary
+from qualock.protocols.first_bad.models import FirstBadEdgeEvidenceV1, FirstBadEdgeSummaryV1
+from qualock.protocols.paired_change.models import AgentDependencyStateV1, ModelDeclarationV1
+from qualock.protocols.paired_change.verify import (
+    VerifiedPairedChangeV1,
+    verify_paired_change_details,
+)
+from qualock.qualification.models import QualificationResult
 
-__all__ = ["FirstBadPreflight", "first_bad_preflight"]
+__all__ = [
+    "FirstBadBaselineUnresolved",
+    "FirstBadExecutionDependencies",
+    "FirstBadPreflight",
+    "VerifiedFirstBadEdge",
+    "first_bad_preflight",
+]
+
+BaselineExecutor = Callable[[Path, str], BaselineLock]
+CheckExecutor = Callable[[Path, str], QualificationResult]
+EvidenceExporter = Callable[[Path, str, Path], ExportedEvidenceBundle]
 
 _STABLE_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
@@ -138,3 +158,101 @@ def _snapshot_project_inputs(root: Path, workspace: Path) -> None:
                 raise CommandError(f"refusing to snapshot symlinked path: {child}")
             relative = child.relative_to(source_canaries)
             _copy_regular_file(child, dest_canaries / relative)
+
+
+class FirstBadBaselineUnresolved(Exception):
+    """A carried edge's re-verified baseline diverges from the previous candidate."""
+
+
+@dataclass(frozen=True)
+class FirstBadExecutionDependencies:
+    baseline_executor: BaselineExecutor = execute_baseline
+    check_executor: CheckExecutor = execute_check
+    evidence_exporter: EvidenceExporter = export_evidence_bundle
+
+
+@dataclass(frozen=True)
+class VerifiedFirstBadEdge:
+    record: FirstBadEdgeEvidenceV1
+    summary: FirstBadEdgeSummaryV1
+    details: VerifiedPairedChangeV1
+
+
+def _agent_dependency_state_from_lock(lock: BaselineLock) -> AgentDependencyStateV1:
+    return AgentDependencyStateV1(
+        agent_name=lock.agent.name,
+        version=lock.agent.version,
+        binary_sha256=lock.agent.binary_sha256,
+        support_sha256=lock.agent.support_sha256,
+        model=ModelDeclarationV1(
+            id=lock.model.id,
+            snapshot=lock.model.snapshot,
+            reasoning_effort=lock.model.reasoning_effort,
+        ),
+    )
+
+
+def _execute_edge(
+    preflight: FirstBadPreflight,
+    index: int,
+    workspace: Path,
+    edge_dir: Path,
+    expected_baseline_state: AgentDependencyStateV1 | None,
+    deps: FirstBadExecutionDependencies,
+) -> VerifiedFirstBadEdge:
+    agent_name = preflight.agent_name
+    baseline_version = preflight.catalog[index]
+    candidate_version = preflight.catalog[index + 1]
+
+    if index == 0:
+        write_baseline_lock(project_dir(workspace) / "baseline.lock", preflight.baseline_lock)
+    else:
+        if expected_baseline_state is None:
+            raise FirstBadBaselineUnresolved(
+                f"edge[{index}] has no verified previous candidate identity to anchor against"
+            )
+        fresh_lock = deps.baseline_executor(workspace, f"{agent_name}@{baseline_version}")
+        actual_state = _agent_dependency_state_from_lock(fresh_lock)
+        if actual_state != expected_baseline_state:
+            raise FirstBadBaselineUnresolved(
+                f"edge[{index}] re-verified baseline identity does not match "
+                "the previous edge's candidate identity"
+            )
+
+    qualification_result = deps.check_executor(workspace, f"{agent_name}@{candidate_version}")
+
+    bundle_dest = edge_dir / "bundle"
+    exported = deps.evidence_exporter(
+        workspace, qualification_result.qualification_id, bundle_dest
+    )
+    if exported.protocol_path is None:
+        raise CommandError(
+            f"edge[{index}] export is missing a required paired-change protocol companion"
+        )
+
+    protocol_dest = edge_dir / "protocol"
+    os.replace(exported.protocol_path, protocol_dest)
+
+    details = verify_paired_change_details(bundle_dest, protocol_dest)
+
+    record = FirstBadEdgeEvidenceV1(
+        index=index,
+        baseline_version=details.evidence.baseline_state.version,
+        candidate_version=details.evidence.candidate_state.version,
+        baseline_runtime_identity=details.evidence.baseline_state,
+        candidate_runtime_identity=details.evidence.candidate_state,
+        bundle_manifest_sha256=details.bundle.manifest_sha256,
+        protocol_evidence_sha256=details.protocol_evidence_sha256,
+    )
+    if record.baseline_version != baseline_version or record.candidate_version != candidate_version:
+        raise CommandError(
+            f"edge[{index}] verified versions {record.baseline_version}->"
+            f"{record.candidate_version} do not match the frozen catalog edge "
+            f"{baseline_version}->{candidate_version}"
+        )
+
+    summary = derive_edge_summary(
+        index, record.baseline_version, record.candidate_version, details.receipt
+    )
+
+    return VerifiedFirstBadEdge(record=record, summary=summary, details=details)

@@ -2,21 +2,45 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 import qualock.protocols.first_bad.orchestrate as first_bad_orchestrate
-from qualock.baseline.io import write_baseline_lock
+from qualock.agents.support_integrity import agent_support_fingerprint
+from qualock.baseline.io import read_baseline_lock, write_baseline_lock
 from qualock.baseline.models import AgentPin, BaselineLock, ModelPin
-from qualock.commands import CommandError
+from qualock.commands import CommandError, execute_baseline, execute_check
 from qualock.config.models import AgentConfig, QualockConfig
-from qualock.project import config_fingerprint, load_project, suite_fingerprint
+from qualock.evidence.export import ExportedEvidenceBundle, export_evidence_bundle
+from qualock.project import config_fingerprint, load_project, project_dir, suite_fingerprint
+from qualock.protocols.first_bad.claims import derive_edge_classification
+from qualock.protocols.first_bad.models import EdgeClassification
 from qualock.protocols.first_bad.orchestrate import (
+    FirstBadBaselineUnresolved,
+    FirstBadExecutionDependencies,
     FirstBadPreflight,
+    VerifiedFirstBadEdge,
+    _agent_dependency_state_from_lock,
+    _execute_edge,
     _snapshot_project_inputs,
     first_bad_preflight,
 )
+from qualock.protocols.paired_change.models import (
+    AgentDependencyStateV1,
+    CanaryClaimV1,
+    ClaimClass,
+    ClaimReceiptV1,
+    ConditionStatus,
+    ConditionType,
+    ModelDeclarationV1,
+    ProtocolConditionV1,
+)
+from qualock.protocols.paired_change.verify import VerifiedPairedChangeV1
+from qualock.qualification.models import QualificationResult, Verdict
+from tests.integration.test_paired_change_e2e import DeterministicProtocolBackend
+from tests.unit.test_evidence_export import FakeResolver, _setup_project
 
 
 class FakeCatalog:
@@ -424,3 +448,595 @@ def test_snapshot_permits_read_only_real_baseline(tmp_path: Path) -> None:
     finally:
         baseline_path.chmod(0o644)
     assert baseline_path.read_bytes() == before
+
+
+# --- Task 7: verified adjacent edge execution ------------------------------
+
+
+def _state(
+    *,
+    agent_name: str = "codex",
+    version: str = "0.151.0",
+    binary_sha256: str = "a" * 64,
+    support_sha256: str | None = None,
+    model_id: str = "gpt-5",
+    snapshot: str | None = None,
+    reasoning_effort: str = "medium",
+) -> AgentDependencyStateV1:
+    return AgentDependencyStateV1(
+        agent_name=agent_name,
+        version=version,
+        binary_sha256=binary_sha256,
+        support_sha256=support_sha256,
+        model=ModelDeclarationV1(id=model_id, snapshot=snapshot, reasoning_effort=reasoning_effort),
+    )
+
+
+def _fake_receipt(
+    claims: tuple[ClaimClass, ...], qualification_id: str = "check-q"
+) -> ClaimReceiptV1:
+    condition = ProtocolConditionV1(
+        type=ConditionType.EVIDENCE_BOUND, status=ConditionStatus.TRUE, reason="ok"
+    )
+    canary_claims = tuple(
+        CanaryClaimV1(canary_id=f"canary-{i}", conditions=(condition,), claim=claim)
+        for i, claim in enumerate(claims)
+    )
+    return ClaimReceiptV1(
+        schema_version=1,
+        protocol_id="paired-change/v1",
+        protocol_digest="b" * 64,
+        qualification_id=qualification_id,
+        evidence_manifest_sha256="c" * 64,
+        protocol_evidence_sha256="d" * 64,
+        baseline_state_sha256="e" * 64,
+        candidate_state_sha256="f" * 64,
+        changeset_sha256="1" * 64,
+        qualification_conditions=(condition,),
+        canary_claims=canary_claims,
+        verifier_name="qualock",
+        verifier_version="0.1.1",
+    )
+
+
+def _fake_details(
+    *,
+    baseline_state: AgentDependencyStateV1,
+    candidate_state: AgentDependencyStateV1,
+    claims: tuple[ClaimClass, ...] = (ClaimClass.NO_REGRESSION_OBSERVED,),
+    qualification_id: str = "check-q",
+) -> VerifiedPairedChangeV1:
+    receipt = _fake_receipt(claims, qualification_id=qualification_id)
+    return VerifiedPairedChangeV1(
+        bundle=SimpleNamespace(manifest_sha256="2" * 64),
+        evidence=SimpleNamespace(baseline_state=baseline_state, candidate_state=candidate_state),
+        receipt=receipt,
+        protocol_evidence_sha256="3" * 64,
+    )
+
+
+def _edge_preflight(
+    *,
+    agent_name: str = "codex",
+    baseline_version: str = "0.150.0",
+    catalog: tuple[str, ...] = ("0.150.0", "0.151.0", "0.152.0"),
+) -> FirstBadPreflight:
+    lock = baseline_lock(agent=agent_name, version=baseline_version)
+    return FirstBadPreflight(
+        agent_name=agent_name,
+        baseline_lock=lock,
+        upper_version=catalog[-1],
+        catalog=catalog,
+        suite_sha256=lock.suite_sha256,
+        config_sha256=lock.config_sha256,
+        model_pin=lock.model,
+    )
+
+
+def _qualification_result(
+    *,
+    qualification_id: str = "check-q",
+    baseline_version: str = "0.150.0",
+    candidate_version: str = "0.151.0",
+    verdict: Verdict = Verdict.PASS,
+) -> QualificationResult:
+    return QualificationResult(
+        qualification_id=qualification_id,
+        baseline_version=baseline_version,
+        candidate_version=candidate_version,
+        verdict=verdict,
+        executions=(),
+        reasons=(),
+        run_order=(),
+    )
+
+
+class _RecordingBaselineExecutor:
+    def __init__(self, lock: BaselineLock) -> None:
+        self.calls: list[tuple[Path, str]] = []
+        self.lock = lock
+
+    def __call__(self, workspace: Path, spec: str) -> BaselineLock:
+        self.calls.append((workspace, spec))
+        return self.lock
+
+
+class _PoisonBaselineExecutor:
+    def __call__(self, workspace: Path, spec: str) -> BaselineLock:
+        raise AssertionError("baseline_executor must not be called for the first edge")
+
+
+class _RecordingCheckExecutor:
+    def __init__(self, result: QualificationResult) -> None:
+        self.calls: list[tuple[Path, str]] = []
+        self.result = result
+
+    def __call__(self, workspace: Path, spec: str) -> QualificationResult:
+        self.calls.append((workspace, spec))
+        return self.result
+
+
+class _RecordingEvidenceExporter:
+    def __init__(self, exported: ExportedEvidenceBundle, *, create_dirs: bool = True) -> None:
+        self.calls: list[tuple[Path, str, Path]] = []
+        self.exported = exported
+        self.create_dirs = create_dirs
+
+    def __call__(
+        self, workspace: Path, qualification_id: str, destination: Path
+    ) -> ExportedEvidenceBundle:
+        self.calls.append((workspace, qualification_id, destination))
+        if self.create_dirs:
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "marker.txt").write_text("bundle", encoding="utf-8")
+            if self.exported.protocol_path is not None:
+                self.exported.protocol_path.mkdir(parents=True, exist_ok=True)
+                (self.exported.protocol_path / "marker.txt").write_text(
+                    "protocol", encoding="utf-8"
+                )
+        return self.exported
+
+
+def test_first_edge_writes_trusted_lock_and_never_calls_baseline_executor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    edge_dir = tmp_path / "edge-000"
+    preflight = _edge_preflight()
+    baseline_state = _agent_dependency_state_from_lock(preflight.baseline_lock)
+    candidate_state = _state(version="0.151.0")
+
+    check = _RecordingCheckExecutor(
+        _qualification_result(qualification_id="check-q", candidate_version="0.151.0")
+    )
+    exported = ExportedEvidenceBundle(
+        path=edge_dir / "bundle",
+        qualification_id="check-q",
+        manifest_sha256="2" * 64,
+        protocol_path=tmp_path / "owned-protocol",
+    )
+    exporter = _RecordingEvidenceExporter(exported)
+    details = _fake_details(baseline_state=baseline_state, candidate_state=candidate_state)
+    monkeypatch.setattr(
+        first_bad_orchestrate, "verify_paired_change_details", lambda b, p: details
+    )
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_PoisonBaselineExecutor(),
+        check_executor=check,
+        evidence_exporter=exporter,
+    )
+
+    edge = _execute_edge(preflight, 0, workspace, edge_dir, None, deps)
+
+    assert check.calls == [(workspace, "codex@0.151.0")]
+    assert exporter.calls == [(workspace, "check-q", edge_dir / "bundle")]
+    written = read_baseline_lock(project_dir(workspace) / "baseline.lock")
+    assert written == preflight.baseline_lock
+    assert isinstance(edge, VerifiedFirstBadEdge)
+    assert edge.record.baseline_version == "0.150.0"
+    assert edge.record.candidate_version == "0.151.0"
+
+
+def test_later_edge_without_expected_state_raises_before_baseline_executor(
+    tmp_path: Path,
+) -> None:
+    preflight = _edge_preflight()
+    baseline_exec = _RecordingBaselineExecutor(preflight.baseline_lock)
+    deps = FirstBadExecutionDependencies(baseline_executor=baseline_exec)
+
+    with pytest.raises(FirstBadBaselineUnresolved):
+        _execute_edge(preflight, 1, tmp_path / "workspace", tmp_path / "edge-001", None, deps)
+
+    assert baseline_exec.calls == []
+
+
+def test_later_edge_baseline_mismatch_raises_before_check_or_export(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    edge_dir = tmp_path / "edge-001"
+    preflight = _edge_preflight()
+    expected_candidate = _state(version="0.151.0", binary_sha256="b" * 64)
+    mismatched_lock = BaselineLock(
+        schema_version=1,
+        created_at="2026-09-02T00:00:00+00:00",
+        agent=AgentPin(name="codex", version="0.151.0", binary_sha256="c" * 64),
+        model=ModelPin(id="gpt-5", snapshot=None, reasoning_effort="medium"),
+        qualock_version="0.1.1",
+        suite_sha256="b" * 64,
+        config_sha256="c" * 64,
+        canaries={},
+    )
+    baseline_exec = _RecordingBaselineExecutor(mismatched_lock)
+    check_exec = _RecordingCheckExecutor(_qualification_result())
+    exporter = _RecordingEvidenceExporter(
+        ExportedEvidenceBundle(
+            path=edge_dir / "bundle",
+            qualification_id="check-q",
+            manifest_sha256="2" * 64,
+            protocol_path=None,
+        ),
+        create_dirs=False,
+    )
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=baseline_exec, check_executor=check_exec, evidence_exporter=exporter
+    )
+
+    with pytest.raises(FirstBadBaselineUnresolved):
+        _execute_edge(preflight, 1, workspace, edge_dir, expected_candidate, deps)
+
+    assert baseline_exec.calls == [(workspace, "codex@0.151.0")]
+    assert check_exec.calls == []
+    assert exporter.calls == []
+
+
+def test_later_edge_baseline_match_proceeds_to_check_and_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    edge_dir = tmp_path / "edge-001"
+    preflight = _edge_preflight()
+    expected_candidate = _state(version="0.151.0")
+    matching_lock = BaselineLock(
+        schema_version=1,
+        created_at="2026-09-02T00:00:00+00:00",
+        agent=AgentPin(name="codex", version="0.151.0", binary_sha256="a" * 64),
+        model=ModelPin(id="gpt-5", snapshot=None, reasoning_effort="medium"),
+        qualock_version="0.1.1",
+        suite_sha256="b" * 64,
+        config_sha256="c" * 64,
+        canaries={},
+    )
+    assert _agent_dependency_state_from_lock(matching_lock) == expected_candidate
+
+    baseline_exec = _RecordingBaselineExecutor(matching_lock)
+    check_exec = _RecordingCheckExecutor(
+        _qualification_result(
+            qualification_id="check-q2", baseline_version="0.151.0", candidate_version="0.152.0"
+        )
+    )
+    exported = ExportedEvidenceBundle(
+        path=edge_dir / "bundle",
+        qualification_id="check-q2",
+        manifest_sha256="2" * 64,
+        protocol_path=tmp_path / "owned-protocol-2",
+    )
+    exporter = _RecordingEvidenceExporter(exported)
+    details = _fake_details(
+        baseline_state=expected_candidate, candidate_state=_state(version="0.152.0")
+    )
+    monkeypatch.setattr(
+        first_bad_orchestrate, "verify_paired_change_details", lambda b, p: details
+    )
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=baseline_exec, check_executor=check_exec, evidence_exporter=exporter
+    )
+
+    edge = _execute_edge(preflight, 1, workspace, edge_dir, expected_candidate, deps)
+
+    assert baseline_exec.calls == [(workspace, "codex@0.151.0")]
+    assert check_exec.calls == [(workspace, "codex@0.152.0")]
+    assert edge.record.baseline_version == "0.151.0"
+    assert edge.record.candidate_version == "0.152.0"
+
+
+def test_export_normalizes_protocol_companion_and_final_inventory_is_bundle_and_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    edge_dir = tmp_path / "edge-000"
+    preflight = _edge_preflight()
+    baseline_state = _agent_dependency_state_from_lock(preflight.baseline_lock)
+    candidate_state = _state(version="0.151.0")
+    protocol_src = tmp_path / "owned-companion"
+    exported = ExportedEvidenceBundle(
+        path=edge_dir / "bundle",
+        qualification_id="check-q",
+        manifest_sha256="2" * 64,
+        protocol_path=protocol_src,
+    )
+    exporter = _RecordingEvidenceExporter(exported)
+    check = _RecordingCheckExecutor(_qualification_result())
+    details = _fake_details(baseline_state=baseline_state, candidate_state=candidate_state)
+    captured: dict[str, Path] = {}
+
+    def fake_verify(bundle_path: Path, protocol_path: Path) -> VerifiedPairedChangeV1:
+        captured["bundle"] = bundle_path
+        captured["protocol"] = protocol_path
+        assert bundle_path.exists()
+        assert protocol_path.exists()
+        return details
+
+    monkeypatch.setattr(first_bad_orchestrate, "verify_paired_change_details", fake_verify)
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_PoisonBaselineExecutor(),
+        check_executor=check,
+        evidence_exporter=exporter,
+    )
+
+    _execute_edge(preflight, 0, workspace, edge_dir, None, deps)
+
+    assert captured["bundle"] == edge_dir / "bundle"
+    assert captured["protocol"] == edge_dir / "protocol"
+    assert not protocol_src.exists()
+    assert sorted(p.name for p in edge_dir.iterdir()) == ["bundle", "protocol"]
+
+
+def test_missing_protocol_companion_raises_before_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    edge_dir = tmp_path / "edge-000"
+    preflight = _edge_preflight()
+    exported = ExportedEvidenceBundle(
+        path=edge_dir / "bundle",
+        qualification_id="check-q",
+        manifest_sha256="2" * 64,
+        protocol_path=None,
+    )
+    exporter = _RecordingEvidenceExporter(exported)
+    check = _RecordingCheckExecutor(_qualification_result())
+    called: list[bool] = []
+    monkeypatch.setattr(
+        first_bad_orchestrate,
+        "verify_paired_change_details",
+        lambda b, p: called.append(True),
+    )
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_PoisonBaselineExecutor(),
+        check_executor=check,
+        evidence_exporter=exporter,
+    )
+
+    with pytest.raises(CommandError):
+        _execute_edge(preflight, 0, workspace, edge_dir, None, deps)
+
+    assert called == []
+
+
+def test_edge_record_version_mismatch_against_frozen_catalog_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    edge_dir = tmp_path / "edge-000"
+    preflight = _edge_preflight(catalog=("0.150.0", "0.151.0", "0.152.0"))
+    exported = ExportedEvidenceBundle(
+        path=edge_dir / "bundle",
+        qualification_id="check-q",
+        manifest_sha256="2" * 64,
+        protocol_path=tmp_path / "owned-protocol",
+    )
+    exporter = _RecordingEvidenceExporter(exported)
+    check = _RecordingCheckExecutor(_qualification_result())
+    wrong_candidate_state = _state(version="9.9.9")
+    details = _fake_details(
+        baseline_state=_agent_dependency_state_from_lock(preflight.baseline_lock),
+        candidate_state=wrong_candidate_state,
+    )
+    monkeypatch.setattr(
+        first_bad_orchestrate, "verify_paired_change_details", lambda b, p: details
+    )
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_PoisonBaselineExecutor(),
+        check_executor=check,
+        evidence_exporter=exporter,
+    )
+
+    with pytest.raises(CommandError):
+        _execute_edge(preflight, 0, workspace, edge_dir, None, deps)
+
+
+@pytest.mark.parametrize(
+    "claims,verdict,expected",
+    [
+        (
+            (ClaimClass.NO_REGRESSION_OBSERVED, ClaimClass.NO_REGRESSION_OBSERVED),
+            Verdict.BLOCK,
+            EdgeClassification.NO_REGRESSION_OBSERVED,
+        ),
+        (
+            (ClaimClass.ATTRIBUTABLE_CHANGESET, ClaimClass.NO_REGRESSION_OBSERVED),
+            Verdict.PASS,
+            EdgeClassification.ATTRIBUTABLE_CHANGESET,
+        ),
+        (
+            (ClaimClass.UNRESOLVED, ClaimClass.NO_REGRESSION_OBSERVED),
+            Verdict.PASS,
+            EdgeClassification.UNRESOLVED,
+        ),
+    ],
+    ids=["no-regression", "attributable", "unresolved"],
+)
+def test_edge_classification_driven_by_canary_claims_not_suite_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    claims: tuple[ClaimClass, ...],
+    verdict: Verdict,
+    expected: EdgeClassification,
+) -> None:
+    workspace = tmp_path / "workspace"
+    edge_dir = tmp_path / "edge-000"
+    preflight = _edge_preflight()
+    baseline_state = _agent_dependency_state_from_lock(preflight.baseline_lock)
+    candidate_state = _state(version="0.151.0")
+    exported = ExportedEvidenceBundle(
+        path=edge_dir / "bundle",
+        qualification_id="check-q",
+        manifest_sha256="2" * 64,
+        protocol_path=tmp_path / "owned-protocol",
+    )
+    exporter = _RecordingEvidenceExporter(exported)
+    check = _RecordingCheckExecutor(_qualification_result(verdict=verdict))
+    details = _fake_details(
+        baseline_state=baseline_state, candidate_state=candidate_state, claims=claims
+    )
+    monkeypatch.setattr(
+        first_bad_orchestrate, "verify_paired_change_details", lambda b, p: details
+    )
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=_PoisonBaselineExecutor(),
+        check_executor=check,
+        evidence_exporter=exporter,
+    )
+
+    edge = _execute_edge(preflight, 0, workspace, edge_dir, None, deps)
+
+    assert edge.summary.classification is expected
+    assert edge.summary.classification == derive_edge_classification(claims)
+
+
+def _write_paired_change_project(root: Path) -> None:
+    _setup_project(root)
+    canary_path = root / ".qualock/canaries/sample.yaml"
+    canary = yaml.safe_load(canary_path.read_text(encoding="utf-8"))
+    canary["paired_change"] = {
+        "material_dimensions": ["AGENT_BINARY"],
+        "max_pair_gap_ms": 5000,
+    }
+    canary_path.write_text(yaml.safe_dump(canary, sort_keys=False), encoding="utf-8")
+
+
+def test_execute_edge_full_lifecycle_derives_record_from_recomputed_details(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    _write_paired_change_project(root)
+    resolver = FakeResolver(with_support_binary=True)
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0"})
+
+    config, canaries = load_project(root)
+    trusted_binary = resolver.resolve("0.150.0")
+    real_lock = BaselineLock(
+        schema_version=1,
+        created_at="2026-09-02T00:00:00+00:00",
+        agent=AgentPin(
+            name="codex",
+            version="0.150.0",
+            binary_sha256=trusted_binary.sha256,
+            support_sha256=agent_support_fingerprint(trusted_binary),
+        ),
+        model=ModelPin(
+            id=config.model.effective_model,
+            snapshot=None,
+            reasoning_effort=config.model.reasoning_effort,
+        ),
+        qualock_version="0.1.1",
+        suite_sha256=suite_fingerprint(canaries),
+        config_sha256=config_fingerprint(config),
+        canaries={},
+    )
+    resolver.calls.clear()
+    real_baseline_path = project_dir(root) / "baseline.lock"
+    write_baseline_lock(real_baseline_path, real_lock)
+    before = real_baseline_path.read_bytes()
+
+    catalog = FakeCatalog(("0.150.0", "0.151.0"))
+    preflight = first_bad_preflight(root, "codex@0.151.0", catalog=catalog)
+
+    workspace = tmp_path / "workspace"
+    _snapshot_project_inputs(root, workspace)
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=lambda ws, spec: execute_baseline(
+            ws, spec, resolver=resolver, backend=backend, qualification_id="edge-base"
+        ),
+        check_executor=lambda ws, spec: execute_check(
+            ws, spec, resolver=resolver, backend=backend, qualification_id="edge-check"
+        ),
+        evidence_exporter=export_evidence_bundle,
+    )
+
+    edge_dir = tmp_path / "edge-000"
+    edge = _execute_edge(preflight, 0, workspace, edge_dir, None, deps)
+
+    assert edge.record.index == 0
+    assert edge.record.baseline_version == "0.150.0"
+    assert edge.record.candidate_version == "0.151.0"
+    assert edge.record.bundle_manifest_sha256 == edge.details.bundle.manifest_sha256
+    assert edge.record.protocol_evidence_sha256 == edge.details.protocol_evidence_sha256
+    assert edge.summary.index == 0
+    assert edge.summary.classification is EdgeClassification.NO_REGRESSION_OBSERVED
+    assert sorted(p.name for p in edge_dir.iterdir()) == ["bundle", "protocol"]
+    assert real_baseline_path.read_bytes() == before
+
+
+def test_two_edge_chain_continuity_with_real_executors(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    _write_paired_change_project(root)
+    resolver = FakeResolver(with_support_binary=True)
+    backend = DeterministicProtocolBackend(success_versions={"0.150.0", "0.151.0", "0.152.0"})
+
+    config, canaries = load_project(root)
+    trusted_binary = resolver.resolve("0.150.0")
+    real_lock = BaselineLock(
+        schema_version=1,
+        created_at="2026-09-02T00:00:00+00:00",
+        agent=AgentPin(
+            name="codex",
+            version="0.150.0",
+            binary_sha256=trusted_binary.sha256,
+            support_sha256=agent_support_fingerprint(trusted_binary),
+        ),
+        model=ModelPin(
+            id=config.model.effective_model,
+            snapshot=None,
+            reasoning_effort=config.model.reasoning_effort,
+        ),
+        qualock_version="0.1.1",
+        suite_sha256=suite_fingerprint(canaries),
+        config_sha256=config_fingerprint(config),
+        canaries={},
+    )
+    resolver.calls.clear()
+    write_baseline_lock(project_dir(root) / "baseline.lock", real_lock)
+
+    catalog = FakeCatalog(("0.150.0", "0.151.0", "0.152.0"))
+    preflight = first_bad_preflight(root, "codex@0.152.0", catalog=catalog)
+
+    workspace = tmp_path / "workspace"
+    _snapshot_project_inputs(root, workspace)
+
+    deps = FirstBadExecutionDependencies(
+        baseline_executor=lambda ws, spec: execute_baseline(
+            ws, spec, resolver=resolver, backend=backend, qualification_id=f"edge-base-{spec}"
+        ),
+        check_executor=lambda ws, spec: execute_check(
+            ws, spec, resolver=resolver, backend=backend, qualification_id=f"edge-check-{spec}"
+        ),
+        evidence_exporter=export_evidence_bundle,
+    )
+
+    edge0 = _execute_edge(preflight, 0, workspace, tmp_path / "edge-000", None, deps)
+    expected = edge0.record.candidate_runtime_identity
+    edge1 = _execute_edge(preflight, 1, workspace, tmp_path / "edge-001", expected, deps)
+
+    assert edge1.record.baseline_version == "0.151.0"
+    assert edge1.record.candidate_version == "0.152.0"
+    assert edge1.summary.classification is EdgeClassification.NO_REGRESSION_OBSERVED
