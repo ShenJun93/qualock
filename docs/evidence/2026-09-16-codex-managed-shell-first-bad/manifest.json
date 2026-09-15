@@ -1,0 +1,47 @@
+{
+  "case": "codex-managed-shell-first-bad",
+  "date": "2026-09-16",
+  "model": "gpt-5.5",
+  "repetitions": 3,
+  "request_count": 12,
+  "network": "default reproduction uses a loopback-bound local mock; probe containers reach it via host.docker.internal; no authenticated provider",
+  "container_image": "alpine:3.23",
+  "container_image_id": "sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
+  "requirements_sha256": "965953f087e82c0c11d245f12010eae0a949dc006213a8c44a12e884df665ef6",
+  "requirements": {
+    "shell_tool": true,
+    "unified_exec": false
+  },
+  "versions": {
+    "0.149.1": {
+      "classification": "GOOD",
+      "command_tool": "shell_command",
+      "codex_sha256": "73dc5888888f411c1f0fa7b81d866e721dcc86b527ce8e3b2cf4708661e823ba",
+      "support_sha256": "48f3a0d48033039cc7caccd209edb0ee350b81f82ca851a7b129e146e4bec6fb"
+    },
+    "0.150.0": {
+      "classification": "FIRST_BAD",
+      "command_tool": null,
+      "codex_sha256": "f0222a59e7d06f7b97014fb672731285b453b945fc0f0aab36c89278dec36e14",
+      "support_sha256": "99a19eeb8e7f8d15f19a6ed05d9a5b92ecdbcdffa986aac8b569b066aac81e60"
+    },
+    "0.150.1": {
+      "classification": "BAD",
+      "command_tool": null,
+      "codex_sha256": "abf1bb1643a79f73aa78ee627e111e02d4f8c98f25813a0cf6ce277709664386",
+      "support_sha256": "b3d633427c8c75057fba11dad6051714d44886440305e86ba9d2c0366f4dd63b"
+    },
+    "0.151.0": {
+      "classification": "FIXED",
+      "command_tool": "exec_command",
+      "codex_sha256": "9739cbc928b9c573be83256acd46668f5dd4f119d2d09e05246895ca2aaf0c9a",
+      "support_sha256": "a9adcea47799d8caaec5fbf073966fef2869f754bc7b463e30783880dfb12913"
+    }
+  },
+  "provenance": "provenance.json",
+  "upstream_attribution": "upstream-attribution.md",
+  "source_issue": "openai/codex#41099",
+  "fix_context": "openai/codex#41393",
+  "claim_scope": "local deterministic request-shape/tool-registration regression under frozen managed requirements",
+  "repo_mutated": false
+}

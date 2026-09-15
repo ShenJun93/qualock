@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "request_gate": {"records": 12, "unique_paths": 12, "pass": true},
+  "vector_gate": {
+    "0.149.1": ["shell_command", "shell_command", "shell_command"],
+    "0.150.0": [null, null, null],
+    "0.150.1": [null, null, null],
+    "0.151.0": ["exec_command", "exec_command", "exec_command"],
+    "pass": true
+  },
+  "binary_hash_gate": {"versions_checked": 4, "binary_and_support_pairs": 4, "pass": true},
+  "npm_provenance_gate": {"tarball_integrity": "4/4", "main_binary_match": "4/4", "support_binary_match": "4/4", "pass": true},
+  "requirements_hash_gate": {"sha256": "965953f087e82c0c11d245f12010eae0a949dc006213a8c44a12e884df665ef6", "pass": true},
+  "run_log_gate": {"invocations": 12, "unique_rep_version_pairs": 12, "expected_mock_exit_1": 12, "pass": true},
+  "upstream_attribution_gate": {"symptom_issue": "openai/codex#41099", "fix_pr": "openai/codex#41393", "claim_boundary_recorded": true, "pass": true},
+  "first_bad": "0.150.0",
+  "recovery": "0.151.0"
+}

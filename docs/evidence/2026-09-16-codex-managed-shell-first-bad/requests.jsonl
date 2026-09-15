@@ -1,0 +1,12 @@
+{"path":"/rep1/0.149.1/v1/responses","model":"gpt-5.5","tools":["shell_command","update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep1/0.150.0/v1/responses","model":"gpt-5.5","tools":["update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep1/0.150.1/v1/responses","model":"gpt-5.5","tools":["update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep1/0.151.0/v1/responses","model":"gpt-5.5","tools":["exec_command","update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep2/0.149.1/v1/responses","model":"gpt-5.5","tools":["shell_command","update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep2/0.150.0/v1/responses","model":"gpt-5.5","tools":["update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep2/0.150.1/v1/responses","model":"gpt-5.5","tools":["update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep2/0.151.0/v1/responses","model":"gpt-5.5","tools":["exec_command","update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep3/0.149.1/v1/responses","model":"gpt-5.5","tools":["shell_command","update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep3/0.150.0/v1/responses","model":"gpt-5.5","tools":["update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep3/0.150.1/v1/responses","model":"gpt-5.5","tools":["update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}
+{"path":"/rep3/0.151.0/v1/responses","model":"gpt-5.5","tools":["exec_command","update_plan","request_user_input","apply_patch","view_image","tool_search","web_search"]}

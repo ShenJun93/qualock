@@ -1,0 +1,57 @@
+{
+  "method": "package-lock npm integrity -> cached tarball -> extracted linux-x64 binaries -> probed cache binaries",
+  "versions": [
+    {
+      "version": "0.149.1",
+      "package_version": "0.149.1-linux-x64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.149.1-linux-x64.tgz",
+      "integrity": "sha512-Of5fGYgr7tAMsyj6vhXb4/RM/UoA3Zq8BLegUBDC09UNy1XTLGYP/2XD+UX8z3qh0NDwxYdCjFIWdDNijKZggQ==",
+      "cached_tarball_sha512": "39fe5f19882beed00cb328fabe15dbe3f44cfd4a00dd9abc04b7a05010c2d3d50dcb55d32c660fff65c3f945fccf7aa1d0d0f0c587428c52167433628ca66081",
+      "extracted_codex_sha256": "73dc5888888f411c1f0fa7b81d866e721dcc86b527ce8e3b2cf4708661e823ba",
+      "probed_codex_sha256": "73dc5888888f411c1f0fa7b81d866e721dcc86b527ce8e3b2cf4708661e823ba",
+      "extracted_support_sha256": "48f3a0d48033039cc7caccd209edb0ee350b81f82ca851a7b129e146e4bec6fb",
+      "probed_support_sha256": "48f3a0d48033039cc7caccd209edb0ee350b81f82ca851a7b129e146e4bec6fb",
+      "codex_match": true,
+      "support_match": true
+    },
+    {
+      "version": "0.150.0",
+      "package_version": "0.150.0-linux-x64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.150.0-linux-x64.tgz",
+      "integrity": "sha512-yWkFNr2ztdDHWHjY2SXQ3uWKzpE2aZ5HlDRMZ7PpMUP8LB9Wd6ZWyxWELAgDLucVWa4OYwHv5fJYzHSlEQtjHg==",
+      "cached_tarball_sha512": "c9690536bdb3b5d0c75878d8d925d0dee58ace9136699e4794344c67b3e93143fc2c1f5677a656cb15842c08032ee71559ae0e6301efe5f258cc74a5110b631e",
+      "extracted_codex_sha256": "f0222a59e7d06f7b97014fb672731285b453b945fc0f0aab36c89278dec36e14",
+      "probed_codex_sha256": "f0222a59e7d06f7b97014fb672731285b453b945fc0f0aab36c89278dec36e14",
+      "extracted_support_sha256": "99a19eeb8e7f8d15f19a6ed05d9a5b92ecdbcdffa986aac8b569b066aac81e60",
+      "probed_support_sha256": "99a19eeb8e7f8d15f19a6ed05d9a5b92ecdbcdffa986aac8b569b066aac81e60",
+      "codex_match": true,
+      "support_match": true
+    },
+    {
+      "version": "0.150.1",
+      "package_version": "0.150.1-linux-x64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.150.1-linux-x64.tgz",
+      "integrity": "sha512-B3Bu5MF/G9qFhbSMrdyZz9ocknXOo45DnOdWrREJaxWTjiuUO1ogoDR0/ttdc29JRFkbbXs3aC+Td8vIx3X0oA==",
+      "cached_tarball_sha512": "07706ee4c17f1bda8585b48caddc99cfda1c9275cea38e439ce756ad11096b15938e2b943b5a20a03474fedb5d736f4944591b6d7b37682f9377cbc8c775f4a0",
+      "extracted_codex_sha256": "abf1bb1643a79f73aa78ee627e111e02d4f8c98f25813a0cf6ce277709664386",
+      "probed_codex_sha256": "abf1bb1643a79f73aa78ee627e111e02d4f8c98f25813a0cf6ce277709664386",
+      "extracted_support_sha256": "b3d633427c8c75057fba11dad6051714d44886440305e86ba9d2c0366f4dd63b",
+      "probed_support_sha256": "b3d633427c8c75057fba11dad6051714d44886440305e86ba9d2c0366f4dd63b",
+      "codex_match": true,
+      "support_match": true
+    },
+    {
+      "version": "0.151.0",
+      "package_version": "0.151.0-linux-x64",
+      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.151.0-linux-x64.tgz",
+      "integrity": "sha512-xcVyY1FtwvVYhh2JBmz8fX8CQqFAxO/lxJ2IXsh8x5uwxZVHVl5fZHFHf8JdRaOGG0vpkYmu/DKKVoLd56/DDQ==",
+      "cached_tarball_sha512": "c5c57263516dc2f558861d89066cfc7d7f0242a140c4efe5c49d885ec87cc79bb0c59547565e5f6471477fc25d45a3861b4be99189aefc328a5682dde7afc30d",
+      "extracted_codex_sha256": "9739cbc928b9c573be83256acd46668f5dd4f119d2d09e05246895ca2aaf0c9a",
+      "probed_codex_sha256": "9739cbc928b9c573be83256acd46668f5dd4f119d2d09e05246895ca2aaf0c9a",
+      "extracted_support_sha256": "a9adcea47799d8caaec5fbf073966fef2869f754bc7b463e30783880dfb12913",
+      "probed_support_sha256": "a9adcea47799d8caaec5fbf073966fef2869f754bc7b463e30783880dfb12913",
+      "codex_match": true,
+      "support_match": true
+    }
+  ]
+}
