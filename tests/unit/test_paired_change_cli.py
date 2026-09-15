@@ -1,5 +1,6 @@
 """CLI contract for offline paired-change claim verification."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -14,13 +15,20 @@ from qualock.protocols.paired_change.models import ClaimClass
 from tests.unit.test_paired_change_io import _claim_receipt
 
 runner = CliRunner()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
-def test_verify_claim_help_exposes_protocol_and_write_flag() -> None:
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
+def test_verify_claim_help_exposes_protocol_and_write_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FORCE_COLOR", "1")
     result = runner.invoke(app, ["evidence", "verify-claim", "--help"])
     assert result.exit_code == 0
-    assert "--protocol" in result.stdout
-    assert "--write-receipt" in result.stdout
+    stdout = _strip_ansi(result.stdout)
+    assert "--protocol" in stdout
+    assert "--write-receipt" in stdout
 
 
 def test_verify_claim_requires_bundle_and_protocol(tmp_path: Path) -> None:
