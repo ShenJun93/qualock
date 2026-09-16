@@ -129,6 +129,38 @@ def test_suite_fingerprint_hashes_sorted_full_canary_payloads_not_a_digest_list(
     assert suite_fingerprint([two, one]) != digest_list_hash
 
 
+def test_coverage_metadata_does_not_change_legacy_canary_or_suite_fingerprint(
+    tmp_path: Path,
+) -> None:
+    left = tmp_path / "legacy"
+    right = tmp_path / "covered"
+    left.mkdir()
+    right.mkdir()
+    legacy = make_canary(left, "same")
+    covered = make_canary(
+        right,
+        "same",
+        coverage=[
+            {
+                "contract_id": "command.execution",
+                "context_requirements": {"execution.mode": "container"},
+            }
+        ],
+    )
+
+    expected_legacy_payload = legacy.model_dump(mode="json", exclude={"paired_change", "coverage"})
+    grader = dict(expected_legacy_payload["grader"])
+    grader.pop("patch", None)
+    grader["patch_sha256"] = hashlib.sha256(legacy.grader.patch.read_bytes()).hexdigest()
+    expected_legacy_payload["grader"] = grader
+    expected_legacy = sha256_canonical(expected_legacy_payload)
+
+    assert canary_fingerprint(legacy) == expected_legacy
+    assert canary_fingerprint(covered) == expected_legacy
+    assert canary_fingerprint(legacy) == canary_fingerprint(covered)
+    assert suite_fingerprint([legacy]) == suite_fingerprint([covered])
+
+
 def test_paired_change_metadata_does_not_change_legacy_canary_or_suite_fingerprint(tmp_path: Path) -> None:
     left_dir = tmp_path / 'left-paired'
     right_dir = tmp_path / 'right-paired'

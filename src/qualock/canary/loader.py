@@ -4,6 +4,13 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
+from qualock.change_targeting.yaml_strict import (
+    StrictYamlError,
+    compose_document,
+    detect_root_coverage_declaration,
+    validate_node_graph,
+)
+
 from .models import CanarySpec
 
 
@@ -11,11 +18,37 @@ class CanaryLoadError(ValueError):
     pass
 
 
+def _check_coverage_strictness(path: Path, text: str) -> None:
+    try:
+        root = compose_document(text)
+        if root is None:
+            return
+        detection = detect_root_coverage_declaration(root)
+        if detection.literal_count > 1:
+            raise StrictYamlError("top-level 'coverage' key is declared more than once")
+        if detection.literal_count == 1:
+            validate_node_graph(root)
+        elif detection.merge_reachable:
+            raise StrictYamlError(
+                "'coverage' is only reachable via a yaml merge; coverage metadata "
+                "must be an explicit literal root field"
+            )
+    except StrictYamlError as exc:
+        raise CanaryLoadError(f"invalid canary {path}: {exc}") from exc
+
+
 def load_canary(path: Path) -> CanarySpec:
     path = path.resolve()
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CanaryLoadError(f"failed to load canary {path}: {exc}") from exc
+
+    _check_coverage_strictness(path, text)
+
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
         raise CanaryLoadError(f"failed to load canary {path}: {exc}") from exc
     if not isinstance(raw, dict):
         raise CanaryLoadError(f"canary {path} must contain a YAML mapping")
