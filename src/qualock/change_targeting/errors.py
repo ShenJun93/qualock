@@ -1,0 +1,2 @@
+class ChangeTargetingInputError(ValueError):
+    pass
