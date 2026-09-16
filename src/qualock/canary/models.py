@@ -1,7 +1,10 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from qualock.change_targeting.contracts import validate_contract_id
+from qualock.change_targeting.models import ScalarValue
 
 MaterialDimensionName = Literal[
     "AGENT_BINARY",
@@ -58,6 +61,28 @@ class PairedChangeCanarySpec(BaseModel):
         return self
 
 
+class CanaryCoverageSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_id: str
+    context_requirements: dict[str, ScalarValue] = Field(default_factory=dict)
+
+    @field_validator("contract_id")
+    @classmethod
+    def validate_contract(cls, value: str) -> str:
+        return validate_contract_id(value)
+
+    @field_validator("context_requirements")
+    @classmethod
+    def validate_context_requirements(
+        cls, value: dict[str, ScalarValue]
+    ) -> dict[str, ScalarValue]:
+        for key in value:
+            if key == "":
+                raise ValueError("context_requirements keys must be non-empty strings")
+        return value
+
+
 class CanarySpec(BaseModel):
     schema_version: Literal[1]
     id: str = Field(min_length=1)
@@ -71,3 +96,4 @@ class CanarySpec(BaseModel):
     constraints: ConstraintSpec = Field(default_factory=ConstraintSpec)
     critical: bool = False
     paired_change: PairedChangeCanarySpec | None = None
+    coverage: tuple[CanaryCoverageSpec, ...] = ()

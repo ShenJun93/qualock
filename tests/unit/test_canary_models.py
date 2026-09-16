@@ -104,3 +104,84 @@ def test_paired_change_metadata_rejects_invalid_values(tmp_path: Path, paired_ch
     data['paired_change'] = paired_change
     with pytest.raises(ValidationError):
         CanarySpec.model_validate(data)
+
+
+def test_coverage_metadata_is_optional_for_legacy_canary(tmp_path: Path) -> None:
+    canary = CanarySpec.model_validate(valid_data(tmp_path))
+    assert canary.coverage == ()
+
+
+def test_coverage_metadata_parses_explicit_context_requirements(tmp_path: Path) -> None:
+    data = valid_data(tmp_path)
+    data["coverage"] = [
+        {
+            "contract_id": "command.execution",
+            "context_requirements": {"execution.mode": "container"},
+        }
+    ]
+    canary = CanarySpec.model_validate(data)
+    assert len(canary.coverage) == 1
+    assert canary.coverage[0].contract_id == "command.execution"
+    assert canary.coverage[0].context_requirements == {"execution.mode": "container"}
+
+
+def test_coverage_context_requirements_default_to_empty_dict(tmp_path: Path) -> None:
+    data = valid_data(tmp_path)
+    data["coverage"] = [{"contract_id": "command.execution"}]
+    canary = CanarySpec.model_validate(data)
+    assert canary.coverage[0].context_requirements == {}
+
+
+def test_coverage_rejects_unknown_extra_field_that_could_make_scope_unconditional(
+    tmp_path: Path,
+) -> None:
+    data = valid_data(tmp_path)
+    data["coverage"] = [
+        {
+            "contract_id": "command.execution",
+            "context_requirement": {"execution.mode": "container"},
+        }
+    ]
+    with pytest.raises(ValidationError, match="context_requirement"):
+        CanarySpec.model_validate(data)
+
+
+def test_coverage_allows_two_individually_valid_declarations_for_same_contract(
+    tmp_path: Path,
+) -> None:
+    data = valid_data(tmp_path)
+    data["coverage"] = [
+        {
+            "contract_id": "command.execution",
+            "context_requirements": {"execution.mode": "container"},
+        },
+        {
+            "contract_id": "command.execution",
+            "context_requirements": {"execution.mode": "linux-host"},
+        },
+    ]
+    canary = CanarySpec.model_validate(data)
+    assert len(canary.coverage) == 2
+    assert {item.context_requirements["execution.mode"] for item in canary.coverage} == {
+        "container",
+        "linux-host",
+    }
+
+
+@pytest.mark.parametrize(
+    "coverage",
+    [
+        [{"contract_id": "unknown.contract"}],
+        [{"contract_id": "command.execution", "context_requirements": {"key": 1.5}}],
+        [{"contract_id": "command.execution", "context_requirements": {"key": ["a"]}}],
+        [{"contract_id": "command.execution", "context_requirements": {"key": {"nested": 1}}}],
+        [{"contract_id": "command.execution", "context_requirements": {"": "value"}}],
+    ],
+)
+def test_coverage_rejects_invalid_declarations(
+    tmp_path: Path, coverage: list[dict[str, object]]
+) -> None:
+    data = valid_data(tmp_path)
+    data["coverage"] = coverage
+    with pytest.raises(ValidationError):
+        CanarySpec.model_validate(data)
