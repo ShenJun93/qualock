@@ -14,6 +14,11 @@ from qualock.agents.gemini import select_gemini_automation_credential
 from qualock.agents.releases import ReleaseDiscoveryError
 from qualock.baseline.io import BaselineStaleError, read_baseline_lock
 from qualock.canary.loader import CanaryLoadError
+from qualock.change_targeting.cli_support import _InputErrorExit3TyperCommand
+from qualock.change_targeting.commands import execute_target_change
+from qualock.change_targeting.errors import ChangeTargetingInputError
+from qualock.change_targeting.models import AssessmentStatus
+from qualock.change_targeting.render import render_coverage_assessment
 from qualock.commands import (
     BaselineUnstableError,
     CommandError,
@@ -149,6 +154,8 @@ _FIRST_BAD_WRITE_RECEIPT_OPTION = typer.Option(
     "--write-receipt",
     help="Write chain-receipt.json after successful verification.",
 )
+_TARGET_CHANGE_SIGNAL_ARGUMENT = typer.Argument(..., metavar="SIGNAL")
+_TARGET_CHANGE_CONTEXT_OPTION = typer.Option(..., "--context", metavar="CONTEXT")
 console = Console()
 
 
@@ -214,6 +221,27 @@ def init_command() -> None:
     if not ignore_path.exists():
         ignore_path.write_text("results/\nwork/\n", encoding="utf-8")
     console.print("Created .qualock/config.yaml, canaries/, results/")
+
+
+@app.command("target-change", cls=_InputErrorExit3TyperCommand)
+def target_change_command(
+    signal: Path = _TARGET_CHANGE_SIGNAL_ARGUMENT,
+    context: Path = _TARGET_CHANGE_CONTEXT_OPTION,
+) -> None:
+    try:
+        assessment = execute_target_change(Path.cwd(), signal, context)
+    except (ChangeTargetingInputError, ConfigError, CanaryLoadError, FileNotFoundError) as exc:
+        console.print(str(exc), markup=False)
+        raise typer.Exit(3) from exc
+    except Exception:  # noqa: BLE001 - stable boundary for unexpected planner failures
+        console.print("change targeting failed", markup=False)
+        raise typer.Exit(1) from None
+
+    typer.echo(render_coverage_assessment(assessment), nl=False)
+    if assessment.status is AssessmentStatus.NOT_APPLICABLE:
+        raise typer.Exit(2)
+    if assessment.status is AssessmentStatus.INCOMPLETE:
+        raise typer.Exit(4)
 
 
 def _antigravity_binary_available() -> bool:
