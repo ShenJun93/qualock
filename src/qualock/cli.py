@@ -121,6 +121,13 @@ from qualock.scheduler.commands import (
     enable_schedule,
     schedule_status,
 )
+from qualock.targeted_execution.commands import execute_targeted_check
+from qualock.targeted_execution.models import TargetedExecutionError
+from qualock.targeted_execution.planning import TargetedExecutionNotReady
+from qualock.targeted_execution.render import (
+    render_targeted_execution_not_started,
+    render_targeted_qualification,
+)
 from qualock.version_bisect.commands import execute_bisect
 from qualock.version_bisect.models import BisectAgent, BisectOutcome, BisectStep, BisectStop
 
@@ -156,6 +163,24 @@ _FIRST_BAD_WRITE_RECEIPT_OPTION = typer.Option(
 )
 _TARGET_CHANGE_SIGNAL_ARGUMENT = typer.Argument(..., metavar="SIGNAL")
 _TARGET_CHANGE_CONTEXT_OPTION = typer.Option(..., "--context", metavar="CONTEXT")
+_TARGET_CHECK_SIGNAL_ARGUMENT = typer.Argument(..., metavar="SIGNAL")
+_TARGET_CHECK_CONTEXT_OPTION = typer.Option(..., "--context", metavar="CONTEXT")
+_TARGET_CHECK_MAX_ATTEMPTS_OPTION = typer.Option(
+    None,
+    "--max-attempts",
+    help=(
+        "Cap model attempts for this targeted check. Skipped selected sources make "
+        "the result incomplete."
+    ),
+)
+_TARGET_CHECK_MAX_TOKENS_OPTION = typer.Option(
+    None,
+    "--max-tokens",
+    help=(
+        "Threshold for observed model tokens, checked between complete selected "
+        "sources. Skipped selected sources make the result incomplete."
+    ),
+)
 console = Console()
 
 
@@ -242,6 +267,67 @@ def target_change_command(
         raise typer.Exit(2)
     if assessment.status is AssessmentStatus.INCOMPLETE:
         raise typer.Exit(4)
+
+
+@app.command("target-check", cls=_InputErrorExit3TyperCommand)
+def target_check_command(
+    signal: Path = _TARGET_CHECK_SIGNAL_ARGUMENT,
+    context: Path = _TARGET_CHECK_CONTEXT_OPTION,
+    max_attempts: int | None = _TARGET_CHECK_MAX_ATTEMPTS_OPTION,
+    max_tokens: int | None = _TARGET_CHECK_MAX_TOKENS_OPTION,
+) -> None:
+    try:
+        if max_attempts is not None and max_attempts <= 0:
+            raise CommandError("max attempts must be greater than zero")
+        if max_tokens is not None and max_tokens <= 0:
+            raise CommandError("max tokens must be greater than zero")
+        outcome = execute_targeted_check(
+            Path.cwd(),
+            signal,
+            context,
+            max_attempts=max_attempts,
+            max_tokens=max_tokens,
+        )
+    except TargetedExecutionNotReady as exc:
+        console.print(
+            render_targeted_execution_not_started(exc.assessment),
+            end="",
+            markup=False,
+        )
+        if exc.assessment.status is AssessmentStatus.INCOMPLETE:
+            raise typer.Exit(4) from exc
+        raise typer.Exit(5) from exc
+    except (
+        ChangeTargetingInputError,
+        ConfigError,
+        CanaryLoadError,
+        CommandError,
+        TargetedExecutionError,
+        BaselineStaleError,
+        FileNotFoundError,
+    ) as exc:
+        console.print(
+            render_targeted_execution_not_started(None, str(exc)),
+            end="",
+            markup=False,
+        )
+        raise typer.Exit(3) from exc
+    except Exception as exc:
+        console.print("targeted execution failed", markup=False)
+        raise typer.Exit(1) from exc
+
+    console.print(
+        render_targeted_qualification(
+            outcome,
+            agent_display_name=agent_display_name(outcome.agent_name),
+        ),
+        end="",
+        markup=False,
+    )
+    if outcome.result.verdict is Verdict.BLOCK:
+        raise typer.Exit(2)
+    if outcome.result.verdict is Verdict.INCOMPLETE:
+        raise typer.Exit(6)
 
 
 def _antigravity_binary_available() -> bool:
