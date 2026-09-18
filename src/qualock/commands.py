@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -28,6 +30,7 @@ from qualock.baseline.io import (
     write_baseline_lock,
 )
 from qualock.baseline.models import AgentPin, BaselineLock, CanaryStability, ModelPin
+from qualock.canary.models import CanarySpec
 from qualock.config.models import QualockConfig
 from qualock.evidence.provenance import (
     EvidenceProvenanceError,
@@ -48,6 +51,7 @@ from qualock.protocols.paired_change.design import (
     build_protocol_design,
 )
 from qualock.protocols.paired_change.fingerprint import digest_model
+from qualock.protocols.paired_change.models import ProtocolDesignV1
 from qualock.protocols.paired_change.run_sidecar import (
     PairedChangeRunError,
     build_paired_change_run,
@@ -286,6 +290,86 @@ def _write_pricing_sidecar_best_effort(
         return
 
 
+@dataclass(frozen=True)
+class _QualificationCoreRun:
+    baseline_binary: AgentBinary
+    candidate_binary: AgentBinary
+    backend: QualificationBackend
+    protocol_design: ProtocolDesignV1
+    protocol_design_sha256: str
+    trace: tuple[AttemptRunTrace, ...]
+    result: QualificationResult
+    run_started_at: datetime
+    run_finished_at: datetime
+
+
+def _execute_qualification_core(
+    *,
+    root: Path,
+    config: QualockConfig,
+    lock: BaselineLock,
+    agent_name: str,
+    candidate_version: str,
+    execution_canaries: Sequence[CanarySpec],
+    qualification_id: str,
+    resolver: Resolver | None,
+    backend: QualificationBackend | None,
+    max_attempts: int | None,
+    max_tokens: int | None,
+) -> _QualificationCoreRun:
+    resolver = resolver or _default_resolver(agent_name)
+    baseline_binary = resolver.resolve(lock.agent.version)
+    if baseline_binary.sha256 != lock.agent.binary_sha256:
+        raise BaselineStaleError("baseline binary fingerprint changed")
+    if agent_name == "gemini" and lock.agent.support_sha256 is None:
+        raise BaselineStaleError("baseline support fingerprint missing")
+    if agent_support_fingerprint(baseline_binary) != lock.agent.support_sha256:
+        raise BaselineStaleError("baseline support fingerprint changed or missing")
+
+    candidate_binary = resolver.resolve(candidate_version)
+    backend = backend or _default_backend(root, config, agent_name)
+    control_profiles = (
+        {canary.id: backend.control_profiles(canary) for canary in execution_canaries}
+        if isinstance(backend, ProtocolAwareQualificationBackend)
+        else None
+    )
+    protocol_design = build_protocol_design(
+        suite_sha256=suite_fingerprint(execution_canaries),
+        config_sha256=config_fingerprint(config),
+        repetitions=config.qualification.repetitions,
+        canaries=execution_canaries,
+        control_profiles=control_profiles,
+    )
+    protocol_design_sha256 = digest_model(protocol_design)
+    trace: list[AttemptRunTrace] = []
+    run_started_at = datetime.now(UTC)
+    result = QualificationExecutor(
+        backend=backend,
+        repetitions=config.qualification.repetitions,
+    ).run(
+        baseline_binary,
+        candidate_binary,
+        execution_canaries,
+        qualification_id=qualification_id,
+        max_attempts=max_attempts,
+        max_tokens=max_tokens,
+        trace_sink=trace,
+        trace_design_sha256=protocol_design_sha256,
+    )
+    run_finished_at = datetime.now(UTC)
+    return _QualificationCoreRun(
+        baseline_binary=baseline_binary,
+        candidate_binary=candidate_binary,
+        backend=backend,
+        protocol_design=protocol_design,
+        protocol_design_sha256=protocol_design_sha256,
+        trace=tuple(trace),
+        result=result,
+        run_started_at=run_started_at,
+        run_finished_at=run_finished_at,
+    )
+
+
 def execute_check(
     root: Path,
     candidate_spec: str,
@@ -315,59 +399,34 @@ def execute_check(
             f"baseline agent {lock.agent.name} does not match candidate agent {agent_name}"
         )
 
-    resolver = resolver or _default_resolver(agent_name)
-    baseline_binary = resolver.resolve(lock.agent.version)
-    if baseline_binary.sha256 != lock.agent.binary_sha256:
-        raise BaselineStaleError("baseline binary fingerprint changed")
-    if agent_name == "gemini" and lock.agent.support_sha256 is None:
-        raise BaselineStaleError("baseline support fingerprint missing")
-    observed_support = agent_support_fingerprint(baseline_binary)
-    if observed_support != lock.agent.support_sha256:
-        raise BaselineStaleError("baseline support fingerprint changed or missing")
-    candidate_binary = resolver.resolve(candidate_version)
-    backend = backend or _default_backend(root, config, agent_name)
     qid = qualification_id or _qualification_id("check")
-
-    control_profiles = None
-    if isinstance(backend, ProtocolAwareQualificationBackend):
-        control_profiles = {canary.id: backend.control_profiles(canary) for canary in canaries}
-    protocol_design = build_protocol_design(
-        suite_sha256=suite_fingerprint(canaries),
-        config_sha256=config_fingerprint(config),
-        repetitions=config.qualification.repetitions,
-        canaries=canaries,
-        control_profiles=control_profiles,
-    )
-    protocol_design_sha256 = digest_model(protocol_design)
-    trace: list[AttemptRunTrace] = []
-
-    run_started_at = datetime.now(UTC)
-    result = QualificationExecutor(
-        backend=backend,
-        repetitions=config.qualification.repetitions,
-    ).run(
-        baseline_binary,
-        candidate_binary,
-        canaries,
+    core = _execute_qualification_core(
+        root=root,
+        config=config,
+        lock=lock,
+        agent_name=agent_name,
+        candidate_version=candidate_version,
+        execution_canaries=canaries,
         qualification_id=qid,
+        resolver=resolver,
+        backend=backend,
         max_attempts=max_attempts,
         max_tokens=max_tokens,
-        trace_sink=trace,
-        trace_design_sha256=protocol_design_sha256,
     )
+
     qualification_dir = write_qualification_artifacts(
         project_dir(root) / "results",
-        result,
+        core.result,
         agent_display_name=agent_display_name(agent_name),
     )
     try:
         provenance = build_evidence_provenance(
             lock=lock,
-            baseline_binary=baseline_binary,
-            candidate_binary=candidate_binary,
+            baseline_binary=core.baseline_binary,
+            candidate_binary=core.candidate_binary,
             config=config,
             canaries=canaries,
-            result=result,
+            result=core.result,
         )
         write_evidence_provenance(qualification_dir / "evidence-provenance.json", provenance)
     except (EvidenceProvenanceError, ValidationError) as exc:
@@ -375,11 +434,11 @@ def execute_check(
 
     try:
         paired_change_run = build_paired_change_run(
-            protocol_design=protocol_design,
-            protocol_design_sha256=protocol_design_sha256,
+            protocol_design=core.protocol_design,
+            protocol_design_sha256=core.protocol_design_sha256,
             qualification_id=qid,
             baseline_state=build_agent_dependency_state(
-                baseline_binary,
+                core.baseline_binary,
                 ModelPin(
                     id=config.model.id,
                     snapshot=config.model.snapshot,
@@ -387,26 +446,31 @@ def execute_check(
                 ),
             ),
             candidate_state=build_agent_dependency_state(
-                candidate_binary,
+                core.candidate_binary,
                 ModelPin(
                     id=config.model.id,
                     snapshot=config.model.snapshot,
                     reasoning_effort=config.model.reasoning_effort,
                 ),
             ),
-            result=result,
-            trace=trace,
+            result=core.result,
+            trace=core.trace,
         )
         write_paired_change_run(
             qualification_dir / "paired-change-run-v1.json", paired_change_run
         )
     except (PairedChangeRunError, ValidationError) as exc:
         raise CommandError("paired-change run evidence could not be written") from exc
-    run_finished_at = datetime.now(UTC)
+
+    legacy_pricing_finished_at = datetime.now(UTC)
     _write_pricing_sidecar_best_effort(
-        qualification_dir, config, result, run_started_at, run_finished_at
+        qualification_dir,
+        config,
+        core.result,
+        core.run_started_at,
+        legacy_pricing_finished_at,
     )
-    return result
+    return core.result
 
 
 def execute_history(root: Path) -> HistoryAnalysis:

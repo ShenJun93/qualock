@@ -626,6 +626,139 @@ def test_check_reruns_pinned_baseline_and_candidate_and_writes_report(tmp_path: 
     assert (tmp_path / ".qualock/results/check-q/report.json").is_file()
 
 
+def test_check_characterization_preserves_full_suite_order_design_and_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path)
+    sample_path = tmp_path / ".qualock/canaries/sample.yaml"
+    second_path = tmp_path / ".qualock/canaries/z-second.yaml"
+    second_path.write_text(
+        sample_path.read_text(encoding="utf-8")
+        .replace("id: sample", "id: second")
+        .replace("name: Sample", "name: Second"),
+        encoding="utf-8",
+    )
+
+    baseline_resolver = FakeResolver()
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=baseline_resolver,
+        backend=FakeBackend(),
+        qualification_id="baseline-characterization",
+        created_at="2026-09-18T00:00:00Z",
+    )
+
+    captured_suite: list[str] = []
+    real_run = commands_module.QualificationExecutor.run
+
+    def spy_run(self, baseline_binary, candidate_binary, suite, **kwargs):
+        captured_suite.extend(canary.id for canary in suite)
+        return real_run(self, baseline_binary, candidate_binary, suite, **kwargs)
+
+    monkeypatch.setattr(commands_module.QualificationExecutor, "run", spy_run)
+    resolver = FakeResolver()
+    backend = FakeBackend()
+    result = execute_check(
+        tmp_path,
+        "codex@0.151.0",
+        resolver=resolver,
+        backend=backend,
+        qualification_id="check-characterization",
+    )
+
+    _config, canaries = load_project(tmp_path)
+    expected_order = [canary.id for canary in canaries]
+    assert captured_suite == expected_order
+    assert backend.prepared == expected_order
+
+    artifact_root = tmp_path / ".qualock/results/check-characterization"
+    assert artifact_root.parent == tmp_path / ".qualock/results"
+    required_names = {
+        "report.md",
+        "report.json",
+        "qualification.json",
+        "evidence-provenance.json",
+        "paired-change-run-v1.json",
+    }
+    assert required_names <= {path.name for path in artifact_root.iterdir()}
+
+    run = read_paired_change_run(artifact_root / "paired-change-run-v1.json")
+    assert run.qualification_id == result.qualification_id
+    assert run.protocol_design.suite_sha256 == commands_module.suite_fingerprint(canaries)
+
+
+def test_qualification_core_executes_exact_subset_without_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_project(tmp_path)
+    sample_path = tmp_path / ".qualock/canaries/sample.yaml"
+    second_path = tmp_path / ".qualock/canaries/z-second.yaml"
+    second_path.write_text(
+        sample_path.read_text(encoding="utf-8")
+        .replace("id: sample", "id: second")
+        .replace("name: Sample", "name: Second"),
+        encoding="utf-8",
+    )
+
+    execute_baseline(
+        tmp_path,
+        "codex@0.150.0",
+        resolver=FakeResolver(),
+        backend=FakeBackend(),
+        qualification_id="baseline-core",
+        created_at="2026-09-18T00:00:00Z",
+    )
+    config, canaries = load_project(tmp_path)
+    lock = read_baseline_lock(tmp_path / ".qualock/baseline.lock")
+    execution_canaries = (canaries[1],)
+    resolver = FakeResolver()
+    backend = ProtocolAwareFakeBackend()
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("qualification core must not persist or build artifacts")
+
+    for name in (
+        "write_qualification_artifacts",
+        "build_evidence_provenance",
+        "write_evidence_provenance",
+        "build_paired_change_run",
+        "write_paired_change_run",
+        "_write_pricing_sidecar_best_effort",
+        "write_pricing_sidecar",
+    ):
+        monkeypatch.setattr(commands_module, name, forbidden)
+
+    core = commands_module._execute_qualification_core(
+        root=tmp_path,
+        config=config,
+        lock=lock,
+        agent_name="codex",
+        candidate_version="0.151.0",
+        execution_canaries=execution_canaries,
+        qualification_id="check-core",
+        resolver=resolver,
+        backend=backend,
+        max_attempts=None,
+        max_tokens=None,
+    )
+
+    assert resolver.calls == ["0.150.0", "0.151.0"]
+    assert backend.prepared == ["second"]
+    assert tuple(item.canary_id for item in core.protocol_design.canaries) == ("second",)
+    assert core.protocol_design.suite_sha256 == commands_module.suite_fingerprint(
+        execution_canaries
+    )
+    assert core.protocol_design_sha256 == digest_model(core.protocol_design)
+    assert core.trace
+    assert {item.canary_id for item in core.trace} == {"second"}
+    assert all(
+        item.trace_design_sha256 == core.protocol_design_sha256 for item in core.trace
+    )
+    assert tuple(item.canary_id for item in core.result.executions) == ("second",)
+    assert core.run_started_at <= core.run_finished_at
+
+
 def test_check_writes_paired_change_run_sidecar_with_legacy_backend(tmp_path: Path) -> None:
     setup_project(tmp_path)
     resolver = FakeResolver()
