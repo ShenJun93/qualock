@@ -633,6 +633,7 @@ Assert a completed run writes only under `.qualock/results/targeted/<qid>/`:
 - optional `pricing.json`.
 
 Assert:
+- every targeted artifact is under exactly `.qualock/results/targeted/<qid>/`; no targeted file is written elsewhere under `.qualock/results/`;
 - standard `report.json`, `qualification.json`, `evidence-provenance.json`, `paired-change-run-v1.json` do not exist;
 - provenance contains only selected canaries;
 - targeted paired-change design uses selected-suite SHA;
@@ -642,7 +643,10 @@ Assert:
 - `run_order_sha256 == sha256_canonical(result.run_order)`;
 - baseline lock/config hashes match exact preflight values;
 - required artifact SHA values equal exact file bytes;
+- `TargetedArtifactHashesV1` has exactly the four required targeted JSON digest fields and cannot include `pricing.json`;
 - raw target context values are absent from every targeted artifact.
+
+Add a late-required-evidence-failure case: make the targeted provenance or targeted paired-change writer fail after the targeted report directory/files exist. Assert `execute_targeted_check()` raises `TargetedExecutionError`, `targeted-run-v1.json` is absent, no `TargetedExecutionOutcome` is returned, and the partial targeted directory is allowed to remain. This locks the approved non-transactional V1 behavior without treating the partial directory as success.
 
 - [ ] **Step 4: Run command tests and preserve RED**
 
@@ -660,7 +664,7 @@ First call:
 plan = prepare_targeted_execution(root, signal_path, context_path)
 ```
 
-No runtime resolution may precede that return.
+No runtime resolution may precede that return. Pass `resolver`, `backend`, `max_attempts`, and `max_tokens` through unchanged to `_execute_qualification_core()`. When `resolver` or `backend` is `None`, Task 3's shared core must reuse the existing ordinary-check `_default_resolver()` / `_default_backend()` behavior; do not invent a targeted-only stub/default. Budget enforcement likewise remains owned by the shared core plus existing `QualificationExecutor` semantics.
 
 Generate the default ID with the existing private `qualock.commands._qualification_id("target-check")`; do not introduce a second ID-format helper.
 
@@ -694,7 +698,7 @@ attempted_sources = tuple(sorted({
 }))
 ```
 
-Write receipt last with exclusive create.
+Build the receipt directly from `plan.assessment`, `plan.assessment.selected_sources`, and the just-computed `attempted_sources`; do not re-read or reconstruct those values from persisted files. `TargetedRunV1` re-validates READY, exact selected-source equality, non-empty/sorted/unique selected sources, and attempted-source subset invariants. Then write the receipt last with the Task 1 `write_targeted_run()` API, whose contract is exclusive create (`"xb"`) and must never overwrite an existing receipt.
 
 Use the concrete persistence sequence:
 
@@ -733,15 +737,50 @@ write_paired_change_run(
 )
 ```
 
-Then build `TargetedRunV1` from exact preflight digests plus exact file hashes and call `write_targeted_run(result_dir / "targeted-run-v1.json", receipt)`.
+Then build the receipt with the exact values that just drove execution:
+
+```python
+receipt = TargetedRunV1(
+    schema_version=1,
+    protocol_id="selected-source-execution/v1",
+    qualification_id=core.result.qualification_id,
+    assessment=plan.assessment,
+    assessment_sha256=hashlib.sha256(
+        canonical_assessment_bytes(plan.assessment)
+    ).hexdigest(),
+    project_suite_sha256=plan.project_suite_sha256,
+    selected_suite_sha256=plan.selected_suite_sha256,
+    config_sha256=plan.config_sha256,
+    baseline_lock_sha256=plan.baseline_lock_sha256,
+    selected_sources=plan.assessment.selected_sources,
+    attempted_sources=attempted_sources,
+    qualification_verdict=core.result.verdict,
+    run_order_sha256=sha256_canonical(core.result.run_order),
+    artifacts=TargetedArtifactHashesV1(
+        targeted_report_json=sha256_file(result_dir / "targeted-report.json"),
+        targeted_qualification_json=sha256_file(
+            result_dir / "targeted-qualification.json"
+        ),
+        targeted_evidence_provenance_v1_json=sha256_file(
+            result_dir / "targeted-evidence-provenance-v1.json"
+        ),
+        targeted_paired_change_run_v1_json=sha256_file(
+            result_dir / "targeted-paired-change-run-v1.json"
+        ),
+    ),
+)
+write_targeted_run(result_dir / "targeted-run-v1.json", receipt)
+```
+
+Return `TargetedExecutionOutcome(agent_name=plan.signal.agent, assessment=plan.assessment, result=core.result, result_dir=result_dir, receipt=receipt)` so the CLI and receipt use the same validated assessment instance.
 
 If required provenance/paired-change/receipt writing fails, raise `TargetedExecutionError`; do not report success. Do not add rollback/transactional publication in V1: the approved spec explicitly permits a partially written targeted directory after a late evidence failure, provided the command never reports that run as successful.
 
 - [ ] **Step 6: Keep optional pricing outside required receipt hashes**
 
-A pricing failure must not invalidate the required receipt. If `pricing.json` exists, it remains an advisory sidecar; V1 required artifact hashes contain only the four specified required targeted JSON companions.
+A pricing failure must not invalidate the required receipt. Reuse the existing private `_write_pricing_sidecar_best_effort(result_dir, plan.config, core.result, core.run_started_at, core.run_finished_at)` helper from `qualock.commands`; it already catches pricing-generation/write failures at the advisory boundary. If `pricing.json` exists, it remains an advisory sidecar; V1 required artifact hashes contain only the four specified required targeted JSON companions.
 
-Test both pricing success and forced pricing failure.
+Test both pricing success and forced pricing failure, and assert the receipt's `TargetedArtifactHashesV1` remains exactly the four required non-pricing fields.
 
 - [ ] **Step 7: Prove history/cost/export isolation at storage level**
 
