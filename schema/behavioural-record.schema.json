@@ -1,0 +1,636 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ShenJun93/qualock/schema/behavioural-record.schema.json",
+  "title": "Behavioural record for a coding-agent release",
+  "description": "One published, machine-readable observation of how a specific coding-agent CLI release behaved under stated conditions. Designed so a third party can recheck the claim offline, and so the record can be referenced from a CycloneDX or SPDX document rather than living in a silo.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "recordId",
+    "producedAt",
+    "subject",
+    "environment",
+    "method",
+    "observation",
+    "claimScope"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of THIS schema, not of the producing tool.",
+      "type": "string",
+      "const": "0.1.0"
+    },
+    "recordId": {
+      "description": "Stable identifier for this record, unique within a publisher.",
+      "type": "string",
+      "minLength": 1
+    },
+    "producedAt": {
+      "description": "UTC timestamp at which the observation was made.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "description": "What generated the record. A record is not less valid without this, but it is less useful.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "commit": {
+          "$ref": "#/$defs/gitSha"
+        }
+      }
+    },
+    "subject": {
+      "description": "The agent release under observation. Field names follow CycloneDX component conventions so this can be lifted into an SBOM component entry.",
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "hashes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Agent CLI identity, e.g. 'codex', 'claude-code', 'gemini-cli'.",
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purl": {
+          "description": "Package URL, where one exists.",
+          "type": "string"
+        },
+        "hashes": {
+          "description": "At least one hash of the exact artefact observed. Without this the record is unverifiable.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/hash"
+          }
+        },
+        "provenance": {
+          "description": "How the artefact's authenticity was established, e.g. registry tarball integrity.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "type": "string"
+            },
+            "verified": {
+              "type": "boolean"
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "comparedWith": {
+      "description": "Present when the observation is a comparison rather than a single measurement. Same shape as subject.",
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "hashes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "purl": {
+          "type": "string"
+        },
+        "hashes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/hash"
+          }
+        },
+        "provenance": {
+          "type": "object"
+        }
+      }
+    },
+    "environment": {
+      "description": "Everything that must match for a reproduction to be comparable. A record whose environment differs from yours is evidence about a different thing.",
+      "type": "object",
+      "required": [
+        "isolation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "containerImageDigest": {
+          "$ref": "#/$defs/digest",
+          "description": "Registry manifest digest, as it appears after '@' in a pullable reference. A reader can fetch exactly this image. Do NOT put a local image ID here: they share the sha256: shape but a local ID is the config blob digest and is not pullable, so a reviewer who tries to pull it fails and may conclude the evidence is broken. Use containerImageId for that."
+        },
+        "containerImageRef": {
+          "type": "string"
+        },
+        "osArch": {
+          "type": "string"
+        },
+        "model": {
+          "description": "Model and settings. Omitting these makes a behavioural claim close to meaningless, since behaviour is model-dependent.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "reasoningEffort": {
+              "type": "string"
+            },
+            "temperature": {
+              "type": "number"
+            }
+          }
+        },
+        "featureFlags": {
+          "description": "Agent-side policy in force, e.g. shell_tool, unified_exec. Conditional regressions hide here.",
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "boolean",
+              "string",
+              "number"
+            ]
+          }
+        },
+        "featureFlagsDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "isolation": {
+          "description": "Contamination controls actually in force, recorded rather than asserted in prose.",
+          "type": "object",
+          "required": [
+            "networkEgress",
+            "webSearch",
+            "seccomp"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "networkEgress": {
+              "enum": [
+                "denied",
+                "loopback-only",
+                "allowed",
+                "unknown"
+              ]
+            },
+            "webSearch": {
+              "enum": [
+                "disabled",
+                "enabled",
+                "unknown"
+              ]
+            },
+            "disabledAgentFeatures": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "containerPrivileged": {
+              "type": "boolean"
+            },
+            "containerSysAdmin": {
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string"
+            },
+            "seccomp": {
+              "description": "Seccomp posture. 'unconfined' is a real relaxation and must be declared: a record that reports containerPrivileged false and containerSysAdmin false while staying silent about seccomp overstates its own isolation.",
+              "enum": [
+                "default",
+                "unconfined",
+                "custom-profile",
+                "unknown"
+              ]
+            }
+          }
+        },
+        "containerImageId": {
+          "description": "Local image ID as reported by `docker image inspect --format '{{.Id}}'`. Records exactly which local image ran, but is NOT pullable and does not identify the image to anyone else. Supply containerImageDigest as well whenever it is known.",
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "method": {
+      "description": "How the observation was produced. The attempt count is required because a single attempt against a stochastic system establishes nothing.",
+      "type": "object",
+      "required": [
+        "kind",
+        "attempts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "paired-interleaved-canary",
+            "version-bisect",
+            "single-release-probe"
+          ],
+          "description": "paired-interleaved-canary: both releases rerun contemporaneously, attempts interleaved. version-bisect: ordered catalogue walked to locate a first-bad boundary. single-release-probe: one release observed, no comparison."
+        },
+        "attempts": {
+          "description": "Total attempts backing this record.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "attemptsPerVariant": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "graderVisibility": {
+          "enum": [
+            "hidden-until-grading",
+            "visible",
+            "not-applicable"
+          ],
+          "description": "hidden-until-grading means the grader was absent from the agent's namespace until the grading phase. If the grader was visible, the record measures the agent's ability to find it."
+        },
+        "invalidatedAttempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "invalidationReasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "provider": {
+          "enum": [
+            "authenticated",
+            "local-mock",
+            "none"
+          ],
+          "description": "local-mock records what the agent would have sent and lets a reader reproduce without credentials; it does not establish end-to-end task success."
+        }
+      }
+    },
+    "canaries": {
+      "description": "The behaviours exercised. Real upstream projects at pinned commits are preferable to synthetic tasks, and the pin is what makes a rerun comparable.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "upstreamRepository": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "$ref": "#/$defs/gitSha"
+          },
+          "preparedImageDigest": {
+            "$ref": "#/$defs/digest"
+          },
+          "sourceIsolation": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "headMatchesBase": {
+                "type": "boolean"
+              },
+              "refCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "remoteCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unreachableObjectCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "observation": {
+      "description": "What was seen. A verdict without a per-variant breakdown cannot be argued with, which is why both are required.",
+      "type": "object",
+      "required": [
+        "verdict"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "enum": [
+            "PASS",
+            "WARN",
+            "BLOCK",
+            "INCOMPLETE"
+          ],
+          "description": "INCOMPLETE is a first-class outcome: an underpowered or invalidated comparison must say so rather than emit a number that reads as authoritative."
+        },
+        "verdictRationale": {
+          "type": "string"
+        },
+        "perVariant": {
+          "description": "Keyed by version. The value is either a flat array of per-attempt observations (when the record has no canary dimension, e.g. a version bisect), or an object keyed by canary id whose values are per-attempt arrays. null in an array means the expected behaviour was absent.",
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "string",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "firstBad": {
+          "description": "Present for version-bisect records.",
+          "type": "string"
+        },
+        "recovery": {
+          "type": "string"
+        },
+        "advisoryMetrics": {
+          "description": "Runtime and token deltas are advisory, never gating.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "runtimeDeltaPct": {
+              "type": "number"
+            },
+            "inputTokenDeltaPct": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    },
+    "claimScope": {
+      "description": "The boundary of what this record does and does not establish. Required, because the most common failure of behavioural evidence is being read more broadly than it was measured.",
+      "type": "object",
+      "required": [
+        "establishes",
+        "doesNotEstablish"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "establishes": {
+          "type": "string",
+          "minLength": 1
+        },
+        "doesNotEstablish": {
+          "type": "string",
+          "minLength": 1
+        },
+        "knownCoverageGaps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "description": "Where the raw material lives and how to check it.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bundlePath": {
+          "type": "string"
+        },
+        "bundleHashes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hash"
+          }
+        },
+        "reproduceCommand": {
+          "type": "string"
+        },
+        "verifierCommand": {
+          "type": "string"
+        }
+      }
+    },
+    "externalReferences": {
+      "description": "Upstream corroboration. Keeping an external symptom report separate from a locally established claim is deliberate: they are different kinds of evidence.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "type",
+          "ref"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "enum": [
+              "symptom-report",
+              "fix",
+              "advisory",
+              "documentation",
+              "other"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          },
+          "independentlyVerified": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "variants": {
+      "description": "Every release probed, with its own artefact hashes. Required for records that span more than two releases, where subject and comparedWith cannot carry them all. Omitting a probed release's hashes makes that part of the record unverifiable.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "version",
+          "hashes"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "classification": {
+            "type": "string"
+          },
+          "hashes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        }
+      }
+    },
+    "supersedes": {
+      "description": "A record or evidence bundle this one replaces, and why. Retaining and pointing at a withdrawn result is what makes a correction auditable rather than invisible.",
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "recordId": {
+          "type": "string"
+        },
+        "bundlePath": {
+          "type": "string"
+        },
+        "hashes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hash"
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "object",
+      "required": [
+        "alg",
+        "content"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "enum": [
+            "SHA-256",
+            "SHA-512"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64,128}$"
+        },
+        "of": {
+          "description": "What was hashed, e.g. 'main-binary', 'support-binary', 'bundle'.",
+          "type": "string"
+        }
+      }
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "method": {
+            "properties": {
+              "kind": {
+                "const": "paired-interleaved-canary"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "comparedWith",
+          "canaries"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "method": {
+            "properties": {
+              "kind": {
+                "const": "version-bisect"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "observation": {
+            "required": [
+              "firstBad"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "method": {
+            "properties": {
+              "kind": {
+                "const": "version-bisect"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "variants"
+        ]
+      }
+    }
+  ]
+}
