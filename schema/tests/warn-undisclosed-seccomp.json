@@ -1,0 +1,156 @@
+{
+  "schemaVersion": "0.1.0",
+  "recordId": "pilot-0150-vs-0151-20260901T101701Z",
+  "producedAt": "2026-09-01T10:17:01Z",
+  "producer": {
+    "name": "qualock",
+    "commit": "d6da463afff65ceb139dcf6ce94aaf766f9abd01"
+  },
+  "subject": {
+    "name": "codex",
+    "version": "0.151.0",
+    "hashes": [
+      {
+        "alg": "SHA-256",
+        "content": "9739cbc928b9c573be83256acd46668f5dd4f119d2d09e05246895ca2aaf0c9a",
+        "of": "main-binary"
+      }
+    ]
+  },
+  "comparedWith": {
+    "name": "codex",
+    "version": "0.150.0",
+    "hashes": [
+      {
+        "alg": "SHA-256",
+        "content": "f0222a59e7d06f7b97014fb672731285b453b945fc0f0aab36c89278dec36e14",
+        "of": "main-binary"
+      }
+    ]
+  },
+  "environment": {
+    "containerImageDigest": "sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248",
+    "containerImageRef": "ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm",
+    "osArch": "linux/amd64",
+    "model": {
+      "id": "gpt-5.6-terra",
+      "reasoningEffort": "high"
+    },
+    "isolation": {
+      "networkEgress": "denied",
+      "webSearch": "disabled",
+      "disabledAgentFeatures": [
+        "apps",
+        "plugins",
+        "remote_plugin"
+      ],
+      "containerPrivileged": false,
+      "containerSysAdmin": false,
+      "notes": "Workspace network disabled.",
+      "seccomp": "unconfined"
+    }
+  },
+  "method": {
+    "kind": "paired-interleaved-canary",
+    "attempts": 18,
+    "attemptsPerVariant": 9,
+    "graderVisibility": "hidden-until-grading",
+    "invalidatedAttempts": 0,
+    "provider": "authenticated"
+  },
+  "canaries": [
+    {
+      "id": "starlette-url-empty-authority",
+      "upstreamRepository": "https://github.com/Kludex/starlette.git",
+      "baseCommit": "4a18cd4a0869158f830e9bf519979d6f6f60f36a",
+      "preparedImageDigest": "sha256:f8a11f28b27ff0c2286a25412b0ba33fe2ac2fc7d7b09ed854bd30ff0f61f453",
+      "sourceIsolation": {
+        "headMatchesBase": true,
+        "refCount": 0,
+        "remoteCount": 0,
+        "unreachableObjectCount": 0
+      }
+    },
+    {
+      "id": "pytest-xdist-loadgroup-crash-recovery",
+      "upstreamRepository": "https://github.com/pytest-dev/pytest-xdist.git",
+      "baseCommit": "dd198c35710f22b1cb86b7fc00311f9b7c63d665",
+      "preparedImageDigest": "sha256:2f384af8c72c08042691d93fc4f0f5413e487fc86bdf02a7a3d53a1f9614fb1d",
+      "sourceIsolation": {
+        "headMatchesBase": true,
+        "refCount": 0,
+        "remoteCount": 0,
+        "unreachableObjectCount": 0
+      }
+    },
+    {
+      "id": "click-sentinel-duplication",
+      "upstreamRepository": "https://github.com/pallets/click.git",
+      "baseCommit": "3cbcf9b11546f4cf10b36d3e2e531733ba6fe001",
+      "preparedImageDigest": "sha256:23e5da6a6af10e2e053b95740d1c8a3a9f4de42b5e4cbb11a0bdfe6e7bced02c",
+      "sourceIsolation": {
+        "headMatchesBase": true,
+        "refCount": 0,
+        "remoteCount": 0,
+        "unreachableObjectCount": 0
+      }
+    }
+  ],
+  "observation": {
+    "verdict": "PASS",
+    "verdictRationale": "All three canaries passed 3/3 on both releases: 18 valid attempts in total, 9 per release. No regression claim is made beyond this suite.",
+    "perVariant": {
+      "0.150.0": {
+        "starlette-url-empty-authority": [
+          true,
+          true,
+          true
+        ],
+        "pytest-xdist-loadgroup-crash-recovery": [
+          true,
+          true,
+          true
+        ],
+        "click-sentinel-duplication": [
+          true,
+          true,
+          true
+        ]
+      },
+      "0.151.0": {
+        "starlette-url-empty-authority": [
+          true,
+          true,
+          true
+        ],
+        "pytest-xdist-loadgroup-crash-recovery": [
+          true,
+          true,
+          true
+        ],
+        "click-sentinel-duplication": [
+          true,
+          true,
+          true
+        ]
+      }
+    },
+    "advisoryMetrics": {
+      "runtimeDeltaPct": -16.9,
+      "inputTokenDeltaPct": -27.2
+    }
+  },
+  "claimScope": {
+    "establishes": "x",
+    "doesNotEstablish": "y"
+  },
+  "evidence": {
+    "bundlePath": "docs/evidence/2026-09-01-codex-0.150.0-vs-0.151.0-clean-rerun/",
+    "reproduceCommand": "see bundle README",
+    "verifierCommand": "sha256sum -c SHA256SUMS"
+  },
+  "supersedes": {
+    "bundlePath": "docs/evidence/2026-09-01-codex-0.150.0-vs-0.151.0/",
+    "reason": "The first execution of this comparison was contaminated by historical Git source isolation leakage, found by auditing event logs for references to non-base commits. It was fixed and rerun; the contaminated bundle is retained rather than deleted so the correction stays auditable. FILL IN its recorded sha256 from the bundle locally."
+  }
+}

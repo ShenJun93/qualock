@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "0.1.0",
+  "recordId": "codex-managed-shell-first-bad-20260916",
+  "producedAt": "2026-09-16T00:00:00Z",
+  "producer": {
+    "name": "qualock"
+  },
+  "subject": {
+    "name": "codex",
+    "version": "0.150.0",
+    "hashes": [
+      {
+        "alg": "SHA-256",
+        "content": "f0222a59e7d06f7b97014fb672731285b453b945fc0f0aab36c89278dec36e14",
+        "of": "main-binary"
+      },
+      {
+        "alg": "SHA-256",
+        "content": "99a19eeb8e7f8d15f19a6ed05d9a5b92ecdbcdffa986aac8b569b066aac81e60",
+        "of": "support-binary"
+      }
+    ],
+    "provenance": {
+      "method": "npm tarball integrity plus binary hash comparison",
+      "verified": true,
+      "note": "Tarball integrity, main binary and support binary each matched 4/4 across the frozen catalogue."
+    }
+  },
+  "comparedWith": {
+    "name": "codex",
+    "version": "0.149.1",
+    "hashes": [
+      {
+        "alg": "SHA-256",
+        "content": "73dc5888888f411c1f0fa7b81d866e721dcc86b527ce8e3b2cf4708661e823ba",
+        "of": "main-binary"
+      }
+    ]
+  },
+  "environment": {
+    "containerImageDigest": "sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
+    "containerImageRef": "alpine:3.23",
+    "model": {
+      "id": "gpt-5.5"
+    },
+    "featureFlags": {
+      "shell_tool": true,
+      "unified_exec": false
+    },
+    "featureFlagsDigest": "sha256:965953f087e82c0c11d245f12010eae0a949dc006213a8c44a12e884df665ef6",
+    "isolation": {
+      "networkEgress": "loopback-only",
+      "webSearch": "unknown",
+      "notes": "The Responses endpoint is a local mock bound to loopback which records the outgoing tool list and then deliberately returns HTTP 400. The probe container reaches it over the Docker bridge and the run fails closed if that bridge cannot reach the server. No authenticated provider request is part of this case."
+    }
+  },
+  "method": {
+    "kind": "version-bisect",
+    "attempts": 99,
+    "attemptsPerVariant": 3,
+    "graderVisibility": "not-applicable",
+    "invalidatedAttempts": 0,
+    "provider": "local-mock"
+  },
+  "observation": {
+    "verdict": "BLOCK",
+    "verdictRationale": "Command-execution tool registration disappears at 0.150.0 under the stated managed-policy precondition and is restored at 0.151.0 under a renamed tool.",
+    "perVariant": {
+      "0.149.1": [
+        "shell_command",
+        "shell_command",
+        "shell_command"
+      ],
+      "0.150.0": [
+        null,
+        null,
+        null
+      ],
+      "0.150.1": [
+        null,
+        null,
+        null
+      ],
+      "0.151.0": [
+        "exec_command",
+        "exec_command",
+        "exec_command"
+      ]
+    },
+    "firstBad": "0.150.0",
+    "recovery": "0.151.0"
+  },
+  "claimScope": {
+    "establishes": "Among the frozen catalogue 0.149.1, 0.150.0, 0.150.1, 0.151.0, the first release exhibiting absent command-tool registration under shell_tool=true and unified_exec=false is 0.150.0, and 0.151.0 restores registration under the renamed tool exec_command. Reproducible without provider credentials.",
+    "doesNotEstablish": "That any default qualification path would detect this; it did not. It establishes what the agent would have sent, not end-to-end task success. It says nothing about releases outside the frozen catalogue or other flag combinations.",
+    "knownCoverageGaps": [
+      "Recovery renames the tool, so a consumer testing for the old name still observes failure after the fix. Behavioural identity is not preserved across the repair."
+    ]
+  },
+  "evidence": {
+    "bundlePath": "docs/evidence/2026-09-16-codex-managed-shell-first-bad/",
+    "reproduceCommand": "CASE_OUTPUT=/tmp/qualock-codex-managed-shell-first-bad MOCK_PORT=18065 ./run_probe.sh",
+    "verifierCommand": "sha256sum -c SHA256SUMS"
+  }
+}

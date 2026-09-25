@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "0.1.0",
+  "recordId": "pilot-0150-vs-0151-20260901T101701Z",
+  "producedAt": "2026-09-01T10:17:01Z",
+  "producer": {
+    "name": "qualock",
+    "commit": "d6da463afff65ceb139dcf6ce94aaf766f9abd01"
+  },
+  "subject": {
+    "name": "codex",
+    "version": "0.151.0",
+    "hashes": [
+      {
+        "alg": "SHA-256",
+        "content": "9739cbc928b9c573be83256acd46668f5dd4f119d2d09e05246895ca2aaf0c9a",
+        "of": "main-binary"
+      }
+    ]
+  },
+  "comparedWith": {
+    "name": "codex",
+    "version": "0.150.0",
+    "hashes": [
+      {
+        "alg": "SHA-256",
+        "content": "f0222a59e7d06f7b97014fb672731285b453b945fc0f0aab36c89278dec36e14",
+        "of": "main-binary"
+      }
+    ]
+  },
+  "environment": {
+    "containerImageDigest": "sha256:85d4cb1afa769a7338e095b927bee941cf5ec92266c7424b3f6c0f2748567248",
+    "containerImageRef": "ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm",
+    "osArch": "linux/amd64",
+    "model": {
+      "id": "gpt-5.6-terra",
+      "reasoningEffort": "high"
+    },
+    "isolation": {
+      "networkEgress": "denied",
+      "webSearch": "disabled",
+      "disabledAgentFeatures": [
+        "apps",
+        "plugins",
+        "remote_plugin"
+      ],
+      "containerPrivileged": false,
+      "containerSysAdmin": false,
+      "notes": "Workspace network disabled. Recorded as runner.workspace_network=false and runner.web_search=disabled in the source evidence bundle."
+    }
+  },
+  "method": {
+    "kind": "paired-interleaved-canary",
+    "attempts": 18,
+    "attemptsPerVariant": 9,
+    "graderVisibility": "hidden-until-grading",
+    "invalidatedAttempts": 0,
+    "provider": "authenticated"
+  },
+  "observation": {
+    "verdict": "PASS",
+    "verdictRationale": "All three canaries passed 3/3 on both releases: 18 valid attempts in total, 9 per release. No regression claim is made beyond this suite.",
+    "perVariant": {
+      "0.150.0": {
+        "starlette-url-empty-authority": [
+          true,
+          true,
+          true
+        ],
+        "pytest-xdist-loadgroup-crash-recovery": [
+          true,
+          true,
+          true
+        ],
+        "click-sentinel-duplication": [
+          true,
+          true,
+          true
+        ]
+      },
+      "0.151.0": {
+        "starlette-url-empty-authority": [
+          true,
+          true,
+          true
+        ],
+        "pytest-xdist-loadgroup-crash-recovery": [
+          true,
+          true,
+          true
+        ],
+        "click-sentinel-duplication": [
+          true,
+          true,
+          true
+        ]
+      }
+    },
+    "advisoryMetrics": {
+      "runtimeDeltaPct": -16.9,
+      "inputTokenDeltaPct": -27.2
+    }
+  },
+  "claimScope": {
+    "establishes": "Across these three canaries, under this model and environment, codex 0.151.0 did not regress relative to 0.150.0 in 18 valid paired attempts. Source isolation held: 0 of 18 attempts referenced a non-base commit.",
+    "doesNotEstablish": "Behaviour under any other feature-flag combination, model, canary or environment. It does not establish safety, and it did NOT detect the managed-shell command-tool regression that exists between these same two binaries.",
+    "knownCoverageGaps": [
+      "The default qualification path never established shell_tool=true with unified_exec=false, which is the precondition under which the managed-shell regression manifests. See the companion version-bisect record."
+    ]
+  },
+  "evidence": {
+    "bundlePath": "docs/evidence/2026-09-01-codex-0.150.0-vs-0.151.0-clean-rerun/",
+    "reproduceCommand": "see bundle README",
+    "verifierCommand": "sha256sum -c SHA256SUMS"
+  }
+}
