@@ -743,4 +743,4 @@ See [docs/related-work.md](docs/related-work.md) for how Qualock relates to in-t
 
 ## License
 
-Code: Apache-2.0. Behavioural records, evidence summaries and project-authored canaries: CC BY 4.0, see [DATA_LICENSE.md](DATA_LICENSE.md).
+Code: Apache-2.0. Behavioural records, evidence summaries and project-authored canaries: CC0 1.0, see [DATA_LICENSE.md](DATA_LICENSE.md).
