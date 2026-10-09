@@ -737,6 +737,10 @@ The local qualification pipeline, behavior-lock semantics, paired scheduling, JS
 
 The Qualock CLI/core is Apache-2.0 licensed. See [COMMERCIAL.md](COMMERCIAL.md) for the open-core boundary and potential hosted/team features.
 
+## Related work
+
+See [docs/related-work.md](docs/related-work.md) for how Qualock relates to in-toto, Sigstore, SLSA, GUAC, OpenSSF Scorecard, CycloneDX and SPDX, and what it deliberately does not rebuild.
+
 ## License
 
-Apache-2.0.
+Code: Apache-2.0. Behavioural records, evidence summaries and project-authored canaries: CC BY 4.0, see [DATA_LICENSE.md](DATA_LICENSE.md).
